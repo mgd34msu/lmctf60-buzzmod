@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 
-#include "sg_rune_dynamics_model.h"
+#include "sg_rune_compact_field_service.h"
 #include "sg_strategy_contract.h"
 
 /* The only caller-owned capacity is the reducer contract's exact plan
@@ -19,39 +19,98 @@ typedef struct sg_strategy_caller_authority_s
 	uint32_t principal_id;
 } sg_strategy_caller_authority_t;
 
-/* `execution_field` is execution data supplied only by the registered field
- * service/localization authority.  It never supplies destination identity,
- * reachability, pose, phase, or authority on its own.  `accepted_view` is an
- * opaque capability returned by that owner for the exact field binding: the
- * caller never dereferences it, but the runtime bridge requires it to be the
- * exact view accepted by the authority before this pointer can be used.  The
- * runtime authority owns all pointed-to data until the caller
- * replaces/releases it.
- * `observation_revision` and `pose_revision` are authority-monotonic whenever
- * their respective authenticated inputs change. */
+/* The runtime bridge snapshots this identity from authenticated compact
+ * localization.  Spawn generation is reducer life identity; client id pins
+ * a caller so another subject can never reuse its retained commitment. */
+typedef struct sg_strategy_caller_life_identity_s
+{
+	uint32_t client_id;
+	uint32_t reserved;
+	uint64_t spawn_generation;
+} sg_strategy_caller_life_identity_t;
+
+typedef enum sg_strategy_caller_field_observation_kind_e
+{
+	SG_STRATEGY_CALLER_FIELD_DISCONNECTED = 0,
+	SG_STRATEGY_CALLER_FIELD_LOCAL_DESTINATION,
+	SG_STRATEGY_CALLER_FIELD_CELL_DESTINATION,
+	SG_STRATEGY_CALLER_FIELD_MECHANISMS_REQUIRED,
+	SG_STRATEGY_CALLER_FIELD_BLOCKED_NOW,
+	SG_STRATEGY_CALLER_FIELD_STEP,
+	SG_STRATEGY_CALLER_FIELD_OBSERVATION_KIND_COUNT
+} sg_strategy_caller_field_observation_kind_t;
+
+/* Scalar projection returned by one current frame query. STEP carries the
+ * exact total Q52.12 analytic cost, never descent geometry or a movement-
+ * family identity. Temporary states have unavailable cost. */
+typedef struct sg_strategy_caller_field_observation_s
+{
+	sg_strategy_caller_field_observation_kind_t kind;
+	sg_rune_compact_field_cost_t cost_to_go;
+} sg_strategy_caller_field_observation_t;
+
+typedef struct sg_strategy_caller_target_observation_s
+{
+	sg_strategy_caller_field_observation_t field;
+	uint64_t target_revision;
+	uint64_t observation_revision;
+	uint64_t observed_at_ms;
+} sg_strategy_caller_target_observation_t;
+
+/* Convert and validate one field query before its frame-local result expires.
+ * The output never borrows the result's portal or mechanism storage. */
+int SG_StrategyCallerFieldObservationFromResult(
+	const sg_rune_compact_field_result_t *result,
+	sg_strategy_caller_field_observation_t *observation_out);
+int SG_StrategyCallerFieldObservationValid(
+	const sg_strategy_caller_field_observation_t *observation);
+
+/* A binding is compact execution data supplied only by the registered field
+ * service/localization authority. The plan owns a lease on the exact compact
+ * target field; callers query it through field_service and field_handle and
+ * never reconstruct seed/link arrays or legacy dynamics objects. Tactical
+ * code queries the handle with its current local context for frame-local
+ * descent geometry. */
 typedef struct sg_strategy_caller_target_binding_s
 {
-	/* These semantic fields are emitted by the field-service authority.
-	 * The caller rejects a binding unless they exactly match the immutable
-	 * target request; matching a destination kind alone is never sufficient. */
 	uint64_t commitment_id;
 	sg_strategy_caller_authority_t authority;
 	sg_strategy_goal_id_t goal_id;
 	sg_strategy_target_id_t target_id;
 	sg_destination_ref_t destination;
 	int role;
-	const int *execution_field;
 	const void *accepted_view;
-	const sg_rune_runtime_snapshot_t *snapshot;
-	const sg_destination_terminal_t *terminal;
-	const sg_field_handle_t *field_handle;
-	const sg_field_guidance_t *guidance;
-	const sg_localized_field_state_t *localized;
-	sg_destination_handle_t resolved_destination;
-	uint64_t observation_revision;
-	uint64_t pose_revision;
-	uint64_t valid_until_ms;
+	sg_rune_compact_field_service_t *field_service;
+	sg_rune_compact_field_target_t compact_target;
+	sg_rune_compact_field_handle_t field_handle;
 } sg_strategy_caller_target_binding_t;
+
+/* By-value projection accepted from the level-installed bot observation
+ * owner.  Strategy code may copy it but cannot create a current observation:
+ * the runtime bridge revalidates it through that owner on every plan use. */
+typedef struct sg_strategy_caller_bot_observation_s
+{
+	sg_strategy_caller_life_identity_t life_identity;
+	uint64_t host_authority_epoch;
+	uint64_t frame_sequence;
+	uint64_t observed_at_ms;
+	sg_host_hook_phase_t hook_phase;
+	float hook_length;
+	float target_radius;
+} sg_strategy_caller_bot_observation_t;
+
+struct sg_strategy_caller_plan_s;
+
+/* The runtime owner revalidates this plan's provider generation and exact
+ * frame capability before every operation, then queries one binding against
+ * that current local context. An accepted plan is usable only at its first
+ * operation time; the next host frame must resolve a new capability. */
+typedef int (*sg_strategy_caller_plan_current_fn)(
+	const struct sg_strategy_caller_plan_s *plan);
+typedef int (*sg_strategy_caller_target_observe_fn)(
+	const struct sg_strategy_caller_plan_s *plan,
+	const sg_strategy_caller_target_binding_t *binding,
+	sg_strategy_caller_target_observation_t *observation_out);
 
 /* The runtime owner leases each accepted opaque view to a resolved plan.
  * Release is expressed in terms of that capability: the strategy caller never
@@ -64,10 +123,21 @@ typedef void (*sg_strategy_caller_view_release_fn)(void *context,
 typedef struct sg_strategy_caller_plan_s
 {
 	uint64_t commitment_id;
+	uint64_t provider_generation;
+	uint64_t frame_sequence;
+	uint64_t observed_at_ms;
+	uint64_t frame_use_at_ms;
+	sg_strategy_caller_life_identity_t life_identity;
+	sg_strategy_caller_bot_observation_t bot_observation;
 	sg_strategy_caller_authority_t authority;
 	sg_strategy_plan_spec_t spec;
 	uint16_t binding_count;
 	uint16_t reserved;
+	const void *frame_capability;
+	const sg_rune_compact_field_mechanism_snapshot_t *mechanisms;
+	const sg_rune_compact_field_portal_root_snapshot_t *portal_roots;
+	sg_strategy_caller_plan_current_fn plan_current;
+	sg_strategy_caller_target_observe_fn observe_target;
 	sg_strategy_caller_view_release_fn release_view;
 	void *release_context;
 	sg_strategy_caller_target_binding_t
@@ -84,24 +154,33 @@ typedef struct sg_strategy_caller_s
 	uint64_t tactical_revision;
 	uint64_t life_revision;
 	uint64_t life_id;
+	uint64_t output_authority_owner_id;
+	uint64_t output_authority_issuance;
+	/* Owner-private output authority state.  The bytes are never accepted as
+	 * strategy data and are meaningful only through the private proof API. */
+	uint8_t output_authority_token[16];
+	uint32_t subject_client_id;
 	uint8_t initialized;
 	uint8_t has_plan;
 	uint8_t life_known;
 	uint8_t life_alive;
+	uint8_t subject_known;
+	uint8_t output_authority_phase;
 } sg_strategy_caller_t;
 
 typedef struct sg_strategy_caller_output_s
 {
 	sg_strategy_instruction_t instruction;
+	uint64_t commitment_id;
 	uint64_t plan_id;
 	uint64_t activation_id;
+	uint64_t frame_sequence;
+	uint64_t observed_at_ms;
+	sg_strategy_caller_life_identity_t life_identity;
 	int role;
-	const int *execution_field;
-	const sg_rune_runtime_snapshot_t *snapshot;
-	const sg_destination_terminal_t *terminal;
-	const sg_field_handle_t *field_handle;
-	const sg_field_guidance_t *guidance;
-	const sg_localized_field_state_t *localized;
+	sg_rune_compact_field_service_t *field_service;
+	sg_rune_compact_field_target_t compact_target;
+	sg_rune_compact_field_handle_t field_handle;
 } sg_strategy_caller_output_t;
 
 int SG_StrategyCallerInit(sg_strategy_caller_t *caller);
@@ -130,6 +209,11 @@ int SG_StrategyCallerSubmit(sg_strategy_caller_t *caller,
 int SG_StrategyCallerPulse(sg_strategy_caller_t *caller, uint8_t alive,
 	uint64_t at_ms, sg_strategy_tactical_block_reason_t block_reason,
 	sg_strategy_caller_output_t *out);
+
+/* Retire the last authenticated life even after its frame-local field lease
+ * expires.  The caller accepts no replacement identity on this path. */
+int SG_StrategyCallerRetireCurrentLife(sg_strategy_caller_t *caller,
+	uint64_t at_ms, sg_strategy_caller_output_t *out);
 
 /* Advance is the production terminal-event entrypoint.  Settle is retained
  * as an explicit spelling for host integrations that already name it. */

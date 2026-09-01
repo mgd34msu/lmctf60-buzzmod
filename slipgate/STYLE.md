@@ -42,10 +42,8 @@ or why a tempting implementation is wrong. Keep them short. Do not record trial
 results, implementation history, reviewer conversations, dates, ownership
 rulings, or the code's control flow. Git history holds that material.
 
-`tools/deslop_audit.py` rejects narrative patterns, oversized SLIPGATE block
-comments, authored files with 10,000 lines or more, and unbudgeted lines over
-100 columns. Tests must anchor to functions or executable statements, never
-prose.
+The build rejects oversized authored files and unbudgeted lines over 100
+columns. Tests must anchor to functions or executable statements, never prose.
 
 ## Changes and verification
 

@@ -3,8 +3,8 @@
 #
 # The bar this script serves: someone who has never spoken to us clones
 # the repo, runs this, follows what it prints, and ends up with the
-# same dev experience we have -- fleet, film, instruments. It CHECKS
-# everything and FIXES what is safe to fix automatically (the venv);
+# same dev experience we have -- fleet and instruments. It CHECKS
+# everything and FIXES what is safe to fix automatically;
 # for everything else it prints exactly what is missing and how to
 # supply it. Run it as many times as you like; it is idempotent.
 #
@@ -25,19 +25,8 @@ echo "== SLIPGATE dev environment doctor =="
 command -v gcc >/dev/null    && pass "gcc" || fail "gcc -- install your distro's C toolchain"
 command -v make >/dev/null   && pass "make" || fail "make"
 command -v git >/dev/null    && pass "git" || fail "git"
-command -v python3 >/dev/null && pass "python3" || fail "python3 (3.10+)"
 
-# 2. The film venv (auto-created if absent)
-VENV="${SLIPGATE_VENV:-$HOME/.venvs/slipgate-film}"
-if [ -x "$VENV/bin/python" ]; then
-    pass "film venv at $VENV"
-else
-    say "creating film venv at $VENV ..."
-    python3 -m venv "$VENV" && "$VENV/bin/pip" install -q -r "$HERE/requirements.txt" \
-        && pass "film venv created" || fail "venv creation failed -- create manually: python3 -m venv $VENV && $VENV/bin/pip install -r tools/requirements.txt"
-fi
-
-# 3. The engine (yquake2 dedicated server)
+# 2. The engine (yquake2 dedicated server)
 Q2DED="${Q2DED:-$HOME/Games/Quake2/engines/yquake2/release/q2ded}"
 if [ -x "$Q2DED" ]; then
     pass "q2ded at $Q2DED"
@@ -47,14 +36,14 @@ fi
 
 GAMEROOT="${Q2ROOT:-$HOME/Games/Quake2}"
 
-# 3b. Quake 2 base data (retail -- we cannot ship it)
+# 2b. Quake 2 base data (retail -- we cannot ship it)
 if ls "$GAMEROOT"/baseq2/pak0.pak >/dev/null 2>&1 || ls "${Q2ROOT:-$HOME/Games/Quake2}"/baseq2/pak*.pak >/dev/null 2>&1; then
     pass "baseq2 retail data"
 else
     fail "baseq2/pak0.pak not found under $GAMEROOT -- Quake 2 retail data required (Steam/GOG/CD); copy baseq2/ into your Q2 root"
 fi
 
-# 4. The game directory the fleet runs in
+# 3. The game directory the fleet runs in
 GAMEDIR="$GAMEROOT/lmctf-hooktest"
 if [ -d "$GAMEDIR" ]; then
     pass "fleet gamedir $GAMEDIR"
@@ -69,21 +58,21 @@ else
     fail "fleet gamedir missing -- mkdir -p $GAMEDIR, then: copy assets/lmctf6-buzzmod.pak in, add your map files, and run 'make' + tools/deploy.sh to install the game module"
 fi
 
-# 5. Demo directories (film lands here)
+# 4. Demo directories (recordings land here)
 BOTDEMOS="$HOME/.local/share/YamagiQ2/lmctf-hooktest/demos"
-[ -d "$BOTDEMOS" ] && pass "bot film dir $BOTDEMOS" \
+[ -d "$BOTDEMOS" ] && pass "bot demo dir $BOTDEMOS" \
     || say "  note: $BOTDEMOS appears after the first recorded game (engine-created)"
 HUMDEMOS="$GAMEDIR/demos"
 if [ -d "$HUMDEMOS" ] && ls "$HUMDEMOS"/*.dm2 >/dev/null 2>&1; then
     pass "human corpus present ($(ls "$HUMDEMOS"/*.dm2 | wc -l) demos)"
 else
     say "  note: no human demo corpus at $HUMDEMOS -- the fleet and all"
-    say "  instruments run without it, but blind judging needs human film."
-    say "  Supply your own client-recorded .dm2 games and index them with"
-    say "  the venv python: tools/ (see corpus-manifest.csv for the format)."
+    say "  instruments run without it, but blind judging needs human demos."
+    say "  Supply your own client-recorded .dm2 games under that directory"
+    say "  (see corpus-manifest.csv for the format)."
 fi
 
-# 6. The watchdog (optional but recommended)
+# 5. The watchdog (optional but recommended)
 if systemctl --user is-enabled wavewatch.timer >/dev/null 2>&1; then
     pass "wavewatch systemd timer enabled"
 else
@@ -92,7 +81,7 @@ else
     say "    systemctl --user daemon-reload && systemctl --user enable --now wavewatch.timer"
 fi
 
-# 7. Build check
+# 6. Build check
 if [ -f "$REPO/GNUmakefile" ]; then
     pass "game module buildable: cd $(basename "$REPO") && make -j\$(nproc)"
 fi

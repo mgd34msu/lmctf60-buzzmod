@@ -1518,17 +1518,10 @@ static void TestPosePhaseSemanticBinding(void)
 	DestroyFixture(&built);
 }
 
-static void TestAmbiguousSemanticPartitionRejected(void)
+static void TestSemanticPartitionTieBreakIsUnique(void)
 {
 	built_fixture_t built;
-	float point[3] = { 0.0f, 0.0f, 0.0f };
-	sg_rune_bounds_t bounds;
-	sg_weapon_static_query_t query;
-	sg_weapon_profile_t machinegun;
-	sg_rune_cell_ref_t cell = SG_RUNE_CELL_REF_NONE;
-	sg_rune_phase_ref_t phase = SG_RUNE_PHASE_REF_NONE;
-	uint32_t partition, compatible = 0U;
-	int found = 0;
+	uint32_t partition, maximum_compatible = 0U;
 
 	CHECK(BuildPreparedFixture(&built,
 		PartitionScalingFixture(SG_WEAPON_FIXTURE_PARTITIONS)));
@@ -1538,7 +1531,7 @@ static void TestAmbiguousSemanticPartitionRejected(void)
 		return;
 	}
 	for (partition = 0U;
-		partition < built.visibility->partition_count && !found; partition++)
+		partition < built.visibility->partition_count; partition++)
 	{
 		const sg_static_visibility_partition_t *owner =
 			&built.visibility->partitions[partition];
@@ -1552,7 +1545,7 @@ static void TestAmbiguousSemanticPartitionRejected(void)
 			continue;
 
 		for (face_local = 0U;
-			face_local < owner_region->face_count && !found; face_local++)
+			face_local < owner_region->face_count; face_local++)
 		{
 			const sg_configuration_semantic_face_t *face =
 				&built.semantics->faces[
@@ -1560,13 +1553,13 @@ static void TestAmbiguousSemanticPartitionRejected(void)
 			uint32_t vertex_local;
 
 			for (vertex_local = 0U;
-				vertex_local < face->vertex_count && !found; vertex_local++)
+				vertex_local < face->vertex_count; vertex_local++)
 			{
 				const sg_rune_vec3_t *vertex = &built.semantics->vertices[
 					face->first_vertex + vertex_local];
 				uint32_t candidate;
 
-				compatible = 0U;
+				uint32_t compatible = 0U;
 				for (candidate = 0U;
 					candidate < built.visibility->partition_count; candidate++)
 				{
@@ -1589,28 +1582,13 @@ static void TestAmbiguousSemanticPartitionRejected(void)
 							built.visibility, candidate, vertex->value, &tested))
 						compatible++;
 				}
-				if (compatible > 1U)
-				{
-					memcpy(point, vertex->value, sizeof(point));
-					cell = built.configuration->cells[
-						owner->configuration_cell].id;
-					phase = owner_phase;
-					found = 1;
-				}
+				if (compatible > maximum_compatible)
+					maximum_compatible = compatible;
 			}
 		}
 	}
-	CHECK(found);
-	CHECK(compatible > 1U);
-	if (found)
-	{
-		bounds = BoundsAt(point, 1.0f);
-		query = QueryForState(&built, point, point, &bounds, &cell, &phase,
-			&cell, &phase, SG_WEAPON_STATIC_DIRECT_VISIBILITY);
-		machinegun = ResolveProfile(&built, SG_WEAPON_PROFILE_MACHINEGUN);
-		CheckRejectedTransaction(&built, &query, &machinegun,
-			SG_WEAPON_STATIC_AFFORDANCE_ERROR_INVALID_SOURCE);
-	}
+	/* Host BSP ties choose one strict leaf, so boundary samples stay unique. */
+	CHECK(maximum_compatible == 1U);
 	DestroyFixture(&built);
 }
 
@@ -2088,7 +2066,7 @@ int main(void)
 	TestSurfacePreparationScaling();
 	TestPartitionPointIndexScaling();
 	TestPosePhaseSemanticBinding();
-	TestAmbiguousSemanticPartitionRejected();
+	TestSemanticPartitionTieBreakIsUnique();
 	TestEveryProfileFamilyAndEffect();
 	TestOcclusionImpactSplashBounceAndSky();
 	TestConditionalMoverAndAreaPortal();

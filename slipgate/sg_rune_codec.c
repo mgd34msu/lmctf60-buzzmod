@@ -28,7 +28,6 @@ _Static_assert(RL_PUSH == 13, "push action drift");
 _Static_assert(RL_CHAIN_HOOK == 15, "chain hook action drift");
 
 #define Codec_PAYLOAD_CRC_OFFSET 20U
-#define Codec_ROUTE_CONTRACT_OFFSET 4U
 #define Codec_MAP_OFFSET 64U
 #define Codec_EXTENSION_OFFSET 128U
 
@@ -500,16 +499,13 @@ static void Codec_SortKeys(uint64_t *keys, size_t count)
 }
 
 static sg_rune_codec_diagnostic_t Codec_ValidateActionGraph(
-	uint16_t route_contract, const sg_rune_codec_seed_t *seeds,
+	const sg_rune_codec_seed_t *seeds,
 	uint32_t num_seeds,
 	const sg_rune_codec_link_t *links, uint32_t num_links,
 	sg_rune_codec_workspace_t *workspace)
 {
 	uint32_t i;
-	uint32_t objectives = 0U;
 
-	if (!SG_RuneRouteContractValid(route_contract))
-		return RLCODEC_BAD_ROUTE_CONTRACT;
 	if (num_seeds == 0U || num_seeds > SG_RUNE_CODEC_MAX_SEEDS ||
 	    num_links > SG_RUNE_CODEC_MAX_LINKS)
 		return Codec_Diagnostic(RLW_BAD_COUNTS);
@@ -522,16 +518,8 @@ static sg_rune_codec_diagnostic_t Codec_ValidateActionGraph(
 		return Codec_Diagnostic(RLW_ALLOCATION_FAILED);
 	memset(workspace->graph_source_marks, 0, (size_t)num_seeds);
 	for (i = 0U; i < num_seeds; i++)
-	{
 		if (Codec_ValidateSeedFields(&seeds[i]) != RLCODEC_OK)
 			return Codec_Diagnostic(RLW_BAD_SEED_RECORD);
-		if (((uint16_t)seeds[i].flags &
-		    SG_RUNE_CODEC_SEED_OBJECTIVE) != 0U)
-			objectives++;
-	}
-	if ((route_contract == RUNE_ROUTE_CONTRACT_COMPLETE && objectives != 0U) ||
-	    (route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY && objectives != 2U))
-		return Codec_Diagnostic(RLW_BAD_ROUTE_OWNERSHIP);
 	for (i = 0U; i < num_links; i++)
 	{
 		const sg_rune_codec_link_t *link = &links[i];
@@ -580,12 +568,10 @@ static sg_rune_codec_diagnostic_t Codec_ValidateActionGraph(
 	{
 		int tombstone = ((uint16_t)seeds[i].flags &
 			SG_RUNE_CODEC_SEED_TOMBSTONE) != 0U;
-		int objective = ((uint16_t)seeds[i].flags &
-			SG_RUNE_CODEC_SEED_OBJECTIVE) != 0U;
 		int has_outgoing = workspace->graph_source_marks[i] != 0U;
 
-		if ((tombstone && (has_outgoing || objective)) ||
-		    (!tombstone && !has_outgoing && !objective))
+		if ((tombstone && has_outgoing) ||
+		    (!tombstone && !has_outgoing))
 			return Codec_Diagnostic(RLW_BAD_ROUTE_OWNERSHIP);
 	}
 	return RLCODEC_OK;
@@ -644,8 +630,6 @@ static sg_rune_codec_diagnostic_t Codec_ValidateHeaderFixed(
 		return Codec_Diagnostic(RLW_INVALID_ARGUMENT);
 	if (header->magic != SG_RUNE_CODEC_MAGIC)
 		return Codec_Diagnostic(RLW_BAD_MAGIC);
-	if (!SG_RuneRouteContractValid(header->route_contract))
-		return RLCODEC_BAD_ROUTE_CONTRACT;
 	if (header->header_bytes != SG_RUNE_CODEC_HEADER_BYTES)
 		return Codec_Diagnostic(RLW_BAD_HEADER_SIZE);
 	if (header->seed_bytes != SG_RUNE_CODEC_SEED_BYTES)
@@ -708,8 +692,7 @@ static void Codec_EncodeHeaderFields(const sg_rune_codec_header_t *header,
 {
 	memset(out, 0, SG_RUNE_CODEC_HEADER_BYTES);
 	Codec_PutU32(out + 0, header->magic);
-	Codec_PutU16(out + Codec_ROUTE_CONTRACT_OFFSET,
-		header->route_contract);
+	Codec_PutU16(out + SG_RUNE_HEADER_RESERVED_OFFSET, 0U);
 	Codec_PutU16(out + 6, header->header_bytes);
 	Codec_PutU16(out + 8, header->seed_bytes);
 	Codec_PutU16(out + 10, header->link_bytes);
@@ -789,8 +772,8 @@ sg_rune_codec_diagnostic_t SG_RuneCodecDecodeHeader(
 		return Codec_Diagnostic(RLW_BAD_HEADER_SIZE);
 	memset(header_out, 0, sizeof(*header_out));
 	header_out->magic = Codec_GetU32(encoded + 0);
-	header_out->route_contract = Codec_GetU16(
-		encoded + Codec_ROUTE_CONTRACT_OFFSET);
+	if (Codec_GetU16(encoded + SG_RUNE_HEADER_RESERVED_OFFSET) != 0U)
+		return RLCODEC_NONZERO_RESERVED;
 	header_out->header_bytes = Codec_GetU16(encoded + 6);
 	header_out->seed_bytes = Codec_GetU16(encoded + 8);
 	header_out->link_bytes = Codec_GetU16(encoded + 10);
@@ -3608,7 +3591,7 @@ static sg_rune_codec_diagnostic_t Codec_ValidateOnePlan(
 }
 
 sg_rune_codec_diagnostic_t SG_RuneCodecValidate(
-	uint16_t route_contract, const sg_rune_codec_seed_t *seeds,
+	const sg_rune_codec_seed_t *seeds,
 	uint32_t num_seeds,
 	const sg_rune_codec_link_t *links, uint32_t num_links,
 	const sg_rune_codec_activation_node_t *nodes, uint32_t num_nodes,
@@ -3631,7 +3614,7 @@ sg_rune_codec_diagnostic_t SG_RuneCodecValidate(
 	    (num_nodes != 0U && !nodes) || (num_edges != 0U && !edges) ||
 	    (num_plans != 0U && !plans))
 		return Codec_Diagnostic(RLW_INVALID_ARGUMENT);
-	diagnostic = Codec_ValidateActionGraph(route_contract, seeds, num_seeds, links,
+	diagnostic = Codec_ValidateActionGraph(seeds, num_seeds, links,
 		num_links, workspace);
 	if (diagnostic != RLCODEC_OK)
 		return diagnostic;
@@ -3847,7 +3830,7 @@ sg_rune_codec_diagnostic_t SG_RuneCodecMatchIdentity(
 }
 
 sg_rune_codec_diagnostic_t SG_RuneCodecEncode(
-	uint16_t route_contract, const sg_rune_codec_identity_t *identity,
+	const sg_rune_codec_identity_t *identity,
 	const sg_rune_codec_seed_t *seeds, uint32_t num_seeds,
 	const sg_rune_codec_link_t *links, uint32_t num_links,
 	const sg_rune_codec_activation_node_t *nodes, uint32_t num_nodes,
@@ -3878,7 +3861,7 @@ sg_rune_codec_diagnostic_t SG_RuneCodecEncode(
 		return Codec_Diagnostic(RLW_INVALID_ARGUMENT);
 	if (encoded_capacity < encoded_size)
 		return Codec_Diagnostic(RLW_BAD_FILE_SIZE);
-	diagnostic = SG_RuneCodecValidate(route_contract, seeds, num_seeds, links,
+	diagnostic = SG_RuneCodecValidate(seeds, num_seeds, links,
 		num_links,
 		nodes, num_nodes, edges, num_edges, plans, num_plans, strings,
 		string_bytes, workspace);
@@ -3933,7 +3916,6 @@ sg_rune_codec_diagnostic_t SG_RuneCodecEncode(
 		return Codec_Diagnostic(RLW_INVALID_ARGUMENT);
 	memset(&header, 0, sizeof(header));
 	header.magic = SG_RUNE_CODEC_MAGIC;
-	header.route_contract = route_contract;
 	header.header_bytes = SG_RUNE_CODEC_HEADER_BYTES;
 	header.seed_bytes = SG_RUNE_CODEC_SEED_BYTES;
 	header.link_bytes = SG_RUNE_CODEC_LINK_BYTES;
@@ -4162,7 +4144,7 @@ sg_rune_codec_diagnostic_t SG_RuneCodecDecode(
 	offset += header.string_bytes;
 	if (offset != encoded_size)
 		return Codec_Diagnostic(RLW_BAD_FILE_SIZE);
-	diagnostic = SG_RuneCodecValidate(header.route_contract, seeds,
+	diagnostic = SG_RuneCodecValidate(seeds,
 		header.num_seeds, links,
 		header.num_links, nodes, header.num_activation_nodes, edges,
 		header.num_activation_edges, plans, header.num_activation_plans,

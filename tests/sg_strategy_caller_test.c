@@ -1,17 +1,54 @@
+#include "../slipgate/sg_rune_compact_field_service.h"
+#include "../slipgate/sg_strategy_caller.h"
+#include "../slipgate/sg_strategy_caller_private.h"
+#include "../slipgate/sg_strategy_runtime_bridge.h"
+#include "../slipgate/sg_strategy_runtime_bridge_private.h"
+
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
-#include "slipgate/sg_compact_localization.h"
-#include "slipgate/sg_strategy_caller.h"
-#include "slipgate/sg_strategy_runtime_bridge.h"
-
 static int failures;
-static int railgun_field[2] = { 900, 0 };
-static int armor_field[2] = { 800, 0 };
-static int refreshed_armor_field[2] = { 801, 0 };
-static int capture_field[2] = { 700, 0 };
-static int fallback_field[2] = { 500, 0 };
+typedef struct strategy_fixture_s strategy_fixture_t;
+
+struct sg_strategy_runtime_bot_observation_s
+{
+	uint32_t guard;
+};
+
+typedef struct test_bot_observation_s
+{
+	struct sg_strategy_runtime_bot_observation_s capability;
+	sg_strategy_runtime_bot_observation_view_t view;
+} test_bot_observation_t;
+
+static test_bot_observation_t test_bot_observation;
+
+static int ValidateBotObservation(void *context,
+	const sg_strategy_runtime_bot_observation_t *observation,
+	sg_strategy_runtime_bot_observation_view_t *view_out)
+{
+	test_bot_observation_t *issued = context;
+
+	if (issued == NULL || observation != &issued->capability ||
+		view_out == NULL || issued->capability.guard != UINT32_C(0xb07b07a1))
+		return 0;
+	*view_out = issued->view;
+	return 1;
+}
+
+static int BotObservationCurrent(void *context,
+	const sg_strategy_runtime_bot_observation_view_t *view)
+{
+	const test_bot_observation_t *issued = context;
+
+	return issued != NULL && view != NULL &&
+		memcmp(view, &issued->view, sizeof(*view)) == 0;
+}
+
+static void IssueBotObservation(const strategy_fixture_t *fixture);
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -21,1399 +58,882 @@ static int fallback_field[2] = { 500, 0 };
 	} \
 } while (0)
 
-typedef struct caller_fixture_s
+int SG_RuneCompactModelValidateBound(
+	const sg_rune_compact_model_t *model,
+	const sg_rune_compact_identity_t *expected_identity,
+	sg_rune_compact_error_t *error_out)
 {
-	sg_rune_cell_t cells[1];
-	sg_rune_phase_basis_t model_phases[1];
-	sg_phase_coordinate_t phases[1];
-	sg_rune_model_t model;
-	sg_rune_runtime_snapshot_t snapshot;
-	sg_destination_terminal_t terminals[4];
-	sg_field_handle_t field_handles[4];
-	sg_field_guidance_t guidances[4];
-	sg_localized_field_state_t localized;
-	int accepted_views[4];
-} caller_fixture_t;
-
-static sg_rune_stable_id_t Stable(uint32_t domain, uint32_t ordinal)
-{
-	return (sg_rune_stable_id_t){
-		.source_set_identity = 1U,
-		.high = (uint64_t)domain << 32,
-		.low = (uint64_t)ordinal << 32
-	};
+	if (error_out != NULL)
+	{
+		error_out->code = SG_RUNE_COMPACT_ERROR_NONE;
+		error_out->domain = SG_RUNE_COMPACT_RECORD_MODEL;
+		error_out->record = 0U;
+	}
+	return model != NULL && expected_identity != NULL &&
+		expected_identity == &model->identity;
 }
 
-static sg_rune_state_mode_t SupportedMode(void)
+int SG_RuneCompactIdentityMatches(
+	const sg_rune_compact_identity_t *actual,
+	const sg_rune_compact_identity_t *expected)
 {
-	sg_rune_state_mode_t mode = { 0 };
-
-	mode.kind = SG_RUNE_STATE_MODE_SUPPORTED;
-	mode.value.supported.support_surface.value =
-		Stable(SG_RUNE_ORDER_SURFACE, 1U);
-	return mode;
+	return actual != NULL && expected != NULL && actual == expected;
 }
 
-static sg_destination_handle_t Handle(sg_destination_kind_t kind,
-	uint64_t id)
+sg_rune_compact_localize_status_t SG_RuneCompactLocalize(
+	const sg_rune_compact_model_t *model,
+	const sg_rune_q8_vec3_t *point,
+	sg_rune_compact_location_t *location_out)
 {
-	return (sg_destination_handle_t){
-		.id = id,
-		.generation = 1U,
-		.kind = kind,
-		.motion = SG_DESTINATION_STATIC,
-		.valid = 1U,
-		.pose = {
-			.phase = { 0U, 0U },
-			.position = { 1.0f, 2.0f, 3.0f }
-		}
-	};
+	(void)point;
+	if (model == NULL || location_out == NULL || model->cell_count == 0U)
+		return SG_RUNE_COMPACT_LOCALIZE_INVALID_ARGUMENT;
+	memset(location_out, 0, sizeof(*location_out));
+	location_out->cell.value = point->value[0] >= 400 &&
+		model->cell_count > 1U ? 1U : 0U;
+	location_out->valid_stances = SG_RUNE_STANCE_VALID_ALL;
+	return SG_RUNE_COMPACT_LOCALIZE_OK;
 }
 
-static void InitFixture(caller_fixture_t *fixture)
+struct strategy_fixture_s
 {
+	sg_rune_compact_cell_t cells[2];
+	sg_rune_compact_static_t static_data;
+	sg_rune_compact_landmark_t landmarks[3];
+	sg_rune_compact_cell_index_t landmark_cells[3];
+	sg_rune_compact_model_t model;
+	sg_compact_localized_state_t localized;
+	sg_rune_compact_field_service_t *service;
+};
+
+static sg_destination_ref_t Flag(sg_destination_flag_location_t location)
+{
+	sg_destination_ref_t destination;
+
+	memset(&destination, 0, sizeof(destination));
+	destination.kind = SG_DESTINATION_FLAG;
+	destination.value.flag.team = 1U;
+	destination.value.flag.location = (uint8_t)location;
+	return destination;
+}
+
+static sg_destination_ref_t TeamFlag(uint8_t team,
+	sg_destination_flag_location_t location)
+{
+	sg_destination_ref_t destination = Flag(location);
+
+	destination.value.flag.team = team;
+	return destination;
+}
+
+static sg_destination_ref_t Weapon(uint64_t item_id)
+{
+	sg_destination_ref_t destination;
+
+	memset(&destination, 0, sizeof(destination));
+	destination.kind = SG_DESTINATION_WEAPON;
+	destination.value.item.item_id = item_id;
+	return destination;
+}
+
+static sg_rune_compact_field_result_t FieldResult(
+	sg_rune_compact_field_result_kind_t kind)
+{
+	sg_rune_compact_field_result_t result;
+
+	memset(&result, 0, sizeof(result));
+	result.kind = kind;
+	result.current_cell.value = 0U;
+	return result;
+}
+
+static void TestFieldObservations(void)
+{
+	sg_rune_compact_mechanism_index_t mechanisms[2];
+	sg_rune_compact_field_result_t result;
+	sg_strategy_caller_field_observation_t observation;
+
+	mechanisms[0].value = 2U;
+	mechanisms[1].value = 4U;
+	result = FieldResult(SG_RUNE_COMPACT_FIELD_DISCONNECTED);
+	CHECK(SG_StrategyCallerFieldObservationFromResult(&result, &observation));
+	CHECK(observation.kind == SG_STRATEGY_CALLER_FIELD_DISCONNECTED);
+	CHECK(observation.cost_to_go.units ==
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE);
+
+	result = FieldResult(SG_RUNE_COMPACT_FIELD_LOCAL_DESTINATION);
+	result.value.destination.kind = SG_RUNE_COMPACT_DESTINATION_POINT;
+	CHECK(SG_StrategyCallerFieldObservationFromResult(&result, &observation));
+	CHECK(observation.kind == SG_STRATEGY_CALLER_FIELD_LOCAL_DESTINATION);
+	CHECK(observation.cost_to_go.units == 0U);
+
+	result = FieldResult(SG_RUNE_COMPACT_FIELD_CELL_DESTINATION);
+	result.value.destination.kind = SG_RUNE_COMPACT_DESTINATION_CELL;
+	result.value.destination.value.cell.value = 3U;
+	CHECK(SG_StrategyCallerFieldObservationFromResult(&result, &observation));
+	CHECK(observation.kind == SG_STRATEGY_CALLER_FIELD_CELL_DESTINATION);
+
+	result = FieldResult(SG_RUNE_COMPACT_FIELD_MECHANISMS_REQUIRED);
+	result.value.requirements.portal.value = 1U;
+	result.value.requirements.mechanisms = mechanisms;
+	result.value.requirements.mechanism_count = 2U;
+	result.value.requirements.state =
+		SG_RUNE_COMPACT_FIELD_MECHANISM_REQUIREMENTS_UNKNOWN;
+	CHECK(SG_StrategyCallerFieldObservationFromResult(&result, &observation));
+	CHECK(observation.kind == SG_STRATEGY_CALLER_FIELD_MECHANISMS_REQUIRED);
+	CHECK(observation.cost_to_go.units ==
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE);
+
+	result = FieldResult(SG_RUNE_COMPACT_FIELD_BLOCKED_NOW);
+	result.value.step.kind = SG_RUNE_COMPACT_FIELD_TRANSITION_PORTAL;
+	result.value.step.target_stance = SG_RUNE_COMPACT_FIELD_STANDING;
+	result.value.step.cost_to_go.units =
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE;
+	result.value.step.next_cost_to_go.units =
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE;
+	result.value.step.value.portal.local_cost = INFINITY;
+	result.value.step.value.portal.next_cell.value =
+		SG_RUNE_COMPACT_INDEX_NONE;
+	result.value.step.value.portal.next_portal.value =
+		SG_RUNE_COMPACT_INDEX_NONE;
+	CHECK(SG_StrategyCallerFieldObservationFromResult(&result, &observation));
+	CHECK(observation.kind == SG_STRATEGY_CALLER_FIELD_BLOCKED_NOW);
+
+	result = FieldResult(SG_RUNE_COMPACT_FIELD_STEP);
+	result.value.step.kind = SG_RUNE_COMPACT_FIELD_TRANSITION_PORTAL;
+	result.value.step.target_stance = SG_RUNE_COMPACT_FIELD_CROUCHING;
+	result.value.step.cost_to_go.units =
+		(UINT64_C(1) << 40) + UINT64_C(1);
+	result.value.step.next_cost_to_go.units = UINT64_C(1) << 40;
+	result.value.step.value.portal.local_cost = 0.25f;
+	result.value.step.value.portal.next_cell.value = 1U;
+	result.value.step.value.portal.next_portal.value = 2U;
+	CHECK(SG_StrategyCallerFieldObservationFromResult(&result, &observation));
+	CHECK(observation.kind == SG_STRATEGY_CALLER_FIELD_STEP);
+	CHECK(observation.cost_to_go.units ==
+		(UINT64_C(1) << 40) + UINT64_C(1));
+	CHECK(SG_StrategyCallerFieldObservationValid(&observation));
+	result.value.step.kind = SG_RUNE_COMPACT_FIELD_TRANSITION_DIRECT;
+	result.value.step.value.direct.local_cost = 0.5f;
+	result.value.step.value.direct.next_cell.value = 3U;
+	CHECK(SG_StrategyCallerFieldObservationFromResult(&result, &observation));
+	CHECK(observation.kind == SG_STRATEGY_CALLER_FIELD_STEP);
+	result.value.step.value.direct.next_cell.value = SG_RUNE_COMPACT_INDEX_NONE;
+	CHECK(!SG_StrategyCallerFieldObservationFromResult(&result, &observation));
+	result.value.step.kind = SG_RUNE_COMPACT_FIELD_TRANSITION_STANCE;
+	result.value.step.cost_to_go.units = 2U;
+	result.value.step.next_cost_to_go.units = 1U;
+	CHECK(SG_StrategyCallerFieldObservationFromResult(&result, &observation));
+	CHECK(observation.kind == SG_STRATEGY_CALLER_FIELD_STEP);
+	CHECK(observation.cost_to_go.units == 2U);
+	result.value.step.next_cost_to_go = result.value.step.cost_to_go;
+	CHECK(!SG_StrategyCallerFieldObservationFromResult(&result, &observation));
+	CHECK(!SG_StrategyCallerFieldObservationValid(&observation));
+}
+
+static void InitFixture(strategy_fixture_t *fixture)
+{
+	uint32_t axis;
+
 	memset(fixture, 0, sizeof(*fixture));
-	fixture->phases[0] = (sg_phase_coordinate_t){ 0U, 0U };
-	fixture->model = (sg_rune_model_t){
-		.version = SG_RUNE_MODEL_VERSION,
-		.schema_tag = SG_RUNE_MODEL_SCHEMA_TAG,
-		.flags = SG_RUNE_MODEL_IMMUTABLE | SG_RUNE_MODEL_EXACT_BOUND |
-			SG_RUNE_MODEL_NO_RUNTIME_ACTORS,
-		.completeness = {
-			.state = SG_RUNE_COMPLETENESS_COMPLETE,
-			.expected_cells = 1U,
-			.covered_cells = 1U
-		},
-		.cells = fixture->cells,
-		.cell_count = 1U,
-		.phases = fixture->model_phases,
-		.phase_count = 1U
-	};
-	fixture->snapshot = (sg_rune_runtime_snapshot_t){
-		.identity = 99U,
-		.topology_revision = 7U,
-		.cell_count = 1U,
-		.phase_count = 1U,
-		.region_count = 1U,
-		.model = &fixture->model,
-		.phases = fixture->phases
-	};
-	fixture->localized = (sg_localized_field_state_t){
-		.rune_identity = fixture->snapshot.identity,
-		.topology_revision = fixture->snapshot.topology_revision,
-		.pose_revision = 1U,
-		.sampled_at_ms = 100U,
-		.chart = { Stable(SG_RUNE_ORDER_STATE_CHART, 1U) },
-		.mode = SupportedMode(),
-		.position = { { 0.0f, 0.0f, 0.0f } },
-		.velocity = { { 0.0f, 0.0f, 0.0f } },
-		.elapsed_ms = 0.0f
-	};
+	fixture->cells[0].valid_stances = SG_RUNE_STANCE_VALID_ALL;
+	fixture->cells[1].valid_stances = SG_RUNE_STANCE_VALID_ALL;
+	fixture->landmark_cells[0].value = 0U;
+	fixture->landmark_cells[1].value = 0U;
+	fixture->landmark_cells[2].value = 0U;
+	fixture->landmarks[0].source.entity_ordinal = 10U;
+	fixture->landmarks[0].cells.first = 0U;
+	fixture->landmarks[0].cells.count = 1U;
+	fixture->landmarks[0].kind = SG_RUNE_COMPACT_LANDMARK_FLAG;
+	fixture->landmarks[0].variant = 0U;
+	fixture->landmarks[1].source.entity_ordinal = 1U;
+	fixture->landmarks[1].cells.first = 1U;
+	fixture->landmarks[1].cells.count = 1U;
+	fixture->landmarks[1].kind = SG_RUNE_COMPACT_LANDMARK_WEAPON;
+	fixture->landmarks[1].origin.value[0] = 8;
+	fixture->landmarks[1].origin.value[1] = 16;
+	fixture->landmarks[1].origin.value[2] = 24;
+	fixture->landmarks[2].source.entity_ordinal = 11U;
+	fixture->landmarks[2].cells.first = 2U;
+	fixture->landmarks[2].cells.count = 1U;
+	fixture->landmarks[2].kind = SG_RUNE_COMPACT_LANDMARK_FLAG;
+	fixture->landmarks[2].variant = 1U;
+	fixture->landmarks[2].origin.value[0] = 800;
+	fixture->static_data.landmarks = fixture->landmarks;
+	fixture->static_data.landmark_count = 3U;
+	fixture->static_data.landmark_cells = fixture->landmark_cells;
+	fixture->static_data.landmark_cell_count = 3U;
+	fixture->model.identity.bsp_bytes = 1U;
+	fixture->model.cells = fixture->cells;
+	fixture->model.cell_count = 2U;
+	fixture->model.static_data = &fixture->static_data;
+	fixture->localized.subject.client_id = 0U;
+	fixture->localized.subject.spawn_generation = 1U;
+	fixture->localized.rune_identity = 41U;
+	fixture->localized.topology_revision = 7U;
+	fixture->localized.frame_sequence = 1U;
+	fixture->localized.localized_at_ms = 100U;
+	fixture->localized.location.cell.value = 0U;
+	fixture->localized.location.valid_stances = SG_RUNE_STANCE_VALID_ALL;
+	fixture->localized.stance = SG_RUNE_STANCE_STANDING;
+	fixture->localized.motion = SG_RUNE_MOTION_SUPPORTED;
+	fixture->localized.support = SG_RUNE_SUPPORT_SUPPORTED;
+	fixture->localized.medium = SG_RUNE_MEDIUM_DRY;
+	fixture->localized.valid = 1U;
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		fixture->localized.position[axis] = 0.0f;
+		fixture->localized.velocity[axis] = 0.0f;
+	}
+	CHECK(SG_RuneCompactFieldServiceCreate(&fixture->model,
+		&fixture->model.identity, 41U, 7U, &fixture->service, NULL) ==
+		SG_RUNE_COMPACT_FIELD_SERVICE_OK);
 }
 
-static void InitBindingRuntime(caller_fixture_t *fixture, uint16_t index,
+static void IssueBotObservation(const strategy_fixture_t *fixture)
+{
+	memset(&test_bot_observation, 0, sizeof(test_bot_observation));
+	test_bot_observation.capability.guard = UINT32_C(0xb07b07a1);
+	test_bot_observation.view.subject = fixture->localized.subject;
+	test_bot_observation.view.host_authority_epoch = 1U;
+	test_bot_observation.view.frame_sequence =
+		fixture->localized.frame_sequence;
+	test_bot_observation.view.observed_at_ms =
+		fixture->localized.localized_at_ms;
+	test_bot_observation.view.hook_phase = SG_HOST_HOOK_IDLE;
+}
+
+static void InitGoal(sg_strategy_goal_spec_t *goal,
+	sg_strategy_goal_id_t goal_id, sg_strategy_target_id_t target_id,
 	const sg_destination_ref_t *destination)
 {
-	sg_destination_terminal_t *terminal;
-	sg_field_handle_t *field;
-	sg_field_guidance_t *guidance;
-
-	if (!fixture || !destination || index >= 4U)
-		return;
-	terminal = &fixture->terminals[index];
-	field = &fixture->field_handles[index];
-	guidance = &fixture->guidances[index];
-	*terminal = (sg_destination_terminal_t){
-		.owner_identity = 1U,
-		.destination = *destination,
-		.generation = (uint64_t)index + 1U,
-		.kind = SG_DESTINATION_TERMINAL_STATIC_PATCH,
-		.value.static_patch = {
-			.domain = {
-				.chart = { Stable(SG_RUNE_ORDER_STATE_CHART, 1U) },
-				.domain = { Stable(SG_RUNE_ORDER_STATE_DOMAIN, 1U) }
-			}
-		}
-	};
-	terminal->value.static_patch.capture.anchor.owner_identity = 1U;
-	terminal->value.static_patch.capture.anchor.destination = *destination;
-	terminal->value.static_patch.capture.anchor.destination_generation =
-		terminal->generation;
-	*field = (sg_field_handle_t){
-		.service_identity = 1U,
-		.service_generation = 1U,
-		.rune_identity = fixture->snapshot.identity,
-		.topology_revision = fixture->snapshot.topology_revision,
-		.terminal_generation = terminal->generation,
-		.field_generation = (uint64_t)index + 1U
-	};
-	*guidance = (sg_field_guidance_t){
-		.field = *field,
-		.pose_revision = fixture->localized.pose_revision,
-		.sampled_at_ms = fixture->localized.sampled_at_ms,
-		.kind = SG_FIELD_GUIDANCE_TERMINAL,
-		.value.terminal = {
-			.arrival_cost = { 0U, 0U },
-			.residual_bound_us = 0U
-		}
-	};
-}
-
-static void InitGoal(sg_strategy_goal_spec_t *goal, sg_strategy_goal_id_t id,
-	sg_strategy_goal_kind_t kind, int16_t priority)
-{
 	memset(goal, 0, sizeof(*goal));
-	goal->id = id;
-	goal->kind = kind;
-	goal->priority = priority;
+	goal->id = goal_id;
+	goal->kind = SG_STRATEGY_GOAL_DESTINATION;
+	goal->priority = 1;
 	goal->unavailable = SG_STRATEGY_UNAVAILABLE_WAIT;
+	goal->choice_count = 1U;
+	goal->choices[0].id = target_id;
+	goal->choices[0].destination = *destination;
 	goal->failure.try_alternatives = 1U;
-	goal->failure.max_attempts_per_choice = UINT8_MAX;
-	goal->failure.retry_wake.kind = SG_STRATEGY_RETRY_TARGET_REVISION;
+	goal->failure.max_attempts_per_choice = 1U;
+	goal->failure.retry_wake.kind = SG_STRATEGY_RETRY_NONE;
 	goal->failure.exhausted = SG_STRATEGY_FAILURE_SKIP_GOAL;
 }
 
-static void AddBinding(sg_strategy_caller_plan_t *plan, uint16_t index,
-	sg_strategy_goal_id_t goal_id, sg_strategy_target_id_t target_id,
-	const sg_destination_ref_t *destination, int role,
-	const int *execution_field, caller_fixture_t *fixture)
+static void PoisonInactivePlanRepresentation(sg_strategy_plan_spec_t *spec)
 {
-	InitBindingRuntime(fixture, index, destination);
-	plan->bindings[index] = (sg_strategy_caller_target_binding_t){
-		.commitment_id = plan->commitment_id,
-		.authority = plan->authority,
-		.goal_id = goal_id,
-		.target_id = target_id,
-		.destination = *destination,
-		.role = role,
-		.execution_field = execution_field,
-		.accepted_view = &fixture->accepted_views[index],
-		.snapshot = &fixture->snapshot,
-		.terminal = &fixture->terminals[index],
-		.field_handle = &fixture->field_handles[index],
-		.guidance = &fixture->guidances[index],
-		.localized = &fixture->localized,
-		.resolved_destination = Handle(destination->kind,
-			(uint64_t)index + 1U),
-		.observation_revision = 1U,
-		.pose_revision = 1U,
-		.valid_until_ms = UINT64_MAX
-	};
-}
+	sg_strategy_goal_spec_t *goal;
+	sg_destination_ref_t *destination;
+	unsigned char *destination_bytes;
+	unsigned char *value_bytes;
+	size_t index;
 
-static sg_strategy_caller_plan_t Plan(caller_fixture_t *fixture,
-	uint64_t commitment, sg_strategy_authority_rank_t rank,
-	sg_strategy_principal_kind_t principal, uint32_t principal_id)
-{
-	sg_strategy_caller_plan_t plan;
-	sg_strategy_goal_spec_t *railgun;
-	sg_strategy_goal_spec_t *armor;
-	sg_strategy_goal_spec_t *primary;
-
-	memset(&plan, 0, sizeof(plan));
-	plan.commitment_id = commitment;
-	plan.authority = (sg_strategy_caller_authority_t){
-		.rank = rank,
-		.principal_kind = principal,
-		.principal_id = principal_id
-	};
-	railgun = &plan.spec.goals[0];
-	InitGoal(railgun, 1U, SG_STRATEGY_GOAL_COLLECT_ITEM, INT16_C(30));
-	railgun->failure.try_alternatives = 0U;
-	railgun->choice_count = 1U;
-	railgun->choices[0] = (sg_strategy_target_choice_t){
-		.id = 1U,
-		.destination = {
-			.kind = SG_DESTINATION_WEAPON,
-			.value.item = { 101U }
-		}
-	};
-	armor = &plan.spec.goals[1];
-	InitGoal(armor, 2U, SG_STRATEGY_GOAL_COLLECT_ITEM, INT16_C(20));
-	armor->failure.try_alternatives = 0U;
-	armor->dependency_count = 1U;
-	armor->dependencies[0] = (sg_strategy_dependency_spec_t){
-		.goal_id = 1U,
-		.accept = SG_STRATEGY_DEPENDENCY_SETTLED
-	};
-	armor->choice_count = 1U;
-	armor->choices[0] = (sg_strategy_target_choice_t){
-		.id = 2U,
-		.destination = {
-			.kind = SG_DESTINATION_ARMOR,
-			.value.item = { 102U }
-		}
-	};
-	primary = &plan.spec.goals[2];
-	InitGoal(primary, 3U, SG_STRATEGY_GOAL_CAPTURE_FLAG, INT16_C(10));
-	primary->dependency_count = 1U;
-	primary->dependencies[0] = (sg_strategy_dependency_spec_t){
-		.goal_id = 2U,
-		.accept = SG_STRATEGY_DEPENDENCY_SETTLED
-	};
-	primary->choice_count = 2U;
-	primary->choices[0] = (sg_strategy_target_choice_t){
-		.id = 3U,
-		.destination = {
-			.kind = SG_DESTINATION_FLAG,
-			.value.flag = { 2U, SG_DESTINATION_FLAG_CURRENT, 0U }
-		}
-	};
-	primary->choices[1] = (sg_strategy_target_choice_t){
-		.id = 4U,
-		.destination = {
-			.kind = SG_DESTINATION_FLAG,
-			.value.flag = { 2U, SG_DESTINATION_FLAG_HOME, 0U }
-		}
-	};
-	plan.spec.goal_count = 3U;
-	plan.binding_count = 4U;
-	AddBinding(&plan, 0U, 1U, 1U, &railgun->choices[0].destination, 4,
-		railgun_field, fixture);
-	AddBinding(&plan, 1U, 2U, 2U, &armor->choices[0].destination, 5,
-		armor_field, fixture);
-	AddBinding(&plan, 2U, 3U, 3U, &primary->choices[0].destination, 6,
-		capture_field, fixture);
-	AddBinding(&plan, 3U, 3U, 4U, &primary->choices[1].destination, 7,
-		fallback_field, fixture);
-	return plan;
-}
-
-static void PlanPrimaryRecover(sg_strategy_caller_plan_t *plan)
-{
-	sg_strategy_goal_spec_t *primary;
-	sg_destination_ref_t current;
-	sg_destination_ref_t home;
-
-	if (!plan)
+	CHECK(spec != NULL && spec->goal_count == 1U);
+	if (spec == NULL || spec->goal_count != 1U)
 		return;
-	primary = &plan->spec.goals[2];
-	memset(&current, 0, sizeof(current));
-	memset(&home, 0, sizeof(home));
-	current.kind = SG_DESTINATION_FLAG;
-	current.value.flag.team = 1U;
-	current.value.flag.location = SG_DESTINATION_FLAG_CURRENT;
-	home.kind = SG_DESTINATION_FLAG;
-	home.value.flag.team = 1U;
-	home.value.flag.location = SG_DESTINATION_FLAG_HOME;
-	primary->kind = SG_STRATEGY_GOAL_RECOVER_FLAG;
-	primary->choices[0].destination = current;
-	primary->choices[1].destination = home;
-	plan->bindings[2].destination = current;
-	plan->bindings[3].destination = home;
-	((sg_destination_terminal_t *)plan->bindings[2].terminal)->destination =
-		current;
-	((sg_destination_terminal_t *)plan->bindings[3].terminal)->destination =
-		home;
-	((sg_destination_terminal_t *)plan->bindings[2].terminal)->value.static_patch
-		.capture.anchor.destination = current;
-	((sg_destination_terminal_t *)plan->bindings[3].terminal)->value.static_patch
-		.capture.anchor.destination = home;
+	goal = &spec->goals[0];
+	destination = &goal->choices[0].destination;
+	goal->reserved = UINT8_C(0x5a);
+	memset(&goal->dependencies[goal->dependency_count], 0xa5,
+		(SG_STRATEGY_MAX_DEPENDENCIES - goal->dependency_count) *
+			sizeof(goal->dependencies[0]));
+	memset(&goal->conditions[goal->condition_count], 0x5a,
+		(SG_STRATEGY_MAX_CONDITIONS - goal->condition_count) *
+			sizeof(goal->conditions[0]));
+	memset(&goal->choices[goal->choice_count], 0x3c,
+		(SG_STRATEGY_MAX_CHOICES - goal->choice_count) *
+			sizeof(goal->choices[0]));
+	destination_bytes = (unsigned char *)destination;
+	for (index = sizeof(destination->kind);
+	     index < offsetof(sg_destination_ref_t, value); index++)
+		destination_bytes[index] = UINT8_C(0xc3);
+	value_bytes = (unsigned char *)&destination->value;
+	for (index = sizeof(destination->value.flag);
+	     index < sizeof(destination->value); index++)
+		value_bytes[index] = UINT8_C(0x96);
 }
 
-static sg_strategy_runtime_plan_request_t RuntimeRequest(
-	const sg_strategy_caller_plan_t *plan)
+static sg_strategy_runtime_plan_request_t Request(
+	strategy_fixture_t *fixture, const sg_destination_ref_t *destination,
+	sg_strategy_target_id_t target_id)
 {
-	static sg_compact_localized_state_t localized_player;
 	sg_strategy_runtime_plan_request_t request;
-	uint16_t index;
 
 	memset(&request, 0, sizeof(request));
-	request.commitment_id = plan->commitment_id;
-	memset(&localized_player, 0, sizeof(localized_player));
-	localized_player.subject.client_id = 1U;
-	localized_player.subject.spawn_generation = 1U;
-	localized_player.rune_identity = plan->bindings[0].snapshot->identity;
-	localized_player.topology_revision =
-		plan->bindings[0].snapshot->topology_revision;
-	localized_player.frame_sequence = 1U;
-	localized_player.localized_at_ms =
-		plan->bindings[0].localized->sampled_at_ms;
-	localized_player.location.cell.value = 0U;
-	localized_player.location.valid_stances = SG_RUNE_STANCE_VALID_ALL;
-	localized_player.stance = SG_RUNE_STANCE_STANDING;
-	localized_player.motion = SG_RUNE_MOTION_SUPPORTED;
-	localized_player.support = SG_RUNE_SUPPORT_SUPPORTED;
-	localized_player.medium = SG_RUNE_MEDIUM_DRY;
-	localized_player.void_relation = SG_RUNE_VOID_CLEAR;
-	localized_player.reference_frame = SG_RUNE_FRAME_WORLD;
-	localized_player.support_model_index = SG_HOST_COLLISION_MODEL_WORLD;
-	localized_player.support_instance_id = 0U;
-	localized_player.water_level = 0U;
-	localized_player.water_type = 0U;
-	localized_player.position[0] = 0.0f;
-	localized_player.position[1] = 0.0f;
-	localized_player.position[2] = 0.0f;
-	localized_player.velocity[0] = 0.0f;
-	localized_player.velocity[1] = 0.0f;
-	localized_player.velocity[2] = 0.0f;
-	localized_player.host_state.pm_type = PM_NORMAL;
-	localized_player.host_state.pm_flags = PMF_ON_GROUND;
-	localized_player.host_state.origin[0] = 0;
-	localized_player.host_state.origin[1] = 0;
-	localized_player.host_state.origin[2] = 0;
-	localized_player.host_state.velocity[0] = 0;
-	localized_player.host_state.velocity[1] = 0;
-	localized_player.host_state.velocity[2] = 0;
-	localized_player.host_state.gravity = 800;
-	localized_player.recovery = SG_LOCALIZATION_RECOVERY_NONE;
-	localized_player.valid = 1U;
-	request.localized_player = &localized_player;
-	request.authority = plan->authority;
-	request.spec = plan->spec;
-	request.execution_count = plan->binding_count;
-	for (index = 0U; index < plan->binding_count; index++)
-		request.executions[index] = (sg_strategy_runtime_execution_t){
-			.goal_id = plan->bindings[index].goal_id,
-			.target_id = plan->bindings[index].target_id,
-			.role = plan->bindings[index].role
-		};
+	request.commitment_id = 900U;
+	request.localized_player = &fixture->localized;
+	IssueBotObservation(fixture);
+	request.bot_observation = &test_bot_observation.capability;
+	request.authority.rank = SG_STRATEGY_AUTHORITY_AUTONOMOUS;
+	request.authority.principal_kind = SG_STRATEGY_PRINCIPAL_AUTONOMOUS;
+	request.authority.principal_id = 1U;
+	request.spec.goal_count = 1U;
+	InitGoal(&request.spec.goals[0], 1U, target_id, destination);
+	request.execution_count = 1U;
+	request.executions[0].goal_id = 1U;
+	request.executions[0].target_id = target_id;
+	request.executions[0].role = 4;
 	return request;
 }
 
-typedef struct runtime_target_record_s
+static void CheckAuthenticatedLifeIdentity(strategy_fixture_t *fixture)
 {
-	/* These are the field-service owner's immutable view facts.  The
-	 * locator below cannot change them by echoing a different binding. */
-	sg_destination_ref_t semantic_destination;
-	const int *semantic_execution_field;
-	sg_strategy_caller_target_binding_t binding;
-} runtime_target_record_t;
-
-typedef struct runtime_fixture_s
-{
-	runtime_target_record_t records[SG_STRATEGY_CALLER_MAX_BINDINGS];
-	struct runtime_fixture_s *replacement;
-	uint16_t count;
-	uint16_t change_locator_call;
-	uint16_t change_authority_call;
-	int forced_view_index;
-	uint32_t locator_calls;
-	uint32_t authority_calls;
-	uint32_t acquired;
-	uint32_t released;
-	uint32_t releases[SG_STRATEGY_CALLER_MAX_BINDINGS];
-	uint8_t clear_provider_on_release;
-} runtime_fixture_t;
-
-static int RuntimeProvider(void *context,
-	const sg_strategy_runtime_target_request_t *request,
-	sg_strategy_runtime_target_view_t *view_out);
-static int RuntimeAuthority(void *context,
-	const sg_strategy_runtime_target_request_t *request,
-	const sg_strategy_runtime_target_view_t *view,
-	sg_strategy_caller_target_binding_t *binding_out);
-static void RuntimeRelease(void *context, const void *accepted_view);
-
-static int RuntimeDestinationEqual(const sg_destination_ref_t *left,
-	const sg_destination_ref_t *right)
-{
-	if (!left || !right || left->kind != right->kind)
-		return 0;
-	switch (left->kind)
-	{
-	case SG_DESTINATION_FLAG:
-		return left->value.flag.team == right->value.flag.team &&
-			left->value.flag.location == right->value.flag.location;
-	case SG_DESTINATION_ITEM:
-	case SG_DESTINATION_WEAPON:
-	case SG_DESTINATION_ARMOR:
-	case SG_DESTINATION_POWERUP:
-		return left->value.item.item_id == right->value.item.item_id;
-	case SG_DESTINATION_CARRIER:
-	case SG_DESTINATION_ESCORT:
-	case SG_DESTINATION_INTERCEPT:
-		return left->value.carrier.client_id ==
-				right->value.carrier.client_id &&
-			left->value.carrier.team == right->value.carrier.team &&
-			left->value.carrier.selector == right->value.carrier.selector;
-	case SG_DESTINATION_DEFENSIVE_POST:
-		return left->value.post.region_id == right->value.post.region_id;
-	case SG_DESTINATION_LEARNED_POINT:
-	case SG_DESTINATION_WAYPOINT:
-		return left->value.point.point_id == right->value.point.point_id;
-	case SG_DESTINATION_KIND_COUNT:
-	default:
-		return 0;
-	}
-}
-
-static int RuntimeAuthorityEqual(const sg_strategy_caller_authority_t *left,
-	const sg_strategy_caller_authority_t *right)
-{
-	return left && right && left->rank == right->rank &&
-		left->principal_kind == right->principal_kind &&
-		left->principal_id == right->principal_id;
-}
-
-static void InitRuntimeFixture(runtime_fixture_t *runtime,
-	const sg_strategy_caller_plan_t *plan)
-{
-	uint16_t index;
-
-	memset(runtime, 0, sizeof(*runtime));
-	runtime->forced_view_index = -1;
-	runtime->count = plan->binding_count;
-	for (index = 0U; index < plan->binding_count; index++)
-	{
-		runtime->records[index].semantic_destination =
-			plan->bindings[index].destination;
-		runtime->records[index].semantic_execution_field =
-			plan->bindings[index].execution_field;
-		runtime->records[index].binding = plan->bindings[index];
-		runtime->records[index].binding.accepted_view =
-			&runtime->records[index];
-	}
-}
-
-static void RuntimeProviderChange(runtime_fixture_t *runtime)
-{
-	if (!runtime)
-		return;
-	if (!runtime->replacement)
-	{
-		SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
-		return;
-	}
-	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, runtime->replacement,
-		RuntimeAuthority, runtime->replacement, RuntimeRelease,
-		runtime->replacement);
-}
-
-static int RuntimeProvider(void *context,
-	const sg_strategy_runtime_target_request_t *request,
-	sg_strategy_runtime_target_view_t *view_out)
-{
-	runtime_fixture_t *runtime = context;
-	uint16_t index;
-	int found = 0;
-
-	if (!runtime || !request || !view_out)
-		return 0;
-	runtime->locator_calls++;
-	if (runtime->forced_view_index >= 0 &&
-	    runtime->forced_view_index < runtime->count)
-	{
-		view_out->opaque = &runtime->records[runtime->forced_view_index];
-		found = 1;
-	}
-	for (index = 0U; !found && index < runtime->count; index++)
-		if (runtime->records[index].binding.goal_id == request->goal_id &&
-		    runtime->records[index].binding.target_id == request->target_id)
-		{
-			view_out->opaque = &runtime->records[index];
-			found = 1;
-		}
-	if (found && runtime->change_locator_call == runtime->locator_calls)
-		RuntimeProviderChange(runtime);
-	return found;
-}
-
-static int RuntimeAuthority(void *context,
-	const sg_strategy_runtime_target_request_t *request,
-	const sg_strategy_runtime_target_view_t *view,
-	sg_strategy_caller_target_binding_t *binding_out)
-{
-	runtime_fixture_t *runtime = context;
-	uint16_t index;
-
-	if (!runtime || !request || !view || !view->opaque || !binding_out)
-		return 0;
-	runtime->authority_calls++;
-	for (index = 0U; index < runtime->count; index++)
-	{
-		const runtime_target_record_t *record = &runtime->records[index];
-
-		if (view->opaque != record)
-			continue;
-		/* The opaque owner record, not locator-controlled echo data, proves
-		 * that the actual execution field is tied to this full semantic target. */
-		if (record->binding.commitment_id != request->commitment_id ||
-		    !RuntimeAuthorityEqual(&record->binding.authority,
-				&request->authority) ||
-		    record->binding.goal_id != request->goal_id ||
-		    record->binding.target_id != request->target_id ||
-		    !RuntimeDestinationEqual(&record->semantic_destination,
-				&request->destination) ||
-		    !RuntimeDestinationEqual(&record->binding.destination,
-				&record->semantic_destination) ||
-		    record->binding.role != request->role ||
-		    record->binding.accepted_view != record ||
-		    !record->binding.terminal ||
-		    !RuntimeDestinationEqual(&record->binding.terminal->destination,
-				&record->semantic_destination) ||
-		    record->binding.execution_field !=
-				record->semantic_execution_field)
-			return 0;
-		runtime->acquired++;
-		*binding_out = record->binding;
-		if (runtime->change_authority_call == runtime->authority_calls)
-			RuntimeProviderChange(runtime);
-		return 1;
-	}
-	return 0;
-}
-
-static void RuntimeRelease(void *context, const void *accepted_view)
-{
-	runtime_fixture_t *runtime = context;
-	uint16_t index;
-
-	if (!runtime || !accepted_view)
-		return;
-	for (index = 0U; index < runtime->count; index++)
-		if (accepted_view == &runtime->records[index])
-		{
-			runtime->released++;
-			runtime->releases[index]++;
-			if (runtime->clear_provider_on_release)
-			{
-				runtime->clear_provider_on_release = 0U;
-				SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL,
-					NULL, NULL);
-			}
-			return;
-		}
-}
-
-static void CountRelease(void *context, const void *accepted_view)
-{
-	uint32_t *count = context;
-
-	if (count && accepted_view)
-		(*count)++;
-}
-
-typedef struct retirement_fixture_s
-{
-	sg_strategy_caller_t *caller;
-	sg_strategy_caller_plan_t *plan_to_mutate;
-	sg_strategy_caller_authority_t authority;
-	const void *views[4];
-	uint32_t released;
-	uint32_t releases[4];
-	uint8_t callback_entered;
-	uint8_t destroy_on_first;
-	uint8_t release_on_first;
-	uint8_t mutate_plan_on_first;
-	int reentrant_release_result;
-} retirement_fixture_t;
-
-static void InitRetirementFixture(retirement_fixture_t *retirement,
-	caller_fixture_t *fixture)
-{
-	uint16_t index;
-
-	memset(retirement, 0, sizeof(*retirement));
-	for (index = 0U; index < 4U; index++)
-		retirement->views[index] = &fixture->accepted_views[index];
-}
-
-static void RetirementRelease(void *context, const void *accepted_view)
-{
-	retirement_fixture_t *retirement = context;
-	uint16_t index;
-
-	if (!retirement || !accepted_view)
-		return;
-	retirement->released++;
-	for (index = 0U; index < 4U; index++)
-		if (retirement->views[index] == accepted_view)
-		{
-			retirement->releases[index]++;
-			break;
-		}
-	if (retirement->callback_entered)
-		return;
-	retirement->callback_entered = 1U;
-	if (retirement->mutate_plan_on_first && retirement->plan_to_mutate)
-		memset(retirement->plan_to_mutate, 0,
-			sizeof(*retirement->plan_to_mutate));
-	if (retirement->release_on_first && retirement->caller)
-	{
-		sg_strategy_caller_output_t output;
-
-		retirement->reentrant_release_result = SG_StrategyCallerRelease(
-			retirement->caller, &retirement->authority, 1U, 101U,
-			&output);
-	}
-	if (retirement->destroy_on_first && retirement->caller)
-		SG_StrategyCallerDestroy(retirement->caller);
-}
-
-static void CheckReleasedExactlyOnce(const retirement_fixture_t *retirement)
-{
-	uint16_t index;
-
-	CHECK(retirement->released == 4U);
-	for (index = 0U; index < 4U; index++)
-		CHECK(retirement->releases[index] == 1U);
-}
-
-static void TestQueuedPlanAdvancesAcrossGoals(void)
-{
-	caller_fixture_t fixture;
-	sg_strategy_caller_t caller;
-	sg_strategy_caller_output_t output;
+	sg_destination_ref_t flag = Flag(SG_DESTINATION_FLAG_HOME);
+	sg_strategy_runtime_plan_request_t request;
 	sg_strategy_caller_plan_t plan;
+	sg_strategy_caller_output_t output;
+	sg_strategy_caller_t caller;
+	uint64_t activation_id;
 	uint64_t plan_id;
-	uint64_t history;
+	uint16_t attempts;
 
-	InitFixture(&fixture);
-	plan = Plan(&fixture, 10U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
+	fixture->localized.subject.client_id = 0U;
+	fixture->localized.subject.spawn_generation = 1U;
+	fixture->localized.frame_sequence++;
+	fixture->localized.localized_at_ms += 100U;
+	request = Request(fixture, &flag, 120U);
+	memset(&plan, 0, sizeof(plan));
+	CHECK(SG_StrategyRuntimePlanResolve(&request, &plan));
+	CHECK(plan.life_identity.client_id == 0U);
+	CHECK(plan.life_identity.spawn_generation == 1U);
 	CHECK(SG_StrategyCallerInit(&caller));
-	CHECK(SG_StrategyCallerSubmit(&caller, &plan, 1U, 100U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	CHECK(output.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE);
-	CHECK(output.instruction.goal_id == 1U);
-	CHECK(output.execution_field == railgun_field);
-	CHECK(caller.reducer.plan.goal_count == 3U);
-	CHECK(caller.reducer.plan.goals[2].choice_count == 2U);
-	CHECK(SG_StrategyCallerAdvance(&caller, 1U,
-		SG_STRATEGY_OUTCOME_COMPLETED, SG_STRATEGY_FAILURE_NONE, 110U,
-		&output));
-	CHECK(caller.reducer.goals[0].phase == SG_STRATEGY_GOAL_SUCCEEDED);
-	CHECK(output.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE);
-	CHECK(output.instruction.goal_id == 2U);
-	CHECK(output.execution_field == armor_field);
+	CHECK(SG_StrategyCallerSubmit(&caller, &plan, 1U,
+		fixture->localized.localized_at_ms, SG_STRATEGY_BLOCK_NONE, &output));
+	activation_id = output.activation_id;
 	plan_id = output.plan_id;
-	history = caller.reducer.history_sequence;
-	plan = Plan(&fixture, 10U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	plan.bindings[1].execution_field = refreshed_armor_field;
-	CHECK(SG_StrategyCallerSubmit(&caller, &plan, 1U, 115U,
-		SG_STRATEGY_BLOCK_NONE, &output));
+	attempts = caller.reducer.goals[0].attempt_count;
+
+	/* Expire the retained frame capability before reporting death. */
+	fixture->localized.frame_sequence++;
+	fixture->localized.localized_at_ms += 100U;
+	CHECK(SG_StrategyCallerRetireCurrentLife(&caller,
+		fixture->localized.localized_at_ms, &output));
+	CHECK(output.instruction.kind == SG_STRATEGY_INSTRUCTION_WAIT_LIFE);
+	CHECK(caller.reducer.activation.activation_id == 0U);
+
+	fixture->localized.subject.spawn_generation = 2U;
+	request = Request(fixture, &flag, 120U);
+	memset(&plan, 0, sizeof(plan));
+	CHECK(SG_StrategyRuntimePlanResolve(&request, &plan));
+	CHECK(SG_StrategyCallerSubmit(&caller, &plan, 1U,
+		fixture->localized.localized_at_ms, SG_STRATEGY_BLOCK_NONE, &output));
+	CHECK(output.commitment_id == request.commitment_id);
 	CHECK(output.plan_id == plan_id);
-	CHECK(caller.reducer.goals[0].phase == SG_STRATEGY_GOAL_SUCCEEDED);
-	CHECK(caller.reducer.history_sequence == history);
-	CHECK(output.execution_field == refreshed_armor_field);
-	CHECK(SG_StrategyCallerAdvance(&caller, 1U,
-		SG_STRATEGY_OUTCOME_COMPLETED, SG_STRATEGY_FAILURE_NONE, 120U,
-		&output));
-	CHECK(caller.reducer.goals[1].phase == SG_STRATEGY_GOAL_SUCCEEDED);
-	CHECK(output.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE);
-	CHECK(output.instruction.goal_id == 3U);
-	CHECK(output.execution_field == capture_field);
-}
+	CHECK(output.activation_id != 0U);
+	CHECK(output.activation_id != activation_id);
+	CHECK(caller.reducer.life_id == 2U);
+	CHECK(caller.reducer.goals[0].attempt_count == attempts);
 
-static void TestQueuedPlanPersistsFailureAdvance(void)
-{
-	caller_fixture_t fixture;
-	sg_strategy_caller_t caller;
-	sg_strategy_caller_output_t output;
-	sg_strategy_caller_plan_t plan;
-	uint64_t plan_id;
-
-	InitFixture(&fixture);
-	plan = Plan(&fixture, 11U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	/* An exhausted intermediate prerequisite is settled as skipped, so the
-	 * primary remains queued rather than being reconstructed from role policy. */
-	plan.spec.goals[1].failure.max_attempts_per_choice = 1U;
-	plan.spec.goals[1].failure.retry_wake.kind = SG_STRATEGY_RETRY_NONE;
-	CHECK(SG_StrategyCallerInit(&caller));
-	CHECK(SG_StrategyCallerSubmit(&caller, &plan, 1U, 100U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	plan_id = output.plan_id;
-	CHECK(SG_StrategyCallerSettle(&caller, 1U,
-		SG_STRATEGY_OUTCOME_COMPLETED, SG_STRATEGY_FAILURE_NONE, 110U,
-		&output));
-	CHECK(output.instruction.goal_id == 2U);
-	CHECK(SG_StrategyCallerAdvance(&caller, 1U,
-		SG_STRATEGY_OUTCOME_FAILED, SG_STRATEGY_FAILURE_UNAVAILABLE, 120U,
-		&output));
-	CHECK(caller.reducer.goals[1].phase == SG_STRATEGY_GOAL_SKIPPED);
-	CHECK(output.plan_id == plan_id);
-	CHECK(output.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE);
-	CHECK(output.instruction.goal_id == 3U);
-	CHECK(output.execution_field == capture_field);
-	CHECK(SG_StrategyCallerAdvance(&caller, 1U,
-		SG_STRATEGY_OUTCOME_FAILED, SG_STRATEGY_FAILURE_UNAVAILABLE, 130U,
-		&output));
-	CHECK(output.plan_id == plan_id);
-	CHECK(output.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE);
-	CHECK(output.instruction.goal_id == 3U);
-	CHECK(output.instruction.choice_index == 1U);
-	CHECK(output.execution_field == fallback_field);
-}
-
-static void TestSuspendedTerminalAdvanceAndAuthenticatedSources(void)
-{
-	caller_fixture_t fixture;
-	sg_strategy_caller_t caller;
-	sg_strategy_caller_output_t output;
-	sg_strategy_caller_plan_t plan;
-
-	InitFixture(&fixture);
-	plan = Plan(&fixture, 20U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	CHECK(SG_StrategyCallerInit(&caller));
-	CHECK(SG_StrategyCallerSubmit(&caller, &plan, 1U, 100U,
-		SG_STRATEGY_BLOCK_COMBAT, &output));
-	CHECK(output.instruction.kind == SG_STRATEGY_INSTRUCTION_SUSPENDED);
-	CHECK(SG_StrategyCallerSettle(&caller, 1U,
-		SG_STRATEGY_OUTCOME_COMPLETED, SG_STRATEGY_FAILURE_NONE, 110U,
-		&output));
-	CHECK(output.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE);
-	CHECK(output.instruction.goal_id == 2U);
-	CHECK(output.snapshot == &fixture.snapshot);
-	CHECK(output.terminal == &fixture.terminals[1]);
-	CHECK(output.field_handle == &fixture.field_handles[1]);
-	CHECK(output.guidance == &fixture.guidances[1]);
-	CHECK(output.localized == &fixture.localized);
-
-	plan = Plan(&fixture, 21U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	plan.bindings[0].snapshot = NULL;
-	CHECK(!SG_StrategyCallerSubmit(&caller, &plan, 1U, 120U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-}
-
-static void TestCallerRejectsSameKindDestinationForgery(void)
-{
-	caller_fixture_t fixture;
-	sg_strategy_caller_t caller;
-	sg_strategy_caller_output_t output;
-	sg_strategy_caller_plan_t plan;
-
-	InitFixture(&fixture);
-	plan = Plan(&fixture, 22U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	/* FLAG/CURRENT and FLAG/HOME share a kind but not an authority identity. */
-	plan.bindings[2].destination.value.flag.location =
-		SG_DESTINATION_FLAG_HOME;
-	CHECK(SG_StrategyCallerInit(&caller));
-	CHECK(!SG_StrategyCallerSubmit(&caller, &plan, 1U, 100U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-}
-
-static void TestSemanticGoalChangeReplacesAutonomousPlan(void)
-{
-	caller_fixture_t capture_fixture;
-	caller_fixture_t recover_fixture;
-	sg_strategy_caller_t caller;
-	sg_strategy_caller_output_t output;
-	sg_strategy_caller_plan_t capture;
-	sg_strategy_caller_plan_t recover;
-	uint64_t capture_plan_id;
-
-	InitFixture(&capture_fixture);
-	InitFixture(&recover_fixture);
-	capture = Plan(&capture_fixture, 23U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	/* Keep the commitment equal on purpose: a CAPTURE->RECOVER semantic
-	 * transition must not be hidden behind only a new hash value. */
-	recover = Plan(&recover_fixture, 23U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	PlanPrimaryRecover(&recover);
-	CHECK(SG_StrategyCallerInit(&caller));
-	CHECK(SG_StrategyCallerSubmit(&caller, &capture, 1U, 100U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	capture_plan_id = output.plan_id;
-	CHECK(SG_StrategyCallerSubmit(&caller, &recover, 1U, 110U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	CHECK(output.plan_id != capture_plan_id);
-	CHECK(caller.reducer.plan.goals[2].kind == SG_STRATEGY_GOAL_RECOVER_FLAG);
-	CHECK(caller.plan.bindings[2].destination.value.flag.team == 1U);
-}
-
-static void TestLowerAuthorityCannotReleaseHumanPlan(void)
-{
-	caller_fixture_t fixture;
-	sg_strategy_caller_t caller;
-	sg_strategy_caller_output_t output;
-	sg_strategy_caller_plan_t autonomous;
-	sg_strategy_caller_plan_t human;
-	sg_strategy_caller_authority_t autonomous_authority;
-	sg_strategy_caller_authority_t human_authority;
-	uint64_t human_plan_id;
-	uint64_t history;
-	uint32_t ignored_releases = 0U;
-	uint16_t ignored_binding_count;
-
-	InitFixture(&fixture);
-	autonomous = Plan(&fixture, 30U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	autonomous_authority = autonomous.authority;
-	human = Plan(&fixture, 31U, SG_STRATEGY_AUTHORITY_HUMAN,
-		SG_STRATEGY_PRINCIPAL_HUMAN, 7U);
-	human_authority = human.authority;
-	autonomous.release_view = CountRelease;
-	autonomous.release_context = &ignored_releases;
-	ignored_binding_count = autonomous.binding_count;
-	CHECK(SG_StrategyCallerInit(&caller));
-	CHECK(SG_StrategyCallerSubmit(&caller, &human, 1U, 100U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	human_plan_id = output.plan_id;
-	history = caller.reducer.history_sequence;
-	CHECK(SG_StrategyCallerSubmit(&caller, &autonomous, 1U, 110U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	CHECK(output.plan_id == human_plan_id);
-	CHECK(caller.reducer.authority.rank == SG_STRATEGY_AUTHORITY_HUMAN);
-	CHECK(caller.reducer.authority.principal.kind ==
-		SG_STRATEGY_PRINCIPAL_HUMAN);
-	CHECK(caller.reducer.authority.principal.id == 7U);
-	CHECK(caller.reducer.history_sequence == history);
-	CHECK(ignored_releases == ignored_binding_count);
-	CHECK(!SG_StrategyCallerCancel(&caller, &autonomous_authority, 1U,
-		120U, &output));
-	CHECK(!SG_StrategyCallerRelease(&caller, &autonomous_authority, 1U,
-		120U, &output));
-	CHECK(SG_StrategyCallerCancel(&caller, &human_authority, 1U, 120U,
-		&output));
-	CHECK(output.instruction.kind == SG_STRATEGY_INSTRUCTION_CANCELLED);
-	CHECK(caller.reducer.cancelled == 1U);
-	CHECK(SG_StrategyCallerRelease(&caller, &human_authority, 1U, 120U,
-		&output));
-	CHECK(caller.reducer.authority.principal.kind == SG_STRATEGY_PRINCIPAL_NONE);
-	autonomous = Plan(&fixture, 30U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	CHECK(SG_StrategyCallerSubmit(&caller, &autonomous, 1U, 130U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	CHECK(caller.reducer.authority.rank == SG_STRATEGY_AUTHORITY_AUTONOMOUS);
-}
-
-static void TestRuntimeResolverFailsClosedWithoutAuthenticatedProvider(void)
-{
-	caller_fixture_t fixture;
-	sg_strategy_caller_plan_t plan;
-	sg_strategy_caller_plan_t resolved;
-	sg_strategy_runtime_plan_request_t request;
-	runtime_fixture_t runtime;
-
-	InitFixture(&fixture);
-	plan = Plan(&fixture, 40U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	request = RuntimeRequest(&plan);
-	InitRuntimeFixture(&runtime, &plan);
-	memset(&resolved, 0, sizeof(resolved));
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
-	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
-	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
-		RuntimeAuthority, &runtime, RuntimeRelease, &runtime);
-	CHECK(SG_StrategyRuntimeTargetProviderAvailable());
-	CHECK(SG_StrategyRuntimePlanResolve(&request, &resolved));
-	CHECK(resolved.bindings[0].snapshot == &fixture.snapshot);
-	SG_StrategyCallerPlanDiscard(&resolved);
-	CHECK(runtime.acquired == 4U);
-	CHECK(runtime.released == 4U);
-	runtime.records[2].binding.destination.value.flag.location =
-		SG_DESTINATION_FLAG_HOME;
-	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	CHECK(resolved.commitment_id == 0U);
-	runtime.records[2].binding.destination.value.flag.location =
-		SG_DESTINATION_FLAG_CURRENT;
-	runtime.records[0].binding.commitment_id++;
-	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	runtime.records[0].binding.commitment_id--;
-	runtime.records[0].binding.authority.principal_id++;
-	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	runtime.records[0].binding.authority.principal_id--;
-	runtime.records[0].binding.role++;
-	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	runtime.records[0].binding.role--;
-	runtime.records[0].binding.execution_field = fallback_field;
-	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
-	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
-}
-
-static void TestRuntimeAuthorityRejectsSameKindFieldViewSwap(void)
-{
-	caller_fixture_t fixture;
-	sg_strategy_caller_plan_t plan;
-	sg_strategy_caller_plan_t resolved;
-	sg_strategy_runtime_plan_request_t request;
-	runtime_fixture_t runtime;
-
-	InitFixture(&fixture);
-	plan = Plan(&fixture, 41U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	request = RuntimeRequest(&plan);
-	InitRuntimeFixture(&runtime, &plan);
-	memset(&resolved, 0, sizeof(resolved));
-	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
-		RuntimeAuthority, &runtime, RuntimeRelease, &runtime);
-	/* A malicious locator can nominate HOME's opaque field view and make every
-	 * returned target/terminal/field/guidance echo look like CURRENT.  The
-	 * destination authority still rejects it because the accepted view owns
-	 * HOME and its execution field, not CURRENT. */
-	runtime.records[3].binding.commitment_id = request.commitment_id;
-	runtime.records[3].binding.authority = request.authority;
-	runtime.records[3].binding.goal_id = request.spec.goals[2].id;
-	runtime.records[3].binding.target_id = request.spec.goals[2].choices[0].id;
-	runtime.records[3].binding.destination = request.spec.goals[2].choices[0].destination;
-	runtime.records[3].binding.role = request.executions[2].role;
-	runtime.records[3].binding.execution_field = capture_field;
-	runtime.records[3].binding.terminal = plan.bindings[2].terminal;
-	runtime.records[3].binding.field_handle = plan.bindings[2].field_handle;
-	runtime.records[3].binding.guidance = plan.bindings[2].guidance;
-	runtime.records[3].binding.resolved_destination =
-		plan.bindings[2].resolved_destination;
-	runtime.forced_view_index = 3;
-	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	runtime.forced_view_index = -1;
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
-	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
-}
-
-static void TestRuntimeResolutionRollsBackAndCallerReleasesViews(void)
-{
-	caller_fixture_t fixture;
-	sg_strategy_caller_plan_t source;
-	sg_strategy_caller_plan_t resolved;
-	sg_strategy_runtime_plan_request_t request;
-	sg_strategy_caller_t caller;
-	sg_strategy_caller_output_t output;
-	runtime_fixture_t runtime;
-
-	InitFixture(&fixture);
-	source = Plan(&fixture, 42U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	request = RuntimeRequest(&source);
-	InitRuntimeFixture(&runtime, &source);
-	memset(&resolved, 0, sizeof(resolved));
-	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
-		RuntimeAuthority, &runtime, RuntimeRelease, &runtime);
-	runtime.records[2].binding.role++;
-	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	CHECK(runtime.acquired == 2U);
-	CHECK(runtime.released == 2U);
-	runtime.records[2].binding.role--;
-	CHECK(SG_StrategyCallerInit(&caller));
-	CHECK(SG_StrategyRuntimePlanResolve(&request, &resolved));
-	CHECK(SG_StrategyCallerSubmit(&caller, &resolved, 1U, 100U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	CHECK(runtime.acquired == 6U);
-	CHECK(runtime.released == 2U);
-	CHECK(SG_StrategyRuntimePlanResolve(&request, &resolved));
-	CHECK(SG_StrategyCallerSubmit(&caller, &resolved, 1U, 110U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	CHECK(runtime.acquired == 10U);
-	CHECK(runtime.released == 6U);
-	CHECK(SG_StrategyCallerRelease(&caller, &source.authority, 1U, 120U,
-		&output));
-	CHECK(runtime.released == 10U);
-	SG_StrategyCallerDestroy(&caller);
-	CHECK(runtime.released == 10U);
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
-}
-
-static void TestPlanDiscardDetachesBeforeCallbackMutation(void)
-{
-	caller_fixture_t fixture;
-	retirement_fixture_t retirement;
-	sg_strategy_caller_plan_t plan;
-
-	InitFixture(&fixture);
-	plan = Plan(&fixture, 44U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	InitRetirementFixture(&retirement, &fixture);
-	retirement.plan_to_mutate = &plan;
-	retirement.mutate_plan_on_first = 1U;
-	plan.release_view = RetirementRelease;
-	plan.release_context = &retirement;
+	fixture->localized.subject.client_id = 1U;
+	fixture->localized.frame_sequence++;
+	fixture->localized.localized_at_ms += 100U;
+	request = Request(fixture, &flag, 120U);
+	memset(&plan, 0, sizeof(plan));
+	CHECK(SG_StrategyRuntimePlanResolve(&request, &plan));
+	CHECK(!SG_StrategyCallerSubmit(&caller, &plan, 1U,
+		fixture->localized.localized_at_ms, SG_STRATEGY_BLOCK_NONE, &output));
 	SG_StrategyCallerPlanDiscard(&plan);
-	CheckReleasedExactlyOnce(&retirement);
-	CHECK(plan.binding_count == 0U);
-	CHECK(plan.release_view == NULL);
-}
-
-static void TestDestroyDetachesBeforeReentrantDestroyAndRelease(void)
-{
-	caller_fixture_t fixture;
-	retirement_fixture_t retirement;
-	sg_strategy_caller_t caller;
-	sg_strategy_caller_output_t output;
-	sg_strategy_caller_plan_t plan;
-
-	InitFixture(&fixture);
-	plan = Plan(&fixture, 45U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	InitRetirementFixture(&retirement, &fixture);
-	retirement.caller = &caller;
-	retirement.authority = plan.authority;
-	retirement.destroy_on_first = 1U;
-	retirement.release_on_first = 1U;
-	plan.release_view = RetirementRelease;
-	plan.release_context = &retirement;
-	CHECK(SG_StrategyCallerInit(&caller));
-	CHECK(SG_StrategyCallerSubmit(&caller, &plan, 1U, 100U,
-		SG_STRATEGY_BLOCK_NONE, &output));
 	SG_StrategyCallerDestroy(&caller);
-	CheckReleasedExactlyOnce(&retirement);
-	CHECK(retirement.reentrant_release_result == 0);
-	CHECK(caller.initialized == 0U);
-	CHECK(caller.has_plan == 0U);
+	fixture->localized.subject.client_id = 0U;
 }
 
-static void TestExplicitReleaseDetachesBeforeReentrantDestroy(void)
+static void CheckRejectedBinding(strategy_fixture_t *fixture,
+	const sg_strategy_runtime_plan_request_t *request, uint32_t mutation)
 {
-	caller_fixture_t fixture;
-	retirement_fixture_t retirement;
-	sg_strategy_caller_t caller;
-	sg_strategy_caller_output_t output;
 	sg_strategy_caller_plan_t plan;
-	sg_strategy_caller_authority_t authority;
+	sg_strategy_caller_output_t output;
+	sg_strategy_caller_t caller;
 
-	InitFixture(&fixture);
-	plan = Plan(&fixture, 46U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	authority = plan.authority;
-	InitRetirementFixture(&retirement, &fixture);
-	retirement.caller = &caller;
-	retirement.destroy_on_first = 1U;
-	plan.release_view = RetirementRelease;
-	plan.release_context = &retirement;
+	memset(&plan, 0, sizeof(plan));
+	IssueBotObservation(fixture);
+	CHECK(SG_StrategyRuntimePlanResolve(request, &plan));
+	if (plan.binding_count != 1U)
+	{
+		SG_StrategyCallerPlanDiscard(&plan);
+		return;
+	}
+	switch (mutation)
+	{
+	case 0U:
+		plan.provider_generation++;
+		break;
+	case 1U:
+		plan.bindings[0].field_handle.rune_identity++;
+		break;
+	case 2U:
+		plan.bindings[0].field_handle.topology_revision++;
+		break;
+	case 3U:
+		plan.frame_sequence = 0U;
+		break;
+	case 4U:
+		plan.bindings[0].compact_target.target_generation++;
+		break;
+	case 5U:
+		plan.observe_target = NULL;
+		break;
+	case 6U:
+		plan.plan_current = NULL;
+		break;
+	default:
+		CHECK(0);
+		break;
+	}
 	CHECK(SG_StrategyCallerInit(&caller));
-	CHECK(SG_StrategyCallerSubmit(&caller, &plan, 1U, 100U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	CHECK(SG_StrategyCallerRelease(&caller, &authority, 1U, 110U,
+	CHECK(!SG_StrategyCallerSubmit(&caller, &plan, 1U,
+		fixture->localized.localized_at_ms, SG_STRATEGY_BLOCK_NONE,
 		&output));
-	CheckReleasedExactlyOnce(&retirement);
-	CHECK(caller.initialized == 0U);
-	CHECK(caller.has_plan == 0U);
-}
-
-static void TestReplacementRetirementSurvivesReentrantDestroy(void)
-{
-	caller_fixture_t old_fixture;
-	caller_fixture_t new_fixture;
-	retirement_fixture_t retirement;
-	sg_strategy_caller_t caller;
-	sg_strategy_caller_output_t output;
-	sg_strategy_caller_plan_t old_plan;
-	sg_strategy_caller_plan_t new_plan;
-	uint32_t new_releases = 0U;
-
-	InitFixture(&old_fixture);
-	InitFixture(&new_fixture);
-	old_plan = Plan(&old_fixture, 47U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	new_plan = Plan(&new_fixture, 48U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	PlanPrimaryRecover(&new_plan);
-	InitRetirementFixture(&retirement, &old_fixture);
-	retirement.caller = &caller;
-	retirement.destroy_on_first = 1U;
-	old_plan.release_view = RetirementRelease;
-	old_plan.release_context = &retirement;
-	new_plan.release_view = CountRelease;
-	new_plan.release_context = &new_releases;
-	CHECK(SG_StrategyCallerInit(&caller));
-	CHECK(SG_StrategyCallerSubmit(&caller, &old_plan, 1U, 100U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	CHECK(SG_StrategyCallerSubmit(&caller, &new_plan, 1U, 110U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	CheckReleasedExactlyOnce(&retirement);
-	CHECK(new_releases == 4U);
-	CHECK(caller.initialized == 0U);
-	CHECK(caller.has_plan == 0U);
-}
-
-static void TestLowerAuthorityRetirementSurvivesMutationAndDestroy(void)
-{
-	caller_fixture_t human_fixture;
-	caller_fixture_t autonomous_fixture;
-	retirement_fixture_t retirement;
-	sg_strategy_caller_t caller;
-	sg_strategy_caller_output_t output;
-	sg_strategy_caller_plan_t human;
-	sg_strategy_caller_plan_t autonomous;
-	uint32_t human_releases = 0U;
-
-	InitFixture(&human_fixture);
-	InitFixture(&autonomous_fixture);
-	human = Plan(&human_fixture, 49U, SG_STRATEGY_AUTHORITY_HUMAN,
-		SG_STRATEGY_PRINCIPAL_HUMAN, 7U);
-	autonomous = Plan(&autonomous_fixture, 50U,
-		SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	InitRetirementFixture(&retirement, &autonomous_fixture);
-	retirement.caller = &caller;
-	retirement.plan_to_mutate = &autonomous;
-	retirement.destroy_on_first = 1U;
-	retirement.mutate_plan_on_first = 1U;
-	human.release_view = CountRelease;
-	human.release_context = &human_releases;
-	autonomous.release_view = RetirementRelease;
-	autonomous.release_context = &retirement;
-	CHECK(SG_StrategyCallerInit(&caller));
-	CHECK(SG_StrategyCallerSubmit(&caller, &human, 1U, 100U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	CHECK(SG_StrategyCallerSubmit(&caller, &autonomous, 1U, 110U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	CheckReleasedExactlyOnce(&retirement);
-	CHECK(human_releases == 4U);
-	CHECK(caller.initialized == 0U);
-	CHECK(caller.has_plan == 0U);
-}
-
-static void TestPartialRollbackUsesDetachedReleaseOwner(void)
-{
-	caller_fixture_t fixture;
-	sg_strategy_caller_plan_t source;
-	sg_strategy_caller_plan_t resolved;
-	sg_strategy_runtime_plan_request_t request;
-	runtime_fixture_t runtime;
-
-	InitFixture(&fixture);
-	source = Plan(&fixture, 51U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	request = RuntimeRequest(&source);
-	InitRuntimeFixture(&runtime, &source);
-	memset(&resolved, 0, sizeof(resolved));
-	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
-		RuntimeAuthority, &runtime, RuntimeRelease, &runtime);
-	runtime.clear_provider_on_release = 1U;
-	((sg_field_guidance_t *)runtime.records[2].binding.guidance)->pose_revision++;
-	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	CHECK(runtime.acquired == 3U);
-	CHECK(runtime.released == 3U);
-	CHECK(runtime.releases[0] == 1U);
-	CHECK(runtime.releases[1] == 1U);
-	CHECK(runtime.releases[2] == 1U);
-	CHECK(resolved.binding_count == 0U);
-	CHECK(resolved.release_view == NULL);
-	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
-}
-
-static void TestProviderUnregisterInLocatorLeavesBorrowedViewUnreleased(void)
-{
-	caller_fixture_t fixture;
-	sg_strategy_caller_plan_t source;
-	sg_strategy_caller_plan_t resolved;
-	sg_strategy_caller_plan_t unchanged;
-	sg_strategy_runtime_plan_request_t request;
-	runtime_fixture_t runtime;
-
-	InitFixture(&fixture);
-	source = Plan(&fixture, 52U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	request = RuntimeRequest(&source);
-	InitRuntimeFixture(&runtime, &source);
-	memset(&resolved, 0, sizeof(resolved));
-	unchanged = resolved;
-	runtime.change_locator_call = 1U;
-	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
-		RuntimeAuthority, &runtime, RuntimeRelease, &runtime);
-	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	CHECK(memcmp(&resolved, &unchanged, sizeof(resolved)) == 0);
-	CHECK(runtime.locator_calls == 1U);
-	CHECK(runtime.authority_calls == 0U);
-	CHECK(runtime.acquired == 0U);
-	CHECK(runtime.released == 0U);
-	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
-}
-
-static void TestProviderReplacementInSecondLocatorRollsBackOldLease(void)
-{
-	caller_fixture_t fixture;
-	sg_strategy_caller_plan_t source;
-	sg_strategy_caller_plan_t resolved;
-	sg_strategy_caller_plan_t unchanged;
-	sg_strategy_runtime_plan_request_t request;
-	runtime_fixture_t old_runtime;
-	runtime_fixture_t new_runtime;
-
-	InitFixture(&fixture);
-	source = Plan(&fixture, 53U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	request = RuntimeRequest(&source);
-	InitRuntimeFixture(&old_runtime, &source);
-	InitRuntimeFixture(&new_runtime, &source);
-	memset(&resolved, 0, sizeof(resolved));
-	unchanged = resolved;
-	old_runtime.replacement = &new_runtime;
-	old_runtime.change_locator_call = 2U;
-	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &old_runtime,
-		RuntimeAuthority, &old_runtime, RuntimeRelease, &old_runtime);
-	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	CHECK(memcmp(&resolved, &unchanged, sizeof(resolved)) == 0);
-	CHECK(old_runtime.locator_calls == 2U);
-	CHECK(old_runtime.authority_calls == 1U);
-	CHECK(old_runtime.acquired == 1U);
-	CHECK(old_runtime.released == 1U);
-	CHECK(old_runtime.releases[0] == 1U);
-	CHECK(new_runtime.locator_calls == 0U);
-	CHECK(new_runtime.authority_calls == 0U);
-	CHECK(new_runtime.released == 0U);
-	CHECK(SG_StrategyRuntimeTargetProviderAvailable());
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
-}
-
-static void TestProviderUnregisterInAuthorityReleasesAcceptedView(void)
-{
-	caller_fixture_t fixture;
-	sg_strategy_caller_plan_t source;
-	sg_strategy_caller_plan_t resolved;
-	sg_strategy_caller_plan_t unchanged;
-	sg_strategy_runtime_plan_request_t request;
-	runtime_fixture_t runtime;
-
-	InitFixture(&fixture);
-	source = Plan(&fixture, 54U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	request = RuntimeRequest(&source);
-	InitRuntimeFixture(&runtime, &source);
-	memset(&resolved, 0, sizeof(resolved));
-	unchanged = resolved;
-	runtime.change_authority_call = 1U;
-	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
-		RuntimeAuthority, &runtime, RuntimeRelease, &runtime);
-	CHECK(!SG_StrategyRuntimePlanResolve(&request, &resolved));
-	CHECK(memcmp(&resolved, &unchanged, sizeof(resolved)) == 0);
-	CHECK(runtime.locator_calls == 1U);
-	CHECK(runtime.authority_calls == 1U);
-	CHECK(runtime.acquired == 1U);
-	CHECK(runtime.released == 1U);
-	CHECK(runtime.releases[0] == 1U);
-	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
-}
-
-static void TestProviderReplacementInSecondAuthorityUsesOldReleaseOwner(void)
-{
-	caller_fixture_t fixture;
-	sg_strategy_caller_plan_t source;
-	sg_strategy_caller_plan_t resolved;
-	sg_strategy_caller_plan_t unchanged;
-	sg_strategy_runtime_plan_request_t request;
-	runtime_fixture_t old_runtime;
-	runtime_fixture_t new_runtime;
-	int resolved_ok;
-
-	InitFixture(&fixture);
-	source = Plan(&fixture, 55U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	request = RuntimeRequest(&source);
-	InitRuntimeFixture(&old_runtime, &source);
-	InitRuntimeFixture(&new_runtime, &source);
-	memset(&resolved, 0, sizeof(resolved));
-	unchanged = resolved;
-	old_runtime.replacement = &new_runtime;
-	old_runtime.change_authority_call = 2U;
-	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &old_runtime,
-		RuntimeAuthority, &old_runtime, RuntimeRelease, &old_runtime);
-	resolved_ok = SG_StrategyRuntimePlanResolve(&request, &resolved);
-	CHECK(!resolved_ok);
-	if (!resolved_ok)
-		CHECK(memcmp(&resolved, &unchanged, sizeof(resolved)) == 0);
-	else
-		SG_StrategyCallerPlanDiscard(&resolved);
-	CHECK(old_runtime.locator_calls == 2U);
-	CHECK(old_runtime.authority_calls == 2U);
-	CHECK(old_runtime.acquired == 2U);
-	CHECK(old_runtime.released == 2U);
-	CHECK(old_runtime.releases[0] == 1U);
-	CHECK(old_runtime.releases[1] == 1U);
-	CHECK(new_runtime.locator_calls == 0U);
-	CHECK(new_runtime.authority_calls == 0U);
-	CHECK(new_runtime.released == 0U);
-	CHECK(SG_StrategyRuntimeTargetProviderAvailable());
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
-}
-
-static void TestProviderReplacementLeavesCallerOutputAndInputUnchanged(void)
-{
-	caller_fixture_t fixture;
-	sg_strategy_caller_plan_t source;
-	sg_strategy_caller_plan_t submitted;
-	sg_strategy_caller_plan_t rejected;
-	sg_strategy_caller_plan_t unchanged_rejected;
-	sg_strategy_runtime_plan_request_t request;
-	sg_strategy_runtime_plan_request_t unchanged_request;
-	sg_strategy_caller_t caller;
-	sg_strategy_caller_t unchanged_caller;
-	sg_strategy_caller_output_t output;
-	sg_strategy_caller_output_t unchanged_output;
-	runtime_fixture_t old_runtime;
-	runtime_fixture_t new_runtime;
-
-	InitFixture(&fixture);
-	source = Plan(&fixture, 56U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	request = RuntimeRequest(&source);
-	unchanged_request = request;
-	InitRuntimeFixture(&old_runtime, &source);
-	InitRuntimeFixture(&new_runtime, &source);
-	memset(&submitted, 0, sizeof(submitted));
-	memset(&rejected, 0, sizeof(rejected));
-	unchanged_rejected = rejected;
-	old_runtime.replacement = &new_runtime;
-	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &old_runtime,
-		RuntimeAuthority, &old_runtime, RuntimeRelease, &old_runtime);
-	CHECK(SG_StrategyCallerInit(&caller));
-	CHECK(SG_StrategyRuntimePlanResolve(&request, &submitted));
-	CHECK(SG_StrategyCallerSubmit(&caller, &submitted, 1U, 100U,
-		SG_STRATEGY_BLOCK_NONE, &output));
-	unchanged_caller = caller;
-	unchanged_output = output;
-	old_runtime.change_locator_call = (uint16_t)(old_runtime.locator_calls + 1U);
-	CHECK(!SG_StrategyRuntimePlanResolve(&request, &rejected));
-	CHECK(memcmp(&rejected, &unchanged_rejected, sizeof(rejected)) == 0);
-	CHECK(memcmp(&request, &unchanged_request, sizeof(request)) == 0);
-	CHECK(memcmp(&caller, &unchanged_caller, sizeof(caller)) == 0);
-	CHECK(memcmp(&output, &unchanged_output, sizeof(output)) == 0);
-	CHECK(old_runtime.acquired == 4U);
-	CHECK(old_runtime.released == 0U);
-	CHECK(new_runtime.locator_calls == 0U);
-	CHECK(new_runtime.authority_calls == 0U);
-	CHECK(new_runtime.released == 0U);
+	SG_StrategyCallerPlanDiscard(&plan);
 	SG_StrategyCallerDestroy(&caller);
-	CHECK(old_runtime.released == 4U);
-	CHECK(old_runtime.releases[0] == 1U);
-	CHECK(old_runtime.releases[1] == 1U);
-	CHECK(old_runtime.releases[2] == 1U);
-	CHECK(old_runtime.releases[3] == 1U);
-	CHECK(new_runtime.released == 0U);
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
 }
 
-static void TestRuntimeProviderRequiresReleaseOwner(void)
+static void CheckRetiredLeaseRejected(strategy_fixture_t *fixture,
+	const sg_strategy_runtime_plan_request_t *request)
 {
-	caller_fixture_t fixture;
 	sg_strategy_caller_plan_t plan;
-	runtime_fixture_t runtime;
+	sg_strategy_caller_output_t output;
+	sg_strategy_caller_t caller;
 
-	InitFixture(&fixture);
-	plan = Plan(&fixture, 43U, SG_STRATEGY_AUTHORITY_AUTONOMOUS,
-		SG_STRATEGY_PRINCIPAL_AUTONOMOUS, 1U);
-	InitRuntimeFixture(&runtime, &plan);
-	SG_StrategyRuntimeTargetProviderSet(RuntimeProvider, &runtime,
-		RuntimeAuthority, &runtime, NULL, NULL);
-	CHECK(!SG_StrategyRuntimeTargetProviderAvailable());
+	memset(&plan, 0, sizeof(plan));
+	IssueBotObservation(fixture);
+	CHECK(SG_StrategyRuntimePlanResolve(request, &plan));
+	CHECK(SG_StrategyCallerInit(&caller));
+	CHECK(SG_StrategyCallerSubmit(&caller, &plan, 1U,
+		fixture->localized.localized_at_ms,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	CHECK(SG_RuneCompactFieldServiceInvalidateTarget(fixture->service,
+		request->executions[0].target_id) ==
+		SG_RUNE_COMPACT_FIELD_SERVICE_OK);
+	CHECK(!SG_StrategyCallerPulse(&caller, 1U,
+		fixture->localized.localized_at_ms,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	SG_StrategyCallerDestroy(&caller);
+}
+
+static void CheckLocalizedIdentityRejected(strategy_fixture_t *fixture,
+	const sg_strategy_runtime_plan_request_t *request, uint8_t topology)
+{
+	sg_strategy_caller_plan_t plan;
+	sg_strategy_caller_output_t output;
+	sg_strategy_caller_t caller;
+
+	memset(&plan, 0, sizeof(plan));
+	CHECK(SG_StrategyRuntimePlanResolve(request, &plan));
+	CHECK(SG_StrategyCallerInit(&caller));
+	if (topology != 0U)
+		fixture->localized.topology_revision++;
+	else
+		fixture->localized.rune_identity++;
+	CHECK(!SG_StrategyCallerSubmit(&caller, &plan, 1U,
+		fixture->localized.localized_at_ms, SG_STRATEGY_BLOCK_NONE,
+		&output));
+	if (topology != 0U)
+		fixture->localized.topology_revision--;
+	else
+		fixture->localized.rune_identity--;
+	SG_StrategyCallerPlanDiscard(&plan);
+	SG_StrategyCallerDestroy(&caller);
+}
+
+static void TestCompactProvider(strategy_fixture_t *fixture)
+{
+	sg_strategy_runtime_plan_request_t request;
+	sg_strategy_caller_plan_t plan;
+	sg_strategy_caller_output_t output;
+	sg_strategy_caller_authority_t authority;
+	sg_strategy_caller_t caller;
+	sg_strategy_runtime_plan_request_t moving_request;
+	sg_strategy_caller_plan_t moving_plan;
+	sg_destination_ref_t flag = Flag(SG_DESTINATION_FLAG_HOME);
+	sg_destination_ref_t current = Flag(SG_DESTINATION_FLAG_CURRENT);
+	sg_destination_ref_t weapon = Weapon(2U);
+	sg_rune_compact_field_target_t item_target;
+	sg_destination_handle_t item_handle;
+	sg_rune_compact_field_service_stats_t stats;
+	sg_strategy_caller_output_proof_t output_proof;
+	sg_strategy_caller_output_receipt_t output_receipt;
+	sg_strategy_runtime_caller_query_proof_t query_proof;
+	sg_strategy_runtime_bot_observation_owner_t bot_observation_owner;
+
+	memset(&plan, 0, sizeof(plan));
+	memset(&bot_observation_owner, 0, sizeof(bot_observation_owner));
+	bot_observation_owner.context = &test_bot_observation;
+	bot_observation_owner.validate = ValidateBotObservation;
+	bot_observation_owner.current = BotObservationCurrent;
+	SG_StrategyRuntimeCompactProviderClear(NULL);
+	request = Request(fixture, &flag, 100U);
+	CHECK(!SG_StrategyRuntimePlanResolve(&request, &plan));
+	CHECK(!SG_StrategyRuntimeCompactProviderInstall(NULL,
+		&bot_observation_owner));
+	CHECK(SG_StrategyRuntimeCompactProviderInstall(fixture->service,
+		&bot_observation_owner));
+	CHECK(SG_StrategyRuntimeCompactProviderInstalledFor(fixture->service));
+	CHECK(SG_StrategyRuntimeCompactProviderAvailable());
+	CHECK(SG_StrategyRuntimePlanResolve(&request, &plan));
+	CHECK(plan.binding_count == 1U);
+	CHECK(plan.bindings[0].field_service == fixture->service);
+	CHECK(plan.bindings[0].compact_target.motion ==
+		SG_RUNE_COMPACT_FIELD_TARGET_STATIC);
+	CHECK(plan.bindings[0].compact_target.destination.kind ==
+		SG_RUNE_COMPACT_DESTINATION_POINT);
+	CHECK(plan.provider_generation != 0U);
+	CHECK(plan.frame_sequence == 1U);
+	CHECK(plan.frame_capability == &fixture->localized);
+	SG_RuneCompactFieldServiceStats(fixture->service, &stats);
+	CHECK(stats.lease_count == 1U);
+
+	fixture->localized.frame_sequence = 2U;
+	fixture->localized.localized_at_ms = 101U;
+	CHECK(SG_StrategyCallerInit(&caller));
+	CHECK(!SG_StrategyCallerSubmit(&caller, &plan, 1U, 101U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	SG_StrategyCallerPlanDiscard(&plan);
+	request = Request(fixture, &flag, 100U);
+	CHECK(SG_StrategyRuntimePlanResolve(&request, &plan));
+	CHECK(!SG_StrategyCallerSubmit(&caller, &plan, 1U, 102U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	SG_StrategyCallerPlanDiscard(&plan);
+	CHECK(SG_StrategyRuntimePlanResolve(&request, &plan));
+	CHECK(SG_StrategyCallerSubmit(&caller, &plan, 1U, 101U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	CHECK(caller.has_plan == 1U);
+	CHECK(output.instruction.plan_id != 0U);
+	CHECK(output.instruction.cost_to_go.units == 0U);
+	CHECK(output.instruction.field_state ==
+		SG_STRATEGY_FIELD_LOCAL_DESTINATION);
+	CHECK(output.instruction.target_id == 100U);
+	CHECK(output.instruction.target_generation == 1U);
+	CHECK(output.commitment_id == request.commitment_id);
+	CHECK(output.frame_sequence == fixture->localized.frame_sequence);
+	CHECK(output.observed_at_ms == fixture->localized.localized_at_ms);
+	{
+		sg_rune_compact_field_mechanism_snapshot_t stale_mechanisms;
+		sg_rune_compact_field_local_context_t query_context;
+		sg_rune_compact_field_result_t queried;
+		sg_strategy_runtime_caller_query_snapshot_t query_snapshot;
+		sg_strategy_caller_output_t tampered;
+
+		CHECK(SG_StrategyRuntimeQueryCallerOutputWithContext(&caller,
+			&output, &fixture->localized, NULL, NULL,
+			&test_bot_observation.capability, &queried,
+			&query_context, &output_proof, &query_proof));
+		CHECK(SG_StrategyCallerOutputProofCurrent(&caller, &output,
+			&output_proof));
+		tampered = output;
+		tampered.activation_id++;
+		CHECK(!SG_StrategyCallerOutputProofCurrent(&caller, &tampered,
+			&output_proof));
+		CHECK(SG_StrategyCallerOutputProofConsume(&caller, &output,
+			&output_proof, &output_receipt));
+		CHECK(SG_StrategyCallerOutputReceiptMatchesProof(&caller, &output,
+			&output_proof, &output_receipt));
+		CHECK(SG_StrategyCallerOutputReceiptLineageMatches(&output_proof,
+			&output_receipt));
+		{
+			sg_strategy_runtime_caller_query_proof_t hostile_query_proof =
+				query_proof;
+			sg_strategy_caller_output_receipt_t hostile_receipt =
+				output_receipt;
+
+			hostile_query_proof.opaque[0] ^= UINT8_C(1);
+			hostile_receipt.opaque[31] ^= UINT8_C(1);
+			CHECK(!SG_StrategyCallerOutputReceiptLineageMatches(&output_proof,
+				&hostile_receipt));
+			CHECK(!SG_StrategyRuntimeCallerQueryReceiptRelease(&caller,
+				&output, &output_receipt, &hostile_query_proof));
+			CHECK(SG_StrategyRuntimeCallerQueryReceiptRelease(&caller,
+				&output, &output_receipt, &query_proof));
+			CHECK(!SG_StrategyRuntimeCallerQueryReceiptRelease(&caller,
+				&output, &output_receipt, &query_proof));
+		}
+		CHECK(!SG_StrategyCallerOutputProofCurrent(&caller, &output,
+			&output_proof));
+		CHECK(SG_StrategyCallerOutputReceiptCurrent(&caller, &output,
+			&output_receipt));
+		CHECK(!SG_StrategyCallerOutputProofConsume(&caller, &output,
+			&output_proof, &output_receipt));
+		CHECK(SG_StrategyRuntimeQueryCallerOutputWithContext(&caller,
+			&output, &fixture->localized, NULL, NULL,
+			&test_bot_observation.capability, &queried,
+			&query_context, &output_proof, &query_proof));
+		CHECK(!SG_StrategyCallerOutputReceiptCurrent(&caller, &output,
+			&output_receipt));
+		{
+			sg_strategy_caller_output_receipt_t retired_receipt;
+			sg_strategy_caller_output_proof_t replacement_proof;
+
+			CHECK(SG_StrategyCallerOutputProofConsume(&caller, &output,
+				&output_proof, &retired_receipt));
+			CHECK(SG_StrategyCallerOutputProofIssue(&caller, &output,
+				&replacement_proof));
+			CHECK(!SG_StrategyCallerOutputReceiptCurrent(&caller, &output,
+				&retired_receipt));
+			CHECK(SG_StrategyRuntimeCallerQueryReceiptRelease(&caller,
+				&output, &retired_receipt, &query_proof));
+		}
+		{
+			sg_strategy_caller_t other_caller;
+			sg_strategy_caller_plan_t other_plan;
+			sg_strategy_caller_output_t other_output;
+			sg_strategy_caller_output_proof_t other_proof;
+
+			memset(&other_plan, 0, sizeof(other_plan));
+			CHECK(SG_StrategyRuntimePlanResolve(&request, &other_plan));
+			CHECK(SG_StrategyCallerInit(&other_caller));
+			CHECK(SG_StrategyCallerSubmit(&other_caller, &other_plan, 1U,
+				fixture->localized.localized_at_ms,
+				SG_STRATEGY_BLOCK_NONE, &other_output));
+			CHECK(!SG_StrategyCallerOutputProofCurrent(&other_caller,
+				&other_output, &output_proof));
+			CHECK(SG_StrategyRuntimeQueryCallerOutputWithContext(
+				&other_caller, &other_output, &fixture->localized, NULL,
+				NULL, &test_bot_observation.capability, &queried,
+				&query_context, &other_proof, &query_proof));
+			CHECK(!SG_StrategyCallerOutputProofCurrent(&caller, &output,
+				&other_proof));
+			SG_StrategyCallerDestroy(&other_caller);
+			CHECK(!SG_StrategyCallerOutputProofCurrent(&other_caller,
+				&other_output, &other_proof));
+			CHECK(SG_StrategyCallerInit(&other_caller));
+			CHECK(!SG_StrategyCallerOutputProofCurrent(&other_caller,
+				&other_output, &other_proof));
+			SG_StrategyCallerDestroy(&other_caller);
+		}
+		CHECK(SG_StrategyRuntimeQueryCallerOutputWithContext(&caller,
+			&output, &fixture->localized, NULL, NULL,
+			&test_bot_observation.capability, &queried, &query_context,
+			&output_proof, &query_proof));
+		CHECK(queried.kind == SG_RUNE_COMPACT_FIELD_LOCAL_DESTINATION);
+		CHECK(query_context.frame_sequence ==
+			fixture->localized.frame_sequence);
+		CHECK(query_context.hook_phase == SG_HOST_HOOK_IDLE);
+		CHECK(query_context.mechanisms == NULL);
+		CHECK(query_context.portal_roots == NULL);
+		CHECK(SG_StrategyCallerOutputProofCurrent(&caller, &output,
+			&output_proof));
+		CHECK(SG_StrategyRuntimeCallerQueryProofCurrent(&caller, &output,
+			&output_proof, &query_context, &queried, &query_proof,
+			&query_snapshot));
+		{
+			sg_rune_compact_field_local_context_t changed_context =
+				query_context;
+			sg_rune_compact_field_result_t changed_result = queried;
+			sg_strategy_runtime_caller_query_proof_t hostile_proof;
+
+			changed_context.hook_length = 1.0f;
+			CHECK(!SG_StrategyRuntimeCallerQueryProofCurrent(&caller, &output,
+				&output_proof, &changed_context, &queried, &query_proof,
+				&query_snapshot));
+			changed_context = query_context;
+			changed_context.target_radius = 1.0f;
+			CHECK(!SG_StrategyRuntimeCallerQueryProofCurrent(&caller, &output,
+				&output_proof, &changed_context, &queried, &query_proof,
+				&query_snapshot));
+			changed_result.current_cell.value++;
+			CHECK(!SG_StrategyRuntimeCallerQueryProofCurrent(&caller, &output,
+				&output_proof, &query_context, &changed_result, &query_proof,
+				&query_snapshot));
+			memset(&hostile_proof, 0, sizeof(hostile_proof));
+			CHECK(!SG_StrategyRuntimeCallerQueryProofCurrent(&caller, &output,
+				&output_proof, &query_context, &queried, &hostile_proof,
+				&query_snapshot));
+			{
+				sg_strategy_caller_output_proof_t reissued_proof;
+				uint64_t encoded_owner_id = 0U;
+
+				memcpy(&encoded_owner_id, output_proof.opaque,
+					sizeof(encoded_owner_id));
+				CHECK(encoded_owner_id == caller.output_authority_owner_id);
+				CHECK(SG_StrategyCallerOutputProofIssue(&caller, &output,
+					&reissued_proof));
+				CHECK(!SG_StrategyRuntimeCallerQueryProofCurrent(&caller,
+					&output, &reissued_proof, &query_context, &queried,
+					&query_proof, &query_snapshot));
+			}
+			hostile_proof = query_proof;
+			CHECK(SG_StrategyRuntimeQueryCallerOutputWithContext(&caller,
+				&output, &fixture->localized, NULL, NULL,
+				&test_bot_observation.capability, &queried, &query_context,
+				&output_proof, &query_proof));
+			CHECK(!SG_StrategyRuntimeCallerQueryProofCurrent(&caller, &output,
+				&output_proof, &query_context, &queried, &hostile_proof,
+				&query_snapshot));
+			CHECK(SG_StrategyRuntimeCallerQueryProofCurrent(&caller, &output,
+				&output_proof, &query_context, &queried, &query_proof,
+				&query_snapshot));
+		}
+		memset(&stale_mechanisms, 0, sizeof(stale_mechanisms));
+		stale_mechanisms.model_identity = &fixture->model.identity;
+		stale_mechanisms.frame_sequence =
+			fixture->localized.frame_sequence + 1U;
+		CHECK(!SG_StrategyRuntimeQueryCallerOutputWithContext(&caller,
+			&output, &fixture->localized, &stale_mechanisms, NULL,
+			&test_bot_observation.capability, &queried, &query_context,
+			&output_proof, &query_proof));
+		output.compact_target.target_generation++;
+		CHECK(!SG_StrategyRuntimeQueryCallerOutputWithContext(&caller,
+			&output, &fixture->localized, NULL, NULL,
+			&test_bot_observation.capability, &queried, &query_context,
+			&output_proof, &query_proof));
+		output.compact_target.target_generation--;
+		output.frame_sequence++;
+		CHECK(!SG_StrategyRuntimeQueryCallerOutputWithContext(&caller,
+			&output, &fixture->localized, NULL, NULL,
+			&test_bot_observation.capability, &queried, &query_context,
+			&output_proof, &query_proof));
+		output.frame_sequence--;
+	}
+	{
+		const uint64_t activation = output.activation_id;
+		const uint64_t plan_id = output.plan_id;
+		const uint64_t commitment_id = output.commitment_id;
+
+		CHECK(SG_StrategyCallerPulse(&caller, 1U, 101U,
+			SG_STRATEGY_BLOCK_NONE, &output));
+		CHECK(!SG_StrategyCallerOutputProofCurrent(&caller, &output,
+			&output_proof));
+		CHECK(output.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE);
+		CHECK(output.activation_id == activation);
+		CHECK(output.plan_id == plan_id);
+		CHECK(!SG_StrategyCallerPulse(&caller, 1U, 102U,
+			SG_STRATEGY_BLOCK_NONE, &output));
+
+		fixture->localized.frame_sequence = 3U;
+		fixture->localized.localized_at_ms = 200U;
+		CHECK(!SG_StrategyCallerPulse(&caller, 1U, 200U,
+			SG_STRATEGY_BLOCK_NONE, &output));
+		request = Request(fixture, &flag, 100U);
+		PoisonInactivePlanRepresentation(&request.spec);
+		CHECK(SG_StrategyRuntimePlanResolve(&request, &plan));
+		CHECK(SG_StrategyCallerSubmit(&caller, &plan, 1U, 200U,
+			SG_STRATEGY_BLOCK_NONE, &output));
+		CHECK(output.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE);
+		CHECK(output.activation_id == activation);
+		CHECK(output.plan_id == plan_id);
+		CHECK(output.commitment_id == commitment_id);
+	}
+	if (output.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE ||
+		output.instruction.kind == SG_STRATEGY_INSTRUCTION_SUSPENDED)
+	{
+		CHECK(output.field_service == fixture->service);
+		CHECK(output.field_handle.service_identity != 0U);
+	}
+	/* Clearing the provider revokes the retained generation before the
+	 * service is destroyed. No stale plan operation may expose its handle. */
+	authority = caller.plan.authority;
+	{
+		sg_rune_compact_field_result_t queried;
+		sg_rune_compact_field_local_context_t query_context;
+
+		CHECK(SG_StrategyRuntimeQueryCallerOutputWithContext(&caller,
+			&output, &fixture->localized, NULL, NULL,
+			&test_bot_observation.capability, &queried,
+			&query_context, &output_proof, &query_proof));
+	}
+	SG_StrategyRuntimeCompactProviderClear(fixture->service);
+	CHECK(!SG_StrategyRuntimeCompactProviderAvailable());
+	CHECK(!SG_StrategyCallerOutputProofCurrent(&caller, &output,
+		&output_proof));
+	CHECK(!SG_StrategyCallerPulse(&caller, 1U, 200U,
+		SG_STRATEGY_BLOCK_NONE, &output));
+	CHECK(!SG_StrategyCallerCancel(&caller, &authority, 1U, 200U, &output));
+	CHECK(SG_StrategyCallerRelease(&caller, &authority, 1U, 200U, &output));
+	SG_StrategyCallerDestroy(&caller);
+	SG_RuneCompactFieldServiceStats(fixture->service, &stats);
+	CHECK(stats.lease_count == 0U);
+
+	CHECK(SG_RuneCompactFieldServiceResolveSemanticTarget(fixture->service,
+		103U, &weapon, NULL, &item_target, &item_handle));
+	CHECK(item_target.destination.kind == SG_RUNE_COMPACT_DESTINATION_ITEM);
+	CHECK(item_target.destination.value.item.value == 1U);
+	CHECK(item_handle.kind == SG_DESTINATION_WEAPON);
+	CHECK(SG_StrategyRuntimeCompactProviderInstall(fixture->service,
+		&bot_observation_owner));
+	{
+		sg_destination_ref_t remote = TeamFlag(2U,
+			SG_DESTINATION_FLAG_HOME);
+		sg_strategy_runtime_plan_request_t remote_request =
+			Request(fixture, &remote, 104U);
+		sg_strategy_caller_plan_t remote_plan;
+		sg_strategy_caller_output_t remote_output;
+		sg_strategy_caller_t remote_caller;
+		sg_rune_compact_field_result_t remote_result;
+		sg_rune_compact_field_local_context_t remote_context;
+
+		memset(&remote_plan, 0, sizeof(remote_plan));
+		CHECK(SG_StrategyRuntimePlanResolve(&remote_request, &remote_plan));
+		CHECK(SG_StrategyCallerInit(&remote_caller));
+		CHECK(SG_StrategyCallerSubmit(&remote_caller, &remote_plan, 1U,
+			fixture->localized.localized_at_ms, SG_STRATEGY_BLOCK_NONE,
+			&remote_output));
+		CHECK(remote_output.instruction.kind ==
+			SG_STRATEGY_INSTRUCTION_WAIT_DESTINATION);
+		CHECK(remote_output.instruction.field_state ==
+			SG_STRATEGY_FIELD_DISCONNECTED);
+		CHECK(remote_output.field_service == fixture->service);
+		CHECK(remote_output.commitment_id == remote_request.commitment_id);
+		CHECK(remote_output.frame_sequence ==
+			fixture->localized.frame_sequence);
+		CHECK(!SG_StrategyRuntimeQueryCallerOutputWithContext(&remote_caller,
+			&remote_output, &fixture->localized, NULL, NULL,
+			&test_bot_observation.capability, &remote_result, &remote_context,
+			&output_proof, &query_proof));
+		CHECK(remote_result.kind == SG_RUNE_COMPACT_FIELD_DISCONNECTED);
+		SG_StrategyCallerDestroy(&remote_caller);
+	}
+
+	CheckRejectedBinding(fixture, &request, 0U);
+	CheckRejectedBinding(fixture, &request, 1U);
+	CheckRejectedBinding(fixture, &request, 2U);
+	CheckRejectedBinding(fixture, &request, 3U);
+	CheckRejectedBinding(fixture, &request, 4U);
+	CheckRejectedBinding(fixture, &request, 5U);
+	CheckRejectedBinding(fixture, &request, 6U);
+	CheckLocalizedIdentityRejected(fixture, &request, 0U);
+	CheckLocalizedIdentityRejected(fixture, &request, 1U);
+	CheckAuthenticatedLifeIdentity(fixture);
+	CheckRetiredLeaseRejected(fixture, &request);
+
+	moving_request = Request(fixture, &current, 101U);
+	moving_request.executions[0].live_pose.present = 1U;
+	moving_request.executions[0].live_pose.generation = 2U;
+	moving_request.executions[0].live_pose.position[0] = 1.0f;
+	moving_request.executions[0].live_pose.observed_at_ms = 120U;
+	memset(&moving_plan, 0, sizeof(moving_plan));
+	CHECK(SG_StrategyRuntimePlanResolve(&moving_request, &moving_plan));
+	CHECK(moving_plan.bindings[0].compact_target.motion ==
+		SG_RUNE_COMPACT_FIELD_TARGET_MOVING);
+	CHECK(moving_plan.bindings[0].compact_target.target_generation == 2U);
+	CHECK(moving_plan.bindings[0].destination.kind == SG_DESTINATION_FLAG);
+	SG_StrategyCallerPlanDiscard(&moving_plan);
+	moving_request.executions[0].live_pose.generation = 3U;
+	moving_request.executions[0].live_pose.observed_at_ms = 121U;
+	CHECK(SG_StrategyRuntimePlanResolve(&moving_request, &moving_plan));
+	CHECK(moving_plan.bindings[0].compact_target.target_generation == 3U);
+	SG_StrategyCallerPlanDiscard(&moving_plan);
+	SG_StrategyRuntimeCompactProviderClear(fixture->service);
+	CHECK(!SG_StrategyRuntimeCompactProviderAvailable());
 }
 
 int main(void)
 {
-	TestQueuedPlanAdvancesAcrossGoals();
-	TestQueuedPlanPersistsFailureAdvance();
-	TestSuspendedTerminalAdvanceAndAuthenticatedSources();
-	TestCallerRejectsSameKindDestinationForgery();
-	TestSemanticGoalChangeReplacesAutonomousPlan();
-	TestLowerAuthorityCannotReleaseHumanPlan();
-	TestRuntimeResolverFailsClosedWithoutAuthenticatedProvider();
-	TestRuntimeAuthorityRejectsSameKindFieldViewSwap();
-	TestRuntimeResolutionRollsBackAndCallerReleasesViews();
-	TestPlanDiscardDetachesBeforeCallbackMutation();
-	TestDestroyDetachesBeforeReentrantDestroyAndRelease();
-	TestExplicitReleaseDetachesBeforeReentrantDestroy();
-	TestReplacementRetirementSurvivesReentrantDestroy();
-	TestLowerAuthorityRetirementSurvivesMutationAndDestroy();
-	TestPartialRollbackUsesDetachedReleaseOwner();
-	TestProviderUnregisterInLocatorLeavesBorrowedViewUnreleased();
-	TestProviderReplacementInSecondLocatorRollsBackOldLease();
-	TestProviderUnregisterInAuthorityReleasesAcceptedView();
-	TestProviderReplacementInSecondAuthorityUsesOldReleaseOwner();
-	TestProviderReplacementLeavesCallerOutputAndInputUnchanged();
-	TestRuntimeProviderRequiresReleaseOwner();
-	if (failures)
+	strategy_fixture_t fixture;
+
+	TestFieldObservations();
+	InitFixture(&fixture);
+	if (fixture.service != NULL)
 	{
-		fprintf(stderr, "sg_strategy_caller_test: %d failure(s)\n", failures);
+		TestCompactProvider(&fixture);
+		SG_RuneCompactFieldServiceDestroy(fixture.service);
+	}
+	else
+		failures++;
+	if (failures != 0)
+	{
+		fprintf(stderr, "%d compact strategy caller tests failed\n", failures);
 		return 1;
 	}
-	puts("sg_strategy_caller_test: ok");
+	puts("sg_strategy_caller_test: PASS");
 	return 0;
 }

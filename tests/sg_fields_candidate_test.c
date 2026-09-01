@@ -8,7 +8,6 @@
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_field_projection.h"
-#include "slipgate/sg_tactic_policy.h"
 #include "slipgate/sg_localization.h"
 #include "slipgate/sg_intercept_policy.h"
 #include "slipgate/sg_carrier_cover.h"
@@ -561,13 +560,12 @@ static void CheckCarrierTrailFollowsTheScoringRoute(void)
 	CHECK(SG_FieldCarrierTrailStation(&rune, home, 0, 1400, 2100) == -1);
 }
 
-static void CheckLocalFieldSeedAdmission(void)
+static void CheckStructuralFieldSeedAdmission(void)
 {
 	rune_t rune;
 	rune_seed_t seeds[2];
 	byte linked[2] = { 1, 1 };
 	int field[2] = { SG_FIELD_INF, 500 };
-	vec3_t point = { 0.0f, 0.0f, 0.0f };
 
 	memset(&rune, 0, sizeof(rune));
 	memset(seeds, 0, sizeof(seeds));
@@ -586,21 +584,6 @@ static void CheckLocalFieldSeedAdmission(void)
 	CHECK(SG_LocalSeedScore(&rune, field, 1, 1.0f, 0.0f, 0.0f) < 0.0f);
 	linked[1] = 1;
 	CHECK(SG_LocalSeedScore(&rune, NULL, 1, 1.0f, 0.0f, 0.0f) >= 0.0f);
-
-	rune.artifact.route_contract = RUNE_ROUTE_CONTRACT_LOCAL_ONLY;
-	linked[0] = 0;
-	seeds[0].flags = RSF_OBJECTIVE;
-	seeds[1].flags = RSF_OBJECTIVE;
-	seeds[1].origin[0] = 300.0f;
-	CHECK(SG_LocalObjectiveSeed(&rune, point) == 0);
-	point[0] = 150.0f;
-	CHECK(SG_LocalObjectiveSeed(&rune, point) == -1);
-	point[0] = 32.0f;
-	seeds[1].origin[0] = 64.0f;
-	CHECK(SG_LocalObjectiveSeed(&rune, point) == -1);
-	rune.artifact.route_contract = RUNE_ROUTE_CONTRACT_COMPLETE;
-	point[0] = 0.0f;
-	CHECK(SG_LocalObjectiveSeed(&rune, point) == -1);
 }
 
 static void CheckCarrierProjectionPricesWholeEdge(void)
@@ -718,42 +701,6 @@ static void CheckObjectiveFieldRootTracksMovingGoals(void)
 	CHECK(SG_FieldRootSeed(NULL, field) == -1);
 }
 
-static void CheckTacticCacheTracksObjectiveIdentity(void)
-{
-	int fixed_field[2] = { 500, 0 };
-	int moving_field[2] = { 0, 500 };
-	sg_tactic_cache_t cache = {
-		.topology_current = true, .tactic_seed = 4,
-		.cached_strategy_activation = 10U,
-		.current_strategy_activation = 10U,
-		.cached_goal = { moving_field, 1 },
-		.current_goal = { moving_field, 1 },
-		.committed_at = 10.0f, .now = 11.0f, .route_cost = 900
-	};
-	sg_tactic_cache_t base = cache;
-#define CHECK_REFRESH(statement) do { \
-	cache = base; statement; \
-	CHECK(SG_TacticCacheNeedsRefresh(&cache)); \
-} while (0)
-	CHECK(!SG_TacticCacheNeedsRefresh(&cache));
-	CHECK_REFRESH(cache.current_goal.root_seed = 0);
-	CHECK_REFRESH(cache.current_goal.field = fixed_field);
-	CHECK_REFRESH(cache.current_strategy_activation = 11U);
-	CHECK_REFRESH(cache.committed_at = 12.0f);
-	cache = base;
-	cache.now = 20.0f;
-	CHECK(!SG_TacticCacheNeedsRefresh(&cache));
-	CHECK_REFRESH(cache.now = 20.1f);
-	CHECK_REFRESH(cache.topology_current = false);
-	CHECK_REFRESH(cache.tactic_seed = -1);
-	CHECK_REFRESH(cache.route_cost = 299);
-	cache = base;
-	cache.route_cost = 300;
-	CHECK(!SG_TacticCacheNeedsRefresh(&cache));
-	CHECK_REFRESH(cache.route_cost = SG_FIELD_INF);
-#undef CHECK_REFRESH
-}
-
 int main(void)
 {
 	rune_t rune;
@@ -800,13 +747,11 @@ int main(void)
 	CheckRallyCoverAdmission();
 	CheckExactArmorFieldDoesNotCrossMapRestart();
 	CheckCarrierTrailFollowsTheScoringRoute();
-	CheckLocalFieldSeedAdmission();
+	CheckStructuralFieldSeedAdmission();
 	failures += SG_CacoLifecycleTest();
 	CheckCarrierProjectionPricesWholeEdge();
 	CheckCarrierScreenUsesTravelTime();
 	CheckObjectiveFieldRootTracksMovingGoals();
-	CheckTacticCacheTracksObjectiveIdentity();
-
 	if (failures)
 	{
 		fprintf(stderr, "sg_fields_candidate_test: %d failure(s)\n", failures);

@@ -1,14 +1,39 @@
 #!/usr/bin/env bash
 
+# Generate the fixed RUNE corpus with twelve isolated q2ded workers.
+
 set -u
 
+readonly WORKERS=12
+readonly CORPUS_SIZE=175
+readonly HARD_REGRESSION_MAPS=(
+    bmap5 lmctf01 lmctf06 lmctf11 lmctf12 lmctf15 lmctf19 lmctf25
+    lmctf27 lmctf45 tomb05 tw2ctf2 tw2ctf4 xmap06 xmap13 xmap26
+)
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 Q2DED="${Q2DED:-$HOME/Games/Quake2/engines/yquake2/release/q2ded}"
 GAMEDIR_ROOT="${GAMEDIR_ROOT:-$HOME/Games/Quake2}"
 GAME="${GAME:-lmctf-hooktest}"
 CFG="${CFG:-rune.cfg}"
 MAXCLIENTS="${MAXCLIENTS:-16}"
-PORT_START="${PORT_START:-28500}"
-STARTUP_SLEEP="${STARTUP_SLEEP:-8}"
+PORT_START="${PORT_START:-62000}"
+STARTUP_SLEEP="${STARTUP_SLEEP:-1}"
+RUNE_GENERATOR_MODULE="${RUNE_GENERATOR_MODULE:-}"
+RUNE_COMPACT_READER="${RUNE_COMPACT_READER:-$PROJECT_ROOT/runecompactread.gnu}"
+MAP_MANIFEST="${RUNE_MAP_MANIFEST:-$SCRIPT_DIR/rune-corpus-maps.txt}"
+RUNEGEN_TEST_IO_FAULT="${RUNEGEN_TEST_IO_FAULT:-}"
+
+usage() {
+    echo "usage: $0 [map ...]" >&2
+    echo "       no maps selects $MAP_MANIFEST and requires $CORPUS_SIZE maps" >&2
+}
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    usage
+    exit 0
+fi
 
 for number in "$PORT_START" "$STARTUP_SLEEP"; do
     if [[ ! "$number" =~ ^[0-9]+$ ]]; then
@@ -25,34 +50,40 @@ if [[ ! "$GAME" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}$ ]] || \
     echo "runegen: GAME and CFG must be safe single names" >&2
     exit 2
 fi
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-LOG_DIR="${RUNE_LOG_DIR:-$SCRIPT_DIR/rune-logs}"
-RUNE_LINT="$SCRIPT_DIR/runelint.py"
-RUNE_IO="$SCRIPT_DIR/runeio.py"
-RUNE_PAIR="$SCRIPT_DIR/runegen_pair.py"
-RUNE_ACCEPT="${RUNE_ACCEPT:-$PROJECT_ROOT/runeaccept.gnu}"
-RUNE_BACKUP_DIR="${RUNE_BACKUP_DIR:-$LOG_DIR/backups}"
-LMCTF58_ACCEPT="$SCRIPT_DIR/lmctf58_rune_accept.py"
-DRY_RUN=0
-MAPS=()
 
-for argument in "$@"; do
-    case "$argument" in
-        --dry-run)
-            DRY_RUN=1
-            ;;
-        -h|--help)
-            echo "usage: $0 [--dry-run] <map1> [map2 ...]"
-            exit 0
-            ;;
-        *)
-            MAPS+=("$argument")
-            ;;
-    esac
+FULL_MODE=0
+MAPS=()
+if [ "$#" -eq 0 ]; then
+    FULL_MODE=1
+    if [ ! -f "$MAP_MANIFEST" ] || [ -L "$MAP_MANIFEST" ]; then
+        echo "runegen: map manifest is not a regular file: $MAP_MANIFEST" >&2
+        exit 1
+    fi
+    while IFS= read -r map || [ -n "$map" ]; do
+        MAPS+=("$map")
+    done < "$MAP_MANIFEST"
+else
+    MAPS=("$@")
+fi
+
+declare -A SELECTED=()
+for map in "${MAPS[@]}"; do
+    if [[ ! "$map" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]{0,62}$ ]]; then
+        echo "runegen: unsafe or invalid map name: $map" >&2
+        exit 1
+    fi
+    if [ "${SELECTED[$map]+yes}" = yes ]; then
+        echo "runegen: duplicate map name: $map" >&2
+        exit 1
+    fi
+    SELECTED[$map]=1
 done
 if [ "${#MAPS[@]}" -eq 0 ]; then
-    echo "usage: $0 [--dry-run] <map1> [map2 ...]" >&2
+    echo "runegen: no maps selected" >&2
+    exit 1
+fi
+if [ "$FULL_MODE" -eq 1 ] && [ "${#MAPS[@]}" -ne "$CORPUS_SIZE" ]; then
+    echo "runegen: full corpus manifest must contain exactly $CORPUS_SIZE unique maps" >&2
     exit 1
 fi
 
@@ -62,470 +93,683 @@ if ! GAMEDIR_ROOT="$(cd "$GAMEDIR_ROOT" 2>/dev/null && pwd -P)" || \
     exit 1
 fi
 LIVE_GAME_DIR="$GAMEDIR_ROOT/$GAME"
+LIVE_MAPS="$LIVE_GAME_DIR/maps"
+CORPUS_ROOT="${RUNE_CORPUS_ROOT:-$LIVE_GAME_DIR/.runegen-corpus}"
+ACCEPTED_DIR="$CORPUS_ROOT/accepted"
+GENERATIONS_DIR="$CORPUS_ROOT/generations"
+WORKER_DIR="$CORPUS_ROOT/workers"
+OWNED_DIR="$CORPUS_ROOT/owned-q2ded"
+LOCK_DIR="$CORPUS_ROOT/.run.lock"
+LOCK_FILE="$CORPUS_ROOT/.run.lockfile"
+MANIFEST_OUT="$CORPUS_ROOT/manifest.tsv"
 Q2DED_REAL=""
-Q2DED_DIR=""
+GENERATOR_REAL=""
+RUNE_COMPACT_READER_REAL=""
+RUN_ID="$$-$(date +%Y%m%d%H%M%S)"
 
-check_rune_accept_freshness() {
-    local query_status
-    (
-        cd "$PROJECT_ROOT" &&
-        env -u MAKEFLAGS -u MFLAGS -u GNUMAKEFLAGS \
-            make --no-print-directory -q -o GitRevisionInfo.h -o .depend \
-                -f "$RUNE_ACCEPT_BUILD_FILE" "$RUNE_ACCEPT_BUILD_TARGET"
-    ) >/dev/null 2>&1
-    query_status=$?
-    if [ "$query_status" -eq 0 ]; then
-        return 0
+if ! Q2DED_REAL="$(readlink -f -- "$Q2DED")" || [ ! -x "$Q2DED_REAL" ]; then
+    echo "runegen: q2ded binary not found or not executable: $Q2DED" >&2
+    exit 1
+fi
+if [ -z "$RUNE_GENERATOR_MODULE" ] || [ ! -f "$RUNE_GENERATOR_MODULE" ] || \
+        [ -L "$RUNE_GENERATOR_MODULE" ] || \
+        ! GENERATOR_REAL="$(readlink -f -- "$RUNE_GENERATOR_MODULE")" || \
+        [ ! -f "$GENERATOR_REAL" ]; then
+    echo "runegen: RUNE_GENERATOR_MODULE must name a frozen regular module" >&2
+    exit 1
+fi
+if ! RUNE_COMPACT_READER_REAL="$(readlink -f -- "$RUNE_COMPACT_READER")" || \
+        [ ! -x "$RUNE_COMPACT_READER_REAL" ]; then
+    echo "runegen: canonical compact C reader is not executable: $RUNE_COMPACT_READER" >&2
+    exit 1
+fi
+
+regular_source() {
+    [ -f "$1" ] && [ ! -L "$1" ]
+}
+
+for source in "$LIVE_GAME_DIR/$CFG" "$LIVE_GAME_DIR/game.so" \
+        "$LIVE_GAME_DIR/gamex86_64.so"; do
+    if ! regular_source "$source"; then
+        echo "runegen: required frozen runtime input is not a regular file: $source" >&2
+        exit 1
     fi
-    if [ "$query_status" -eq 1 ]; then
-        echo "runegen: C artifact acceptor is stale; rebuild target $RUNE_ACCEPT_BUILD_TARGET before generation" >&2
-    else
-        echo "runegen: C artifact acceptor build-freshness check failed" >&2
+done
+for map in "${MAPS[@]}"; do
+    if ! regular_source "$LIVE_MAPS/$map.bsp"; then
+        echo "runegen: map BSP is not a regular file: $LIVE_MAPS/$map.bsp" >&2
+        exit 1
     fi
+done
+
+for command in flock sha256sum; do
+    if ! command -v "$command" > /dev/null 2>&1; then
+        echo "runegen: required command is unavailable: $command" >&2
+        exit 1
+    fi
+done
+
+mkdir -p "$ACCEPTED_DIR" "$GENERATIONS_DIR" "$WORKER_DIR" "$OWNED_DIR" || exit 1
+
+exec {LOCK_FD}> "$LOCK_FILE" || {
+    echo "runegen: cannot open corpus lock" >&2
+    exit 1
+}
+if ! flock -n "$LOCK_FD"; then
+    echo "runegen: another corpus run owns $CORPUS_ROOT" >&2
+    exit 1
+fi
+
+owned_process_matches() {
+    local pid="$1" stage_game="$2" process_args
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    process_args="$(ps -p "$pid" -o args= 2>/dev/null || true)"
+    [[ "$process_args" == *"$Q2DED_REAL"* ]] && \
+        [[ "$process_args" == *"+set game $stage_game"* ]]
+}
+
+remove_owned_stage() {
+    local stage_dir="$1"
+    case "$stage_dir" in
+        "$GAMEDIR_ROOT"/.runegen-stage.*)
+            rm -rf -- "$stage_dir"
+            ;;
+        *)
+            echo "runegen: refusing to remove an unowned stage path: $stage_dir" >&2
+            return 1
+            ;;
+    esac
+}
+
+recover_stale_owned_processes() {
+    local record pid stage_game stage_dir
+    shopt -s nullglob
+    for record in "$OWNED_DIR"/*.pid; do
+        if ! IFS=$'\t' read -r pid stage_game stage_dir < "$record"; then
+            echo "runegen: malformed owned-process record: $record" >&2
+            return 1
+        fi
+        if kill -0 "$pid" 2>/dev/null; then
+            if ! owned_process_matches "$pid" "$stage_game"; then
+                echo "runegen: owned-process record no longer matches PID $pid; leaving it alone" >&2
+                return 1
+            fi
+            kill -TERM "$pid" 2>/dev/null || true
+            sleep 1
+            if owned_process_matches "$pid" "$stage_game"; then
+                kill -KILL "$pid" 2>/dev/null || true
+            fi
+        fi
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "runegen: cannot clear stale owned q2ded PID $pid" >&2
+            return 1
+        fi
+        rm -f -- "$record"
+        remove_owned_stage "$stage_dir" || return 1
+    done
+}
+
+if [ -d "$LOCK_DIR" ]; then
+    if [ -r "$LOCK_DIR/pid" ] && read -r lock_pid < "$LOCK_DIR/pid" && \
+            kill -0 "$lock_pid" 2>/dev/null; then
+        echo "runegen: another corpus run owns $LOCK_DIR" >&2
+        exit 1
+    fi
+    rm -f -- "$LOCK_DIR/pid"
+    if ! rmdir -- "$LOCK_DIR" 2>/dev/null; then
+        echo "runegen: stale corpus lock has unexpected contents: $LOCK_DIR" >&2
+        exit 1
+    fi
+fi
+if ! recover_stale_owned_processes; then
+    exit 1
+fi
+shopt -s nullglob
+for orphan in "$ACCEPTED_DIR"/.runegen-*; do
+    [ -f "$orphan" ] && [ ! -L "$orphan" ] && rm -f -- "$orphan"
+done
+for orphan in "$GENERATIONS_DIR"/.pending-*; do
+    case "$orphan" in
+        "$GENERATIONS_DIR"/.pending-*) rm -rf -- "$orphan" ;;
+    esac
+done
+for orphan in "$CORPUS_ROOT"/.manifest.*; do
+    [ -f "$orphan" ] && [ ! -L "$orphan" ] && rm -f -- "$orphan"
+done
+if ! mkdir "$LOCK_DIR"; then
+    echo "runegen: cannot acquire corpus lock" >&2
+    exit 1
+fi
+if ! printf '%s\n' "$$" > "$LOCK_DIR/pid"; then
+    rmdir -- "$LOCK_DIR" 2>/dev/null || true
+    echo "runegen: cannot record corpus lock owner" >&2
+    exit 1
+fi
+
+CHILD_PIDS=()
+cleanup_parent() {
+    local pid record owned_pid owned_game owned_stage
+    for pid in "${CHILD_PIDS[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -TERM "$pid" 2>/dev/null || true
+        fi
+    done
+    for record in "$OWNED_DIR"/*.pid; do
+        [ -r "$record" ] || continue
+        if IFS=$'\t' read -r owned_pid owned_game owned_stage < "$record" && \
+                owned_process_matches "$owned_pid" "$owned_game"; then
+            kill -TERM "$owned_pid" 2>/dev/null || true
+        fi
+    done
+    rm -f -- "$LOCK_DIR/pid"
+    rmdir -- "$LOCK_DIR" 2>/dev/null || true
+}
+trap cleanup_parent EXIT
+trap 'exit 130' HUP INT TERM
+
+is_hard_regression() {
+    local map="$1" hard
+    for hard in "${HARD_REGRESSION_MAPS[@]}"; do
+        [ "$map" = "$hard" ] && return 0
+    done
     return 1
 }
 
-if [ "$DRY_RUN" -eq 0 ]; then
-    for path in "$RUNE_LINT" "$RUNE_IO" "$RUNE_PAIR"; do
-        if [ ! -r "$path" ]; then
-            echo "runegen: required tool is not readable: $path" >&2
-            exit 1
-        fi
-    done
-    if ! Q2DED_REAL="$(readlink -f -- "$Q2DED")" || \
-            [ ! -x "$Q2DED_REAL" ] || \
-            ! Q2DED_DIR="$(cd "$(dirname "$Q2DED_REAL")" && pwd -P)" || \
-            [ "$Q2DED_DIR" = "/" ]; then
-        echo "runegen: q2ded binary not found or not executable: $Q2DED" >&2
-        exit 1
+ORDINARY_MAPS=()
+HARD_MAPS=()
+for map in "${MAPS[@]}"; do
+    if is_hard_regression "$map"; then
+        HARD_MAPS+=("$map")
+    else
+        ORDINARY_MAPS+=("$map")
     fi
-    if [ ! -x "$RUNE_ACCEPT" ]; then
-        echo "runegen: C artifact acceptor not executable: $RUNE_ACCEPT" >&2
-        exit 1
-    fi
-    if [ -z "${RUNE_ACCEPT_BUILD_FILE:-}" ] || \
-            [ -z "${RUNE_ACCEPT_BUILD_TARGET:-}" ]; then
-        case "$RUNE_ACCEPT" in
-            "$PROJECT_ROOT/runeaccept.gnu")
-                RUNE_ACCEPT_BUILD_FILE="$PROJECT_ROOT/GNUmakefile"
-                RUNE_ACCEPT_BUILD_TARGET="runeaccept.gnu"
-                ;;
-            "$PROJECT_ROOT/runeaccept.make")
-                RUNE_ACCEPT_BUILD_FILE="$PROJECT_ROOT/Makefile"
-                RUNE_ACCEPT_BUILD_TARGET="runeaccept.make"
-                ;;
-            *)
-                echo "runegen: custom RUNE_ACCEPT requires explicit build file and target" >&2
-                exit 1
-                ;;
-        esac
-    fi
-    if ! check_rune_accept_freshness; then
-        exit 1
-    fi
-fi
+done
 
-mkdir -p "$LOG_DIR"
-if command -v pgrep >/dev/null 2>&1; then
-    existing="$(pgrep -x q2ded 2>/dev/null || true)"
-    if [ -n "$existing" ]; then
-        echo "runegen: q2ded already running at PID(s) $existing; not touching them" >&2
-    fi
-fi
+declare -A PORT_BY_MAP=()
+for index in "${!MAPS[@]}"; do
+    PORT_BY_MAP["${MAPS[$index]}"]=$(( PORT_START + index ))
+done
 
-RESULT_LINES=()
-ACTIVE_STAGE_DIR=""
-ACTIVE_SERVER_PID=""
+copy_regular() {
+    local source="$1" destination="$2"
+    regular_source "$source" || return 1
+    cp -p -- "$source" "$destination"
+}
 
-cleanup_stage() {
-    local stage_dir="$1" stage_name portable_stage
-    case "$stage_dir" in
-        "$GAMEDIR_ROOT"/.runegen-stage.*)
-            stage_name="${stage_dir##*/}"
-            ;;
-        *)
-            echo "runegen: refusing to remove unexpected stage path: $stage_dir" >&2
-            return 1
-            ;;
+install_stage_modules() {
+    local stage_dir="$1" role="$2" module
+    case "$role" in
+        generator) module="$GENERATOR_REAL" ;;
+        runtime) module="" ;;
+        *) return 1 ;;
     esac
-    portable_stage="$Q2DED_DIR/$stage_name"
-    case "$portable_stage" in
-        "$Q2DED_DIR"/.runegen-stage.*) ;;
-        *)
-            echo "runegen: refusing to remove unexpected portable path" >&2
-            return 1
-            ;;
-    esac
-    rm -rf -- "$stage_dir"
-    if [ "$portable_stage" != "$stage_dir" ]; then
-        rm -rf -- "$portable_stage"
-    fi
-    if [ "$ACTIVE_STAGE_DIR" = "$stage_dir" ]; then
-        ACTIVE_STAGE_DIR=""
+    if [ "$role" = generator ]; then
+        copy_regular "$module" "$stage_dir/game.so" && \
+            copy_regular "$module" "$stage_dir/gamex86_64.so"
+    else
+        copy_regular "$LIVE_GAME_DIR/game.so" "$stage_dir/game.so" && \
+            copy_regular "$LIVE_GAME_DIR/gamex86_64.so" "$stage_dir/gamex86_64.so"
     fi
 }
-
-cleanup_active_run() {
-    local active_pid="$ACTIVE_SERVER_PID" active_stage="$ACTIVE_STAGE_DIR"
-    ACTIVE_SERVER_PID=""
-    if [[ "$active_pid" =~ ^[1-9][0-9]*$ ]] && \
-            kill -0 "$active_pid" 2>/dev/null; then
-        kill -TERM "$active_pid" 2>/dev/null || true
-        wait "$active_pid" 2>/dev/null || true
-    fi
-    if [ -n "$active_stage" ]; then
-        cleanup_stage "$active_stage"
-    fi
-}
-
-handle_signal() {
-    local signal="$1"
-    cleanup_active_run
-    trap - "$signal"
-    kill -s "$signal" "$$"
-}
-
-trap cleanup_active_run EXIT
-trap 'handle_signal HUP' HUP
-trap 'handle_signal INT' INT
-trap 'handle_signal TERM' TERM
 
 prepare_stage() {
-    local stage_dir="$1" map="$2" base source source_bsp
+    local stage_dir="$1" map="$2" role="$3"
     mkdir -p "$stage_dir/maps" "$stage_dir/players" "$stage_dir/demos" \
         "$stage_dir/screenshots" || return 1
-    for base in game.so gamex86_64.so "$CFG"; do
-        source="$LIVE_GAME_DIR/$base"
-        if [ ! -f "$source" ] || [ -L "$source" ]; then
-            echo "runegen: source input is not a frozen regular file: $base" >&2
+    copy_regular "$LIVE_GAME_DIR/$CFG" "$stage_dir/$CFG" || return 1
+    copy_regular "$LIVE_MAPS/$map.bsp" "$stage_dir/maps/$map.bsp" || return 1
+    install_stage_modules "$stage_dir" "$role"
+}
+
+log_has_complete_lines() {
+    local log="$1" last_byte
+    [ -s "$log" ] || return 1
+    last_byte="$(tail -c 1 "$log" | od -An -tu1 | tr -d '[:space:]')"
+    [ "$last_byte" = 10 ]
+}
+
+compact_failure_line() {
+    case "$1" in
+        "rune: compact generation failed "*|"rune: rejected "*|\
+        "rune: FAILED"|"rune: FAILED "*|"rune: FAILED:"*|\
+        "rune: compact generation refused "*|"rune: generation refused "*|\
+        "rune: revalidation failed "*|"rune: install failed "*|\
+        "rune: cleanup restored pending door scope;"*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+generation_log_accepted() {
+    local log="$1" map="$2" stage_game="$3" line prefix suffix publications=0
+    log_has_complete_lines "$log" || return 1
+    prefix="rune: compact generation published map=$map path=$stage_game/maps/$map.rune bytes="
+    while IFS= read -r line; do
+        line="${line%$'\r'}"
+        if compact_failure_line "$line"; then
             return 1
         fi
-        cp -p -- "$source" "$stage_dir/$base" || return 1
-    done
-    source_bsp="$LIVE_GAME_DIR/maps/$map.bsp"
-    if [ ! -f "$source_bsp" ] || [ -L "$source_bsp" ]; then
-        echo "runegen: source BSP is not a frozen regular file: $map.bsp" >&2
-        return 1
-    fi
-    cp -p -- "$source_bsp" "$stage_dir/maps/$map.bsp" || return 1
+        case "$line" in
+            "$prefix"*)
+                suffix="${line#"$prefix"}"
+                if [[ "$suffix" =~ ^[0-9]+\ durable=1$ ]]; then
+                    publications=$(( publications + 1 ))
+                fi
+                ;;
+        esac
+    done < "$log"
+    [ "$publications" -eq 1 ]
+}
+
+cold_log_accepted() {
+    local log="$1" map="$2" line ready publications=0
+    log_has_complete_lines "$log" || return 1
+    ready="slipgate: compact rune ready $map"
+    while IFS= read -r line; do
+        line="${line%$'\r'}"
+        if compact_failure_line "$line"; then
+            return 1
+        fi
+        if [ "$line" = "$ready" ] || [[ "$line" == "$ready, "* ]]; then
+            publications=$(( publications + 1 ))
+        fi
+    done < "$log"
+    [ "$publications" -eq 1 ]
 }
 
 run_engine() {
-    local phase="$1" stage_dir="$2" map="$3" port="$4" logfile="$5"
-    local stage_game pid status_code
+    local phase="$1" worker="$2" stage_dir="$3" map="$4" port="$5" logfile="$6"
+    local stage_game pid status record
     stage_game="${stage_dir##*/}"
-    if [ "$phase" = "generation" ]; then
-        (
+    record="$OWNED_DIR/worker-$worker.pid"
+    if [ "$phase" = generation ]; then
+        {
             sleep "$STARTUP_SLEEP"
-            printf '%s\n' "maxclients" "sv rune" "quit"
-        ) | (
-            cd "$GAMEDIR_ROOT" &&
-            exec stdbuf -oL \
-                "$Q2DED_REAL" \
-                -portable +set game "$stage_game" +set dedicated 1 \
-                +set maxclients "$MAXCLIENTS" +set port "$port" \
-                +set net_port "$port" +exec "$CFG" \
-                +set maxclients "$MAXCLIENTS" +map "$map"
-        ) >"$logfile" 2>&1 &
+            printf '%s\n' maxclients 'sv rune' quit
+        } | (
+            cd "$GAMEDIR_ROOT" || exit 1
+            printf '%s\t%s\t%s\n' "$BASHPID" "$stage_game" "$stage_dir" \
+                > "$record" || exit 1
+            exec "$Q2DED_REAL" -portable +set game "$stage_game" +set dedicated 1 \
+                +set maxclients "$MAXCLIENTS" +set port "$port" +set net_port "$port" \
+                +exec "$CFG" +map "$map"
+        ) > "$logfile" 2>&1 &
     else
-        (
+        {
             sleep "$STARTUP_SLEEP"
-            printf '%s\n' "maxclients" "sv sg add red" "quit"
-        ) | (
-            cd "$GAMEDIR_ROOT" &&
-            exec stdbuf -oL \
-                "$Q2DED_REAL" \
-                -portable +set game "$stage_game" +set dedicated 1 \
-                +set maxclients "$MAXCLIENTS" +set port "$port" \
-                +set net_port "$port" +exec "$CFG" \
-                +set maxclients "$MAXCLIENTS" +map "$map"
-        ) >"$logfile" 2>&1 &
+            printf '%s\n' maxclients 'sv sg add red' quit
+        } | (
+            cd "$GAMEDIR_ROOT" || exit 1
+            printf '%s\t%s\t%s\n' "$BASHPID" "$stage_game" "$stage_dir" \
+                > "$record" || exit 1
+            exec "$Q2DED_REAL" -portable +set game "$stage_game" +set dedicated 1 \
+                +set maxclients "$MAXCLIENTS" +set port "$port" +set net_port "$port" \
+                +exec "$CFG" +map "$map"
+        ) > "$logfile" 2>&1 &
     fi
     pid=$!
-    ACTIVE_SERVER_PID="$pid"
     wait "$pid"
-    status_code=$?
-    ACTIVE_SERVER_PID=""
-    if kill -0 "$pid" 2>/dev/null; then
-        kill -9 "$pid" 2>/dev/null || true
-    fi
-    return "$status_code"
+    status=$?
+    rm -f -- "$record"
+    return "$status"
 }
 
-require_maxclients_report() {
-    local logfile="$1" query_count expected_count
-    query_count="$(grep -cE '^"maxclients" is "[^"]+"$' "$logfile" || true)"
-    expected_count="$(grep -cFx "\"maxclients\" is \"$MAXCLIENTS\"" \
-        "$logfile" || true)"
-    [ "$query_count" -eq 1 ] && [ "$expected_count" -eq 1 ]
+stage_path_for() {
+    local worker="$1" map="$2"
+    mktemp -d "$GAMEDIR_ROOT/.runegen-stage.$RUN_ID.w$worker.$map.XXXXXX"
 }
 
-fail_run() {
-    local map="$1" port="$2" elapsed="$3" detail="$4" stage_dir="$5"
-    cleanup_stage "$stage_dir"
-    echo "rune: FAILED map=$map port=$port (${elapsed}s) -- $detail"
-    RESULT_LINES+=("$map|-|-|$elapsed|FAIL|$detail")
+canonical_reader_accepts() {
+    local artifact="$1" logfile="$2"
+    [ -f "$artifact" ] && [ ! -L "$artifact" ] && \
+        "$RUNE_COMPACT_READER_REAL" "$artifact" > "$logfile" 2>&1
 }
 
-run_one() {
-    local map="$1" port="$2" log_stem="$3"
-    local stage_dir stage_game staged_rune generation_log cold_log
-    local accept_log inspect_log count_log lint_log semantic_log
-    local provenance manifest backup_manifest
-    local t0 t1 elapsed status_code detail write_prefix write_record write_line
-    local write_count write_payload roots_count roots_record roots_line roots_number
-    local write_number red_root blue_root seeds links nodes triggers inventory plans
-    local failure_after_write rune_sha
-
-    python3 "$RUNE_PAIR" recover --map "$map" \
-        --live-maps "$LIVE_GAME_DIR/maps" || {
-        detail="cannot recover prior RUNE transaction"
-        echo "rune: FAILED map=$map port=$port -- $detail"
-        RESULT_LINES+=("$map|-|-|0|FAIL|$detail")
-        return
-    }
-    stage_dir="$(mktemp -d "$GAMEDIR_ROOT/.runegen-stage.XXXXXX")" || {
-        detail="cannot create staging game directory"
-        echo "rune: FAILED map=$map port=$port -- $detail"
-        RESULT_LINES+=("$map|-|-|0|FAIL|$detail")
-        return
-    }
-    ACTIVE_STAGE_DIR="$stage_dir"
-    stage_game="${stage_dir##*/}"
-    staged_rune="$stage_dir/maps/$map.rune"
-    generation_log="$log_stem-generation.log"
-    cold_log="$log_stem-cold.log"
-    accept_log="$log_stem.accept.json"
-    inspect_log="$log_stem.inspect.json"
-    count_log="$log_stem.counts.log"
-    lint_log="$log_stem.lint.log"
-    semantic_log="$log_stem.semantic.log"
-    provenance="$log_stem.provenance.json"
-    manifest="$log_stem.rune.json"
-    if ! prepare_stage "$stage_dir" "$map"; then
-        fail_run "$map" "$port" 0 "cannot prepare staging game directory" "$stage_dir"
-        return
-    fi
-    t0="$(date +%s)"
-    run_engine generation "$stage_dir" "$map" "$port" "$generation_log"
-    status_code=$?
-    t1="$(date +%s)"
-    elapsed=$(( t1 - t0 ))
-    if [ "$status_code" -ne 0 ]; then
-        fail_run "$map" "$port" "$elapsed" \
-            "generation engine exited nonzero status=$status_code (see $generation_log)" \
-            "$stage_dir"
-        return
-    fi
-    if ! require_maxclients_report "$generation_log"; then
-        fail_run "$map" "$port" "$elapsed" \
-            "generation engine did not confirm maxclients=$MAXCLIENTS" "$stage_dir"
-        return
-    fi
-    if grep -qE '^slipgate: rune ready ' "$generation_log"; then
-        fail_run "$map" "$port" "$elapsed" \
-            "generation log contains forbidden runtime readiness" "$stage_dir"
-        return
-    fi
-    write_prefix="rune: wrote $stage_game/maps/$map.rune ("
-    write_count="$(grep -cF "$write_prefix" "$generation_log" || true)"
-    roots_count="$(grep -cE '^rune: objective roots red=[0-9]+ blue=[0-9]+$' \
-        "$generation_log" || true)"
-    if [ "$write_count" -ne 1 ] || [ "$roots_count" -ne 1 ]; then
-        fail_run "$map" "$port" "$elapsed" \
-            "generation requires one objective-root line and one write banner" \
-            "$stage_dir"
-        return
-    fi
-    write_record="$(grep -nF "$write_prefix" "$generation_log")"
-    write_number="${write_record%%:*}"
-    write_line="${write_record#*:}"
-    write_payload="${write_line#"$write_prefix"}"
-    if [ ! -f "$staged_rune" ] || [ -L "$staged_rune" ] || \
-            [[ ! "$write_payload" =~ ^([0-9]+)\ seeds,\ ([0-9]+)\ links,\ ([0-9]+)\ mechanism\ nodes,\ ([0-9]+)\ triggers,\ ([0-9]+)\ inventory\ edges,\ ([0-9]+)\ activation\ plans\)$ ]]; then
-        fail_run "$map" "$port" "$elapsed" \
-            "generation write banner or staged RUNE is malformed" "$stage_dir"
-        return
-    fi
-    seeds="${BASH_REMATCH[1]}"
-    links="${BASH_REMATCH[2]}"
-    nodes="${BASH_REMATCH[3]}"
-    triggers="${BASH_REMATCH[4]}"
-    inventory="${BASH_REMATCH[5]}"
-    plans="${BASH_REMATCH[6]}"
-    roots_record="$(grep -nE '^rune: objective roots red=[0-9]+ blue=[0-9]+$' \
-        "$generation_log")"
-    roots_number="${roots_record%%:*}"
-    roots_line="${roots_record#*:}"
-    red_root="$(sed -n 's/.*red=\([0-9]\+\) blue=.*/\1/p' <<<"$roots_line")"
-    blue_root="$(sed -n 's/.*blue=\([0-9]\+\).*/\1/p' <<<"$roots_line")"
-    if [ "$roots_number" -ge "$write_number" ] || [ "$red_root" = "$blue_root" ] || \
-            [ "$red_root" -ge "$seeds" ] || [ "$blue_root" -ge "$seeds" ]; then
-        fail_run "$map" "$port" "$elapsed" \
-            "objective roots must precede write and name distinct in-range seeds" \
-            "$stage_dir"
-        return
-    fi
-    failure_after_write="$(awk -v after="$write_number" '
-        NR > after && ($0 ~ /^rune: rejected / ||
-            $0 ~ /^rune: FAILED([: ]|$)/ ||
-            $0 ~ /^rune: generation refused / ||
-            $0 ~ /^rune: revalidation failed / ||
-            $0 ~ /^rune: install failed / ||
-            $0 ~ /^rune: cleanup restored pending door scope;/) { line = $0 }
-        END { print line }
-    ' "$generation_log")"
-    if [ -n "$failure_after_write" ]; then
-        fail_run "$map" "$port" "$elapsed" \
-            "generator failure occurred after write: $failure_after_write" "$stage_dir"
-        return
-    fi
-    if ! check_rune_accept_freshness; then
-        fail_run "$map" "$port" "$elapsed" \
-            "C artifact acceptor became stale during generation" "$stage_dir"
-        return
-    fi
-    if ! "$RUNE_ACCEPT" "$staged_rune" >"$accept_log" 2>&1; then
-        fail_run "$map" "$port" "$elapsed" \
-            "C artifact acceptance failed (see $accept_log)" "$stage_dir"
-        return
-    fi
-    if ! python3 "$RUNE_IO" "$staged_rune" >"$inspect_log" 2>&1; then
-        fail_run "$map" "$port" "$elapsed" \
-            "Python artifact inspection failed (see $inspect_log)" "$stage_dir"
-        return
-    fi
-    if ! python3 - "$accept_log" "$inspect_log" "$map" "$seeds" "$links" \
-            "$nodes" "$triggers" "$inventory" "$plans" >"$count_log" 2>&1 <<'PY'
-import json
-import sys
-
-accept_path, inspect_path, map_name, *raw_counts = sys.argv[1:]
-names = ("seed_count", "link_count", "node_count", "trigger_count",
-         "inventory_edge_count", "plan_count")
-expected = dict(zip(names, map(int, raw_counts)))
-with open(accept_path, encoding="utf-8") as stream:
-    c_report = json.load(stream)
-with open(inspect_path, encoding="utf-8") as stream:
-    py_report = json.load(stream)
-if c_report.get("map_name") != map_name or py_report.get("map_name") != map_name:
-    raise SystemExit("artifact report map mismatch")
-agreement = ("seed_count", "link_count", "node_count", "trigger_count",
-             "inventory_edge_count", "plan_edge_count", "edge_count", "plan_count")
-for name in agreement:
-    if c_report.get(name) != py_report.get(name):
-        raise SystemExit(f"C/Python {name} mismatch")
-for name, value in expected.items():
-    if py_report.get(name) != value:
-        raise SystemExit(f"artifact/write {name} mismatch")
-PY
-    then
-        fail_run "$map" "$port" "$elapsed" \
-            "C/Python/write artifact counts disagree (see $count_log)" "$stage_dir"
-        return
-    fi
-    if ! python3 "$RUNE_LINT" --objective-roots "$red_root" "$blue_root" \
-            "$staged_rune" >"$lint_log" 2>&1; then
-        fail_run "$map" "$port" "$elapsed" \
-            "quality gate failed (see $lint_log)" "$stage_dir"
-        return
-    fi
-    if [ "$map" = "lmctf58" ]; then
-        semantic_status=0
-        python3 "$LMCTF58_ACCEPT" --objective-roots "$red_root" "$blue_root" \
-            "$staged_rune" >"$semantic_log" 2>&1 || semantic_status=$?
-        if [ "$semantic_status" -gt 1 ]; then
-            fail_run "$map" "$port" "$elapsed" \
-                "lmctf58 diagnostic infrastructure failure (see $semantic_log)" \
-                "$stage_dir"
-            return
-        fi
-    fi
-    if ! python3 "$RUNE_PAIR" provenance --map "$map" \
-            --bsp "$stage_dir/maps/$map.bsp" --rune "$staged_rune" \
-            --q2ded "$Q2DED_REAL" --config "$stage_dir/$CFG" \
-            --module "$stage_dir/game.so" --module "$stage_dir/gamex86_64.so" \
-            --maxclients "$MAXCLIENTS" --count "seeds=$seeds" \
-            --count "links=$links" --count "mechanism_nodes=$nodes" \
-            --count "plans=$plans" --output "$provenance" || \
-            ! python3 "$RUNE_PAIR" stage --map "$map" \
-                --stage-maps "$stage_dir/maps" \
-                --provenance "$provenance" --manifest "$manifest"; then
-        fail_run "$map" "$port" "$elapsed" \
-            "RUNE identity staging failed" "$stage_dir"
-        return
-    fi
-    run_engine cold "$stage_dir" "$map" "$port" "$cold_log"
-    status_code=$?
-    t1="$(date +%s)"
-    elapsed=$(( t1 - t0 ))
-    if [ "$status_code" -ne 0 ]; then
-        fail_run "$map" "$port" "$elapsed" \
-            "cold-load engine exited nonzero status=$status_code (see $cold_log)" \
-            "$stage_dir"
-        return
-    fi
-    if ! require_maxclients_report "$cold_log" || \
-            ! python3 "$RUNE_PAIR" verify-cold-load --manifest "$manifest" \
-                --cold-log "$cold_log"; then
-        fail_run "$map" "$port" "$elapsed" \
-            "cold-load RUNE attestation failed (see $cold_log)" "$stage_dir"
-        return
-    fi
-    if ! backup_manifest="$(python3 "$RUNE_PAIR" install --manifest "$manifest" \
-            --live-maps "$LIVE_GAME_DIR/maps" --backup-dir "$RUNE_BACKUP_DIR")"; then
-        fail_run "$map" "$port" "$elapsed" \
-            "journaled RUNE install failed" "$stage_dir"
-        return
-    fi
-    rune_sha="$(sha256sum "$LIVE_GAME_DIR/maps/$map.rune" | awk '{print $1}')"
-    cleanup_stage "$stage_dir"
-    echo "rune: installed rune=$LIVE_GAME_DIR/maps/$map.rune sha256=$rune_sha"
-    echo "rune: backup=$backup_manifest"
-    RESULT_LINES+=("$map|$seeds|$links|$elapsed|ok|RUNE gate clean; backup=$backup_manifest")
+link_artifact() {
+    local source="$1" destination="$2"
+    ln "$source" "$destination"
 }
 
-index=0
-for map in "${MAPS[@]}"; do
-    if [[ ! "$map" =~ ^[A-Za-z0-9_][A-Za-z0-9_-]{0,62}$ ]]; then
-        echo "runegen: unsafe or invalid map name: $map" >&2
-        RESULT_LINES+=("$map|-|-|-|FAIL|invalid map name")
-        index=$(( index + 1 ))
-        continue
-    fi
-    port=$(( PORT_START + index ))
-    timestamp="$(date +%Y%m%d-%H%M%S-%N)"
-    log_stem="$LOG_DIR/${map}-${timestamp}"
-    if [ "$DRY_RUN" -eq 1 ]; then
-        echo "[dry-run] map=$map port=$port maxclients=$MAXCLIENTS no elapsed deadline"
-        echo "[dry-run] generation launch sends only: maxclients, sv rune, quit"
-        echo "[dry-run] omit $map.rune; freeze game.so and gamex86_64.so"
-        echo "[dry-run] run C/Python/count/root/lint gates on the fresh RUNE"
-        echo "[dry-run] bind the RUNE to exact provenance and frozen inputs"
-        echo "[dry-run] cold launch sends only: maxclients, sv sg add red, quit"
-        echo "[dry-run] require one exact RUNE-ready attestation"
-        echo "[dry-run] journal one RUNE install with byte recovery"
-        RESULT_LINES+=("$map|-|-|-|DRY-RUN|two engines -> RUNE proof -> journaled install")
-    else
-        echo "=== runegen: $map (port $port, maxclients $MAXCLIENTS) ==="
-        run_one "$map" "$port" "$log_stem"
-    fi
-    index=$(( index + 1 ))
-done
-
-echo
-printf '%-12s %8s %8s %8s %-8s %s\n' \
-    map seeds links seconds status detail
-printf '%-12s %8s %8s %8s %-8s %s\n' \
-    ------------ -------- -------- -------- -------- ------
-for line in "${RESULT_LINES[@]}"; do
-    IFS='|' read -r rmap rseeds rlinks rseconds rstatus rdetail <<<"$line"
-    printf '%-12s %8s %8s %8s %-8s %s\n' \
-        "$rmap" "$rseeds" "$rlinks" "$rseconds" "$rstatus" "$rdetail"
-done
-for line in "${RESULT_LINES[@]}"; do
-    case "$line" in
-        *"|FAIL|"*) exit 1 ;;
+append_output() {
+    local fault_point="$1" destination="$2" contents="$3"
+    case "$RUNEGEN_TEST_IO_FAULT" in
+        "$fault_point.partial")
+            printf '%s' "${contents:0:1}" >> "$destination" || return 1
+            return 1
+            ;;
+        "$fault_point.fail")
+            return 1
+            ;;
     esac
-done
+    printf '%s' "$contents" >> "$destination"
+}
+
+rename_output() {
+    local fault_point="$1" source="$2" destination="$3"
+    if [ "$RUNEGEN_TEST_IO_FAULT" = "$fault_point.fail" ]; then
+        return 1
+    fi
+    mv -f -- "$source" "$destination"
+}
+
+discard_new_generation() {
+    local generation="$1"
+    if ! chmod u+w -- "$generation" || ! rm -rf -- "$generation" || \
+            [ -e "$generation" ]; then
+        echo "runegen: cannot remove unpublished generation: $generation" >&2
+        return 1
+    fi
+}
+
+cold_load_artifact() {
+    local worker="$1" map="$2" artifact="$3" worker_out="$4" port="$5"
+    local stage_dir cold_log
+    stage_dir="$(stage_path_for "$worker" "$map")" || return 1
+    cold_log="$worker_out/$map.$RUN_ID.cold.log"
+    if ! prepare_stage "$stage_dir" "$map" runtime || \
+            ! link_artifact "$artifact" "$stage_dir/maps/$map.rune" || \
+            ! run_engine cold "$worker" "$stage_dir" "$map" "$port" "$cold_log" || \
+            ! cold_log_accepted "$cold_log" "$map"; then
+        remove_owned_stage "$stage_dir"
+        return 1
+    fi
+    remove_owned_stage "$stage_dir"
+}
+
+install_live_artifact() {
+    local map="$1" artifact="$2" temporary
+    if [ -e "$LIVE_MAPS/$map.rune" ] && [ "$artifact" -ef "$LIVE_MAPS/$map.rune" ]; then
+        return 0
+    fi
+    temporary="$(mktemp "$LIVE_MAPS/.runegen-$map.$RUN_ID.XXXXXX")" || return 1
+    rm -f -- "$temporary"
+    if ! link_artifact "$artifact" "$temporary"; then
+        rm -f -- "$temporary"
+        echo "runegen: accepted and live paths must share a filesystem" >&2
+        return 1
+    fi
+    mv -f -- "$temporary" "$LIVE_MAPS/$map.rune"
+}
+
+publish_artifact() {
+    local worker="$1" map="$2" source="$3"
+    local temporary target
+    target="$ACCEPTED_DIR/$map.rune"
+    temporary="$(mktemp "$ACCEPTED_DIR/.runegen-$map.$RUN_ID.w$worker.XXXXXX")" || return 1
+    rm -f -- "$temporary"
+    if ! link_artifact "$source" "$temporary" || \
+            ! mv -f -- "$temporary" "$target" || \
+            ! install_live_artifact "$map" "$target"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+}
+
+record_result() {
+    local worker="$1" map="$2" status="$3" detail="$4" worker_out="$5" line
+    if ! printf -v line '%s\t%s\t%s\n' "$map" "$status" "$detail" || \
+            ! append_output result-append "$worker_out/results.tsv" "$line"; then
+        return 1
+    fi
+    printf 'rune: complete map=%s worker=%s result=%s %s\n' \
+        "$map" "$worker" "$status" "$detail"
+}
+
+resume_if_valid() {
+    local worker="$1" map="$2" worker_out="$3" port="$4"
+    local artifact="$ACCEPTED_DIR/$map.rune" reader_log
+    reader_log="$worker_out/$map.$RUN_ID.resume-reader.log"
+    canonical_reader_accepts "$artifact" "$reader_log" && \
+        cold_load_artifact "$worker" "$map" "$artifact" "$worker_out" "$port"
+}
+
+generate_one() {
+    local worker="$1" map="$2" worker_out="$3" port="$4"
+    local stage_dir stage_game generation_log reader_log cold_log
+    stage_dir="$(stage_path_for "$worker" "$map")" || return 1
+    stage_game="${stage_dir##*/}"
+    generation_log="$worker_out/$map.$RUN_ID.generation.log"
+    reader_log="$worker_out/$map.$RUN_ID.reader.log"
+    cold_log="$worker_out/$map.$RUN_ID.cold.log"
+    if ! prepare_stage "$stage_dir" "$map" generator || \
+            ! run_engine generation "$worker" "$stage_dir" "$map" "$port" "$generation_log" || \
+            ! generation_log_accepted "$generation_log" "$map" "$stage_game" || \
+            ! canonical_reader_accepts "$stage_dir/maps/$map.rune" "$reader_log" || \
+            ! install_stage_modules "$stage_dir" runtime || \
+            ! run_engine cold "$worker" "$stage_dir" "$map" "$port" "$cold_log" || \
+            ! cold_log_accepted "$cold_log" "$map" || \
+            ! publish_artifact "$worker" "$map" "$stage_dir/maps/$map.rune"; then
+        remove_owned_stage "$stage_dir"
+        return 1
+    fi
+    remove_owned_stage "$stage_dir"
+}
+
+worker_run() {
+    local worker="$1" phase="$2"
+    shift 2
+    local worker_out map index=0 port failed=0
+    trap - EXIT HUP INT TERM
+    worker_out="$WORKER_DIR/worker-$worker"
+    mkdir -p "$worker_out" || return 1
+    : > "$worker_out/results.tsv" || return 1
+    for map in "$@"; do
+        if [ $(( index % WORKERS )) -eq "$worker" ]; then
+            port="${PORT_BY_MAP[$map]}"
+            if resume_if_valid "$worker" "$map" "$worker_out" "$port"; then
+                if install_live_artifact "$map" "$ACCEPTED_DIR/$map.rune"; then
+                    if ! record_result "$worker" "$map" resumed \
+                            "reader-and-cold-load-clean" "$worker_out"; then
+                        failed=1
+                    fi
+                else
+                    if ! record_result "$worker" "$map" failed \
+                            "cannot-repair-live-publication" "$worker_out"; then
+                        failed=1
+                    fi
+                    failed=1
+                fi
+            elif generate_one "$worker" "$map" "$worker_out" "$port"; then
+                if ! record_result "$worker" "$map" accepted published "$worker_out"; then
+                    failed=1
+                fi
+            else
+                if ! record_result "$worker" "$map" failed \
+                        "compact-gate-or-cold-load-rejected" "$worker_out"; then
+                    failed=1
+                fi
+                failed=1
+            fi
+        fi
+        index=$(( index + 1 ))
+    done
+    return "$failed"
+}
+
+run_phase() {
+    local phase="$1"
+    shift
+    local worker pid failed=0
+    CHILD_PIDS=()
+    for (( worker = 0; worker < WORKERS; worker++ )); do
+        worker_run "$worker" "$phase" "$@" &
+        CHILD_PIDS+=("$!")
+    done
+    for pid in "${CHILD_PIDS[@]}"; do
+        if ! wait "$pid"; then
+            failed=1
+        fi
+    done
+    CHILD_PIDS=()
+    return "$failed"
+}
+
+generation_matches_inventory() {
+    local generation="$1" map digest relative actual count=0
+    [ -d "$generation" ] && [ ! -L "$generation" ] &&
+        [ -f "$generation/inventory.tsv" ] &&
+        [ ! -L "$generation/inventory.tsv" ] || return 1
+    while IFS=$'\t' read -r map digest relative; do
+        count=$(( count + 1 ))
+        [ "${SELECTED[$map]+yes}" = yes ] || return 1
+        [ "$relative" = "$map.rune" ] || return 1
+        [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || return 1
+        [ -f "$generation/$relative" ] &&
+            [ ! -L "$generation/$relative" ] || return 1
+        actual="$(sha256sum -- "$generation/$relative")" || return 1
+        actual="${actual%% *}"
+        [ "$actual" = "$digest" ] || return 1
+        canonical_reader_accepts "$generation/$relative" \
+            "$CORPUS_ROOT/$map.$RUN_ID.reuse-reader.log" || return 1
+    done < "$generation/inventory.tsv"
+    [ "$count" -eq "$CORPUS_SIZE" ]
+}
+
+finalize_full_corpus() {
+    local artifact base map temporary pending inventory digest corpus_id
+    local final_dir relative manifest_rows inventory_rows published_new=0
+    local -A seen=()
+    local artifacts=()
+    shopt -s nullglob dotglob
+    artifacts=("$ACCEPTED_DIR"/*)
+    if [ "${#artifacts[@]}" -ne "$CORPUS_SIZE" ]; then
+        echo "runegen: cannot finalize: accepted artifact count is not $CORPUS_SIZE" >&2
+        return 1
+    fi
+    for artifact in "${artifacts[@]}"; do
+        base="${artifact##*/}"
+        map="${base%.rune}"
+        if [ "$base" = "$map" ] || [ "${SELECTED[$map]+yes}" != yes ] || \
+                [ -L "$artifact" ] || [ ! -f "$artifact" ] || \
+                [ "${seen[$map]+yes}" = yes ]; then
+            echo "runegen: cannot finalize: unexpected accepted artifact $base" >&2
+            return 1
+        fi
+        seen[$map]=1
+    done
+    for map in "${MAPS[@]}"; do
+        if [ "${seen[$map]+yes}" != yes ]; then
+            echo "runegen: cannot finalize: missing accepted artifact for $map" >&2
+            return 1
+        fi
+    done
+    pending="$(mktemp -d "$GENERATIONS_DIR/.pending-$RUN_ID.XXXXXX")" || return 1
+    inventory="$pending/inventory.tsv"
+    for map in "${MAPS[@]}"; do
+        artifact="$ACCEPTED_DIR/$map.rune"
+        if ! canonical_reader_accepts "$artifact" "$CORPUS_ROOT/$map.$RUN_ID.final-reader.log"; then
+            rm -rf -- "$pending"
+            echo "runegen: cannot finalize: canonical reader rejected $map" >&2
+            return 1
+        fi
+        digest="$(sha256sum -- "$artifact")" || {
+            rm -rf -- "$pending"
+            return 1
+        }
+        digest="${digest%% *}"
+        if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]] ||
+                ! link_artifact "$artifact" "$pending/$map.rune"; then
+            rm -rf -- "$pending"
+            return 1
+        fi
+        if ! append_output inventory-append "$inventory" \
+                "$map"$'\t'"$digest"$'\t'"$map.rune"$'\n'; then
+            rm -rf -- "$pending"
+            return 1
+        fi
+    done
+    inventory_rows="$(wc -l < "$inventory")" || {
+        rm -rf -- "$pending"
+        return 1
+    }
+    if [ "$inventory_rows" -ne "$CORPUS_SIZE" ]; then
+        rm -rf -- "$pending"
+        return 1
+    fi
+    corpus_id="$(sha256sum -- "$inventory")" || {
+        rm -rf -- "$pending"
+        return 1
+    }
+    corpus_id="${corpus_id%% *}"
+    if [[ ! "$corpus_id" =~ ^[0-9a-f]{64}$ ]]; then
+        rm -rf -- "$pending"
+        return 1
+    fi
+    final_dir="$GENERATIONS_DIR/$corpus_id"
+    chmod a-w -- "$pending"/*.rune "$inventory" || {
+        rm -rf -- "$pending"
+        return 1
+    }
+    if [ -e "$final_dir" ]; then
+        if [ ! -d "$final_dir" ] || [ -L "$final_dir" ] ||
+                ! cmp -s -- "$inventory" "$final_dir/inventory.tsv" ||
+                ! generation_matches_inventory "$final_dir"; then
+            rm -rf -- "$pending"
+            echo "runegen: damaged content-addressed corpus: $corpus_id" >&2
+            return 1
+        fi
+        rm -rf -- "$pending"
+    else
+        chmod a-w -- "$pending" || {
+            rm -rf -- "$pending"
+            return 1
+        }
+        if ! mv -- "$pending" "$final_dir"; then
+            chmod u+w -- "$pending" 2>/dev/null || true
+            rm -rf -- "$pending"
+            return 1
+        fi
+        published_new=1
+    fi
+    temporary="$(mktemp "$CORPUS_ROOT/.manifest.$RUN_ID.XXXXXX")" || {
+        if [ "$published_new" -eq 1 ]; then
+            discard_new_generation "$final_dir" || return 1
+        fi
+        return 1
+    }
+    manifest_rows=0
+    while IFS=$'\t' read -r map digest relative; do
+        if ! append_output manifest-append "$temporary" \
+                "$map"$'\t'"$digest"$'\t'"$final_dir/$relative"$'\n'; then
+            rm -f -- "$temporary"
+            if [ "$published_new" -eq 1 ]; then
+                discard_new_generation "$final_dir" || return 1
+            fi
+            return 1
+        fi
+        manifest_rows=$(( manifest_rows + 1 ))
+    done < "$final_dir/inventory.tsv"
+    if [ "$manifest_rows" -ne "$CORPUS_SIZE" ] ||
+            ! rename_output manifest-rename "$temporary" "$MANIFEST_OUT"; then
+        rm -f -- "$temporary"
+        if [ "$published_new" -eq 1 ]; then
+            discard_new_generation "$final_dir" || return 1
+        fi
+        return 1
+    fi
+    if ! printf 'rune: finalized maps=%s corpus=%s manifest=%s\n' \
+            "$CORPUS_SIZE" "$corpus_id" "$MANIFEST_OUT"; then
+        return 1
+    fi
+}
+
+failed=0
+if ! run_phase ordinary "${ORDINARY_MAPS[@]}"; then
+    failed=1
+fi
+if ! run_phase hard-regressions "${HARD_MAPS[@]}"; then
+    failed=1
+fi
+if [ "$FULL_MODE" -eq 1 ] && [ "$failed" -eq 0 ]; then
+    if ! finalize_full_corpus; then
+        failed=1
+    fi
+fi
+
+if [ "$failed" -ne 0 ]; then
+    echo "runegen: one or more maps failed" >&2
+    exit 1
+fi
 exit 0

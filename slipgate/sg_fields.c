@@ -501,30 +501,6 @@ static void Field_FromOne(rune_t *r, int *dist, int seed)
 	Field_Flood(r, dist, &seed, &cost, 1);
 }
 
-static qboolean LocalObjectiveField_Build(rune_t *r)
-{
-	int sources[2], costs[2] = { 0, 0 };
-	int i, live = 0;
-
-	if (!r || r->artifact.route_contract != RUNE_ROUTE_CONTRACT_LOCAL_ONLY)
-		return true;
-	if (!sg_fields.to_local_objective)
-		return false;
-	sources[0] = sg_fields.red_flag_seed;
-	sources[1] = sg_fields.blue_flag_seed;
-	Field_Flood(r, sg_fields.to_local_objective, sources, costs, 2);
-	for (i = 0; i < r->hdr.num_seeds; i++)
-		if (!(r->seeds[i].flags & RSF_TOMBSTONE))
-		{
-			if (sg_fields.to_local_objective[i] >= SG_FIELD_INF)
-				return false;
-			live++;
-		}
-	sg_host.dprint("slipgate: local-objective field finite=%d/%d\n",
-	    live, live);
-	return true;
-}
-
 /* Rebuild the two static stand fields and every value derived directly from
  * them.  All storage is allocated by Fields_Setup; this routine is also used
  * on an action-capability edge and must never allocate. */
@@ -564,10 +540,6 @@ static void FlagFields_Build(rune_t *r)
 		Field_FromOne(r, sg_fields.to_red_flag, sg_fields.red_flag_seed);
 		Field_FromOne(r, sg_fields.to_blue_flag, sg_fields.blue_flag_seed);
 	}
-	if (!LocalObjectiveField_Build(r) && sg_host.dprint)
-		sg_host.dprint("slipgate: local-objective field lost coverage after "
-		               "action-topology refresh\n");
-
 	/* Recompute the sub-stand cliff from the rebuilt home fields. */
 	for (t = 0; t < 2; t++)
 	{
@@ -972,27 +944,13 @@ qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 	if (!rf || !bf)
 		return false;
 
-	if (r->artifact.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY)
-	{
-		sg_fields.red_flag_seed = SG_LocalObjectiveSeed(r, rf->s.origin);
-		sg_fields.blue_flag_seed = SG_LocalObjectiveSeed(r, bf->s.origin);
-	}
-	else
-	{
-		sg_fields.red_flag_seed = Rune_NearestSeed(r, rf->s.origin);
-		sg_fields.blue_flag_seed = Rune_NearestSeed(r, bf->s.origin);
-	}
+	sg_fields.red_flag_seed = Rune_NearestSeed(r, rf->s.origin);
+	sg_fields.blue_flag_seed = Rune_NearestSeed(r, bf->s.origin);
 	if (sg_fields.red_flag_seed < 0 || sg_fields.blue_flag_seed < 0)
 		return false;
 
 	sg_fields.to_red_flag = Field_Alloc(r);
 	sg_fields.to_blue_flag = Field_Alloc(r);
-	if (r->artifact.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY)
-	{
-		sg_fields.to_local_objective = Field_Alloc(r);
-		if (!sg_fields.to_local_objective)
-			return false;
-	}
 
 
 	if (sg_cv.shelfcost->value > 0.0f)
@@ -1029,13 +987,6 @@ qboolean Fields_Setup(rune_t *r, const sg_field_setup_inputs_t *inputs)
 		Field_FromOne(r, sg_fields.to_red_flag, sg_fields.red_flag_seed);
 		Field_FromOne(r, sg_fields.to_blue_flag, sg_fields.blue_flag_seed);
 	}
-	if (!LocalObjectiveField_Build(r))
-	{
-		sg_host.dprint("slipgate: local-objective field is not finite for "
-		               "every live seed\n");
-		return false;
-	}
-
 	/* Price low shelves near an enemy stand against the best platform route. */
 	{
 		int t;

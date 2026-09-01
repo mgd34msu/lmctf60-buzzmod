@@ -1478,11 +1478,6 @@ void Cmd_Unhook_f (edict_t *ent)
 		// Can't offhand your hook if it is your current weapon
 		if (ent->client->pers.weapon == it)
 		{
-			/* Stufftext alone leaves the authoritative rope live until the
-			 * client returns -attack. Release it in this command now; the
-			 * historical -attack still clears the selected weapon's button. */
-			SG_HumanTraceHookRelease(ent);
-			ctf_hook_abort(ent);
 			ForceCommand(ent, "-attack\n");
 			return;
 		}

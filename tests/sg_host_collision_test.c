@@ -69,6 +69,147 @@ static void SetRuneVector(sg_rune_vec3_t *value, float x, float y, float z)
 	SetVector(value->value, x, y, z);
 }
 
+static uint32_t FloatBits(float value)
+{
+	uint32_t bits;
+
+	memcpy(&bits, &value, sizeof(bits));
+	return bits;
+}
+
+/* This is the selected host's q_shared AngleVectors and SV_Push arithmetic,
+ * kept locally as a differential oracle for the public carry primitive. */
+static void HostAngleVectors(const float angles[3], float forward[3],
+	float right[3], float up[3])
+{
+	float angle;
+	float sr;
+	float sp;
+	float sy;
+	float cr;
+	float cp;
+	float cy;
+
+	angle = (float)(angles[1] * (M_PI * 2 / 360));
+	sy = (float)sin((double)angle);
+	cy = (float)cos((double)angle);
+	angle = (float)(angles[0] * (M_PI * 2 / 360));
+	sp = (float)sin((double)angle);
+	cp = (float)cos((double)angle);
+	angle = (float)(angles[2] * (M_PI * 2 / 360));
+	sr = (float)sin((double)angle);
+	cr = (float)cos((double)angle);
+	forward[0] = cp * cy;
+	forward[1] = cp * sy;
+	forward[2] = -sp;
+	right[0] = (-1.0f * sr * sp * cy + -1.0f * cr * -sy);
+	right[1] = (-1.0f * sr * sp * sy + -1.0f * cr * cy);
+	right[2] = -1.0f * sr * cp;
+	up[0] = cr * sp * cy + -sr * -sy;
+	up[1] = cr * sp * sy + -sr * cy;
+	up[2] = cr * cp;
+}
+
+static void HostSVPushCarryReference(
+	const sg_host_collision_transform_t *pusher_transform,
+	const float move[3], const float amove[3], const float rider_start[3],
+	float rider_end_out[3])
+{
+	float inverse_angles[3];
+	float forward[3];
+	float right[3];
+	float up[3];
+	float relative[3];
+	float rotated[3];
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++) {
+		const float rider_after_translation = rider_start[axis] + move[axis];
+		const float pusher_after_translation =
+			pusher_transform->origin[axis] + move[axis];
+
+		inverse_angles[axis] = -amove[axis];
+		relative[axis] = rider_after_translation - pusher_after_translation;
+	}
+	HostAngleVectors(inverse_angles, forward, right, up);
+	rotated[0] = relative[0] * forward[0] + relative[1] * forward[1] +
+		relative[2] * forward[2];
+	rotated[1] = -(relative[0] * right[0] + relative[1] * right[1] +
+		relative[2] * right[2]);
+	rotated[2] = relative[0] * up[0] + relative[1] * up[1] +
+		relative[2] * up[2];
+	for (axis = 0U; axis < 3U; axis++)
+		rider_end_out[axis] = rider_start[axis] + move[axis] +
+			(rotated[axis] - relative[axis]);
+}
+
+#ifdef SG_HOST_REAL_PMOVE_TEST
+static void SelectedHostSVPushCarry(const float move[3], const float amove[3],
+	const float rider_start[3], float rider_end_out[3])
+{
+	float inverse_angles[3];
+	float forward[3];
+	float right[3];
+	float up[3];
+	float relative[3];
+	float rotated[3];
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++) {
+		inverse_angles[axis] = -amove[axis];
+		relative[axis] = rider_start[axis];
+	}
+	AngleVectors(inverse_angles, forward, right, up);
+	rotated[0] = relative[0] * forward[0] + relative[1] * forward[1] +
+		relative[2] * forward[2];
+	rotated[1] = -(relative[0] * right[0] + relative[1] * right[1] +
+		relative[2] * right[2]);
+	rotated[2] = relative[0] * up[0] + relative[1] * up[1] +
+		relative[2] * up[2];
+	for (axis = 0U; axis < 3U; axis++)
+		rider_end_out[axis] = rider_start[axis] + move[axis] +
+			(rotated[axis] - relative[axis]);
+}
+#endif
+
+static void ReplayWorldTransform(
+	const sg_host_collision_world_transform_t *transform, const float local[3],
+	float world_out[3])
+{
+	uint32_t world_axis;
+
+	for (world_axis = 0U; world_axis < 3U; world_axis++) {
+		world_out[world_axis] = local[0] * transform->axis[0][world_axis] +
+			local[1] * transform->axis[1][world_axis] +
+			local[2] * transform->axis[2][world_axis] +
+			transform->origin[world_axis];
+		if (world_out[world_axis] == 0.0f)
+			world_out[world_axis] = 0.0f;
+	}
+}
+
+static int WorldTransformFiniteCanonical(
+	const sg_host_collision_world_transform_t *transform)
+{
+	uint32_t local_axis;
+	uint32_t world_axis;
+
+	if (!transform)
+		return 0;
+	for (world_axis = 0U; world_axis < 3U; world_axis++) {
+		if (!isfinite(transform->origin[world_axis]) ||
+			(transform->origin[world_axis] == 0.0f &&
+				signbit(transform->origin[world_axis])))
+			return 0;
+		for (local_axis = 0U; local_axis < 3U; local_axis++)
+			if (!isfinite(transform->axis[local_axis][world_axis]) ||
+				(transform->axis[local_axis][world_axis] == 0.0f &&
+					signbit(transform->axis[local_axis][world_axis])))
+				return 0;
+	}
+	return 1;
+}
+
 static sg_rune_model_identity_t Identity(float gravity, uint32_t frame_ms,
 	uint32_t substep_ms)
 {
@@ -416,6 +557,211 @@ static void TestMoverTransformsAndDeterminism(void)
 	DestroyFixture(&fixture);
 }
 
+static void TestPusherCarryHostParity(void)
+{
+	sg_host_collision_transform_t pusher;
+	const float move[3] = { 0.0f, 0.0f, 0.0f };
+	const float rider[3] = { 1.0f, 0.0f, 0.0f };
+	float amove[3] = { 0.0f, 90.0f, 0.0f };
+	float expected[3];
+	float actual[3];
+
+	memset(&pusher, 0, sizeof(pusher));
+	HostSVPushCarryReference(&pusher, move, amove, rider, expected);
+	CHECK(SG_HostCollisionPusherCarry(&pusher, move, amove, rider, actual));
+	CHECK(memcmp(actual, expected, sizeof(actual)) == 0);
+	CHECK(FloatBits(actual[0]) == UINT32_C(0x00000000) &&
+		FloatBits(actual[1]) == UINT32_C(0x3f800000) &&
+		FloatBits(actual[2]) == UINT32_C(0x00000000));
+
+	amove[1] = 45.0f;
+	HostSVPushCarryReference(&pusher, move, amove, rider, expected);
+	CHECK(SG_HostCollisionPusherCarry(&pusher, move, amove, rider, actual));
+	CHECK(memcmp(actual, expected, sizeof(actual)) == 0);
+	CHECK(FloatBits(actual[0]) == UINT32_C(0x3f3504f3) &&
+		FloatBits(actual[1]) == UINT32_C(0x3f3504f3));
+
+	amove[1] = 359.998932f;
+	HostSVPushCarryReference(&pusher, move, amove, rider, expected);
+	CHECK(SG_HostCollisionPusherCarry(&pusher, move, amove, rider, actual));
+	CHECK(memcmp(actual, expected, sizeof(actual)) == 0);
+	CHECK(FloatBits(actual[0]) == UINT32_C(0x3f800000) &&
+		FloatBits(actual[1]) == UINT32_C(0xb79a8886));
+
+	SetVector(amove, -720.25f, 17.25f, -720.25f);
+	HostSVPushCarryReference(&pusher, move, amove, rider, expected);
+	CHECK(SG_HostCollisionPusherCarry(&pusher, move, amove, rider, actual));
+	CHECK(memcmp(actual, expected, sizeof(actual)) == 0);
+#ifdef SG_HOST_REAL_PMOVE_TEST
+	SelectedHostSVPushCarry(move, amove, rider, expected);
+	CHECK(memcmp(actual, expected, sizeof(actual)) == 0);
+#endif
+}
+
+static void TestModelToWorldTransformBoundary(void)
+{
+	const float remote_mins[3] = { 1000, 1000, 1000 };
+	const float remote_maxs[3] = { 1010, 1010, 1010 };
+	const float mover_mins[3] = { -20, -20, -20 };
+	const float mover_maxs[3] = { 20, 20, 20 };
+	const float cardinal_local[3] = { 4, -2, 3 };
+	const float noncardinal_local[3] = { -7.25f, 3.5f, 1.125f };
+	const float negative_zero[3] = { -0.0f, -0.0f, -0.0f };
+	const float nonfinite[3] = { NAN, 0.0f, 0.0f };
+	const float expected_cardinal[3] = { 52, 54, 8 };
+	fixture_t fixture = TwoBoxFixture(remote_mins, remote_maxs,
+		SG_HOST_CONTENTS_SOLID, 0, mover_mins, mover_maxs,
+		SG_HOST_CONTENTS_SOLID, 0);
+	sg_host_collision_authority_t authority = Authority(&fixture, 100, 100, 50);
+	sg_host_collision_transform_t cardinal;
+	sg_host_collision_transform_t noncardinal;
+	sg_host_collision_world_transform_t cardinal_world_transform;
+	sg_host_collision_world_transform_t noncardinal_world_transform;
+	float world[3];
+	float replayed_world[3];
+	float zero_world[3] = { 1.0f, 1.0f, 1.0f };
+
+	memset(&cardinal, 0, sizeof(cardinal));
+	SetVector(cardinal.origin, 50, 50, 5);
+	cardinal.angles[1] = 90.0f;
+	CHECK(SG_HostCollisionModelToWorldPoint(&authority, 1U, &cardinal,
+		cardinal_local, world));
+	/* This is the exact yaw=90 angle-axis/translation result. */
+	CHECK(memcmp(world, expected_cardinal, sizeof(world)) == 0);
+	CHECK(SG_HostCollisionWorldTransform(&cardinal,
+		&cardinal_world_transform));
+	CHECK(WorldTransformFiniteCanonical(&cardinal_world_transform));
+	CHECK(cardinal_world_transform.axis[0][1] > 0.0f &&
+		cardinal_world_transform.axis[1][0] < 0.0f);
+	ReplayWorldTransform(&cardinal_world_transform, cardinal_local,
+		replayed_world);
+	CHECK(memcmp(replayed_world, world, sizeof(world)) == 0);
+	/* PointContentsModel is the pre-existing inverse collision transform. */
+	CHECK(SG_HostCollisionPointContentsModel(&authority, 1U, &cardinal,
+		world) & SG_HOST_CONTENTS_SOLID);
+
+	memset(&noncardinal, 0, sizeof(noncardinal));
+	SetVector(noncardinal.origin, 6.25f, -8.5f, 2.75f);
+	SetVector(noncardinal.angles, 17.0f, 41.0f, -23.0f);
+	CHECK(SG_HostCollisionModelToWorldPoint(&authority, 1U, &noncardinal,
+		noncardinal_local, world));
+	CHECK(isfinite(world[0]) && isfinite(world[1]) && isfinite(world[2]));
+	CHECK(SG_HostCollisionWorldTransform(&noncardinal,
+		&noncardinal_world_transform));
+	CHECK(WorldTransformFiniteCanonical(&noncardinal_world_transform));
+	ReplayWorldTransform(&noncardinal_world_transform, noncardinal_local,
+		replayed_world);
+	CHECK(memcmp(replayed_world, world, sizeof(world)) == 0);
+	/* The existing model-space collision path must invert this exact forward
+	 * transform for a non-cardinal rotation too. */
+	CHECK(SG_HostCollisionPointContentsModel(&authority, 1U, &noncardinal,
+		world) & SG_HOST_CONTENTS_SOLID);
+
+	CHECK(SG_HostCollisionModelToWorldPoint(&authority, 1U, NULL,
+		negative_zero, zero_world));
+	CHECK(zero_world[0] == 0.0f && zero_world[1] == 0.0f &&
+		zero_world[2] == 0.0f);
+	CHECK(!signbit(zero_world[0]) && !signbit(zero_world[1]) &&
+		!signbit(zero_world[2]));
+	CHECK(!SG_HostCollisionModelToWorldPoint(&authority, 1U, NULL,
+		nonfinite, zero_world));
+	CHECK(!SG_HostCollisionModelToWorldPoint(&authority, 0U, &cardinal,
+		cardinal_local, world));
+	CHECK(!SG_HostCollisionModelToWorldPoint(&authority, 2U, &cardinal,
+		cardinal_local, world));
+	memset(&cardinal_world_transform, 0xa5, sizeof(cardinal_world_transform));
+	noncardinal.angles[0] = NAN;
+	CHECK(!SG_HostCollisionWorldTransform(&noncardinal,
+		&cardinal_world_transform));
+	CHECK(((const uint8_t *)&cardinal_world_transform)[0] == UINT8_C(0xa5));
+	DestroyFixture(&fixture);
+}
+
+static void TestModelPolygonPositiveAreaOverlap(void)
+{
+	const float remote_mins[3] = { 1000, 1000, 1000 };
+	const float remote_maxs[3] = { 1010, 1010, 1010 };
+	const float mover_mins[3] = { 2, -2, -2 };
+	const float mover_maxs[3] = { 6, 2, 2 };
+	const sg_rune_vec3_t partial_portal[4] = {
+		{ { -4.0f, -4.0f, 0.0f } },
+		{ { 4.0f, -4.0f, 0.0f } },
+		{ { 4.0f, 4.0f, 0.0f } },
+		{ { -4.0f, 4.0f, 0.0f } }
+	};
+	const sg_rune_vec3_t edge_only_portal[4] = {
+		{ { 2.0f, 2.0f, 0.0f } },
+		{ { 4.0f, 2.0f, 0.0f } },
+		{ { 4.0f, 4.0f, 0.0f } },
+		{ { 2.0f, 4.0f, 0.0f } }
+	};
+	const sg_rune_vec3_t coplanar_face_portal[4] = {
+		{ { 2.5f, -1.0f, 2.0f } },
+		{ { 3.5f, -1.0f, 2.0f } },
+		{ { 3.5f, 1.0f, 2.0f } },
+		{ { 2.5f, 1.0f, 2.0f } }
+	};
+	fixture_t fixture = TwoBoxFixture(remote_mins, remote_maxs,
+		SG_HOST_CONTENTS_SOLID, 0, mover_mins, mover_maxs,
+		SG_HOST_CONTENTS_SOLID, 0);
+	sg_host_collision_authority_t authority = Authority(&fixture, 100, 100, 50);
+	sg_host_collision_transform_t offset;
+	int overlap = 0;
+
+	/* The polygon centroid is x=0, outside this x=[2,6] mover.  The exact
+	 * brush clip still finds the positive-area x=[2,4] by y=[-2,2] patch. */
+	CHECK(SG_HostCollisionModelPositiveAreaPolygonOverlap(&authority, 1U,
+		NULL, partial_portal, 4U, SG_HOST_MASK_PLAYER_SOLID, &overlap));
+	CHECK(overlap);
+	memset(&offset, 0, sizeof(offset));
+	offset.origin[0] = 10.0f;
+	overlap = 1;
+	CHECK(SG_HostCollisionModelPositiveAreaPolygonOverlap(&authority, 1U,
+		&offset, partial_portal, 4U, SG_HOST_MASK_PLAYER_SOLID, &overlap));
+	CHECK(!overlap);
+	overlap = 1;
+	CHECK(SG_HostCollisionModelPositiveAreaPolygonOverlap(&authority, 1U,
+		NULL, edge_only_portal, 4U, SG_HOST_MASK_PLAYER_SOLID, &overlap));
+	CHECK(!overlap);
+	overlap = 1;
+	CHECK(SG_HostCollisionModelPositiveAreaPolygonOverlap(&authority, 1U,
+		NULL, coplanar_face_portal, 4U, SG_HOST_MASK_PLAYER_SOLID,
+		&overlap));
+	CHECK(!overlap);
+	DestroyFixture(&fixture);
+}
+
+static void TestMoverSupportRequiresQ8Clearance(void)
+{
+	const float remote_mins[3] = { 1000, 1000, 1000 };
+	const float remote_maxs[3] = { 1010, 1010, 1010 };
+	const float floor_mins[3] = { -64, -64, -64 };
+	const float floor_maxs[3] = { 64, 64, 0 };
+	const float exact_contact[3] = { 0.0f, 0.0f, 24.0f };
+	const float q8_clearance[3] = { 0.0f, 0.0f, 24.125f };
+	fixture_t fixture = TwoBoxFixture(remote_mins, remote_maxs,
+		SG_HOST_CONTENTS_SOLID, 0, floor_mins, floor_maxs,
+		SG_HOST_CONTENTS_SOLID, 0);
+	sg_host_collision_authority_t authority = Authority(&fixture, 800, 100, 100);
+	sg_host_collision_instance_t instance;
+	sg_host_collision_scene_t scene;
+	sg_host_collision_pose_t exact, raised;
+
+	memset(&instance, 0, sizeof(instance));
+	instance.instance_id = UINT64_C(7);
+	instance.model_index = 1U;
+	scene.instances = &instance;
+	scene.instance_count = 1U;
+	CHECK(SG_HostCollisionClassifyPose(&authority, &scene, exact_contact,
+		SG_RUNE_STANCE_STANDING, &exact));
+	CHECK(!exact.valid && exact.occupancy.allsolid);
+	CHECK(SG_HostCollisionClassifyPose(&authority, &scene, q8_clearance,
+		SG_RUNE_STANCE_STANDING, &raised));
+	CHECK(raised.valid && raised.supported && raised.support_is_mover);
+	CHECK(raised.support.instance_id == instance.instance_id);
+	DestroyFixture(&fixture);
+}
+
 static void TestStartsolidAllsolid(void)
 {
 	const float box_mins[3] = { -10, -10, -10 };
@@ -443,6 +789,80 @@ static void TestStartsolidAllsolid(void)
 		still_inside, SG_HOST_MASK_PLAYER_SOLID, &moving_allsolid));
 	CHECK(moving_allsolid.startsolid && moving_allsolid.allsolid);
 	CHECK(moving_allsolid.fraction == 1.0f && moving_allsolid.contents == 0);
+	DestroyFixture(&fixture);
+}
+
+static void TestCoplanarBrushProvenance(void)
+{
+	const float mins[3] = { -1, -1, -1 };
+	const float maxs[3] = { 1, 1, 1 };
+	const float start[3] = { -3, 0, 0 };
+	const float end[3] = { 3, 0, 0 };
+	const float clear_end[3] = { -2, 0, 0 };
+	const float zero[3] = { 0, 0, 0 };
+	fixture_t fixture;
+	sg_host_collision_authority_t authority;
+	sg_host_collision_trace_t first;
+	sg_host_collision_trace_t second;
+	uint32_t side;
+
+	CHECK(AllocateFixture(&fixture, 6U, 6U, 7U, 1U, 2U, 12U, 2U));
+	AddBox(&fixture, 0U, 0U, 0U, 0U, 0U, mins, maxs,
+		SG_HOST_CONTENTS_SOLID, 0);
+	for (side = 0U; side < 6U; side++)
+	{
+		fixture.brush_sides[6U + side] = fixture.brush_sides[side];
+		fixture.brush_sides[6U + side].texinfo = 1;
+	}
+	fixture.brushes[1].first_side = 6U;
+	fixture.brushes[1].side_count = 6U;
+	fixture.brushes[1].contents = SG_HOST_CONTENTS_SOLID;
+	fixture.texinfos[1].flags = 0;
+	fixture.leaves[6].first_leaf_brush = 0U;
+	fixture.leaves[6].leaf_brush_count = 2U;
+	fixture.leaf_brushes[0] = 0U;
+	fixture.leaf_brushes[1] = 1U;
+	authority = Authority(&fixture, 800, 100, 100);
+	CHECK(SG_HostCollisionTraceModel(&authority,
+		SG_HOST_COLLISION_MODEL_WORLD, NULL, start, zero, zero, end,
+		SG_HOST_MASK_PLAYER_SOLID, &first));
+	CHECK(first.fraction < 1.0f);
+	CHECK(first.brush == 0U);
+	CHECK(first.brush_side == 1U);
+	CHECK(SG_HostCollisionTraceModel(&authority,
+		SG_HOST_COLLISION_MODEL_WORLD, NULL, start, zero, zero, end,
+		SG_HOST_MASK_PLAYER_SOLID, &second));
+	CHECK(memcmp(&first, &second, sizeof(first)) == 0);
+	fixture.leaf_brushes[0] = 1U;
+	fixture.leaf_brushes[1] = 0U;
+	CHECK(SG_HostCollisionTraceModel(&authority,
+		SG_HOST_COLLISION_MODEL_WORLD, NULL, start, zero, zero, end,
+		SG_HOST_MASK_PLAYER_SOLID, &second));
+	CHECK(second.fraction == first.fraction);
+	CHECK(second.brush == 1U);
+	CHECK(second.brush_side == 7U);
+	CHECK(SG_HostCollisionTraceModel(&authority,
+		SG_HOST_COLLISION_MODEL_WORLD, NULL, start, zero, zero, clear_end,
+		SG_HOST_MASK_PLAYER_SOLID, &second));
+	CHECK(second.fraction == 1.0f);
+	CHECK(second.brush == SG_HOST_COLLISION_BRUSH_NONE);
+	CHECK(second.brush_side == SG_HOST_COLLISION_BRUSH_NONE);
+	fixture.brushes[0].side_count = 0U;
+	fixture.brushes[1].side_count = 0U;
+	CHECK(SG_HostCollisionTraceModel(&authority,
+		SG_HOST_COLLISION_MODEL_WORLD, NULL, start, zero, zero, end,
+		SG_HOST_MASK_PLAYER_SOLID, &second));
+	CHECK(second.fraction == 1.0f);
+	CHECK(second.brush == SG_HOST_COLLISION_BRUSH_NONE);
+	CHECK(second.brush_side == SG_HOST_COLLISION_BRUSH_NONE);
+	fixture.brushes[0].side_count = 6U;
+	fixture.brushes[0].first_side = fixture.world.brush_side_count;
+	CHECK(SG_HostCollisionTraceModel(&authority,
+		SG_HOST_COLLISION_MODEL_WORLD, NULL, start, zero, zero, end,
+		SG_HOST_MASK_PLAYER_SOLID, &second));
+	CHECK(second.fraction == 1.0f);
+	CHECK(second.brush == SG_HOST_COLLISION_BRUSH_NONE);
+	CHECK(second.brush_side == SG_HOST_COLLISION_BRUSH_NONE);
 	DestroyFixture(&fixture);
 }
 
@@ -690,7 +1110,12 @@ int main(void)
 	TestRampSupportAndLedge();
 	TestWaterLevels();
 	TestMoverTransformsAndDeterminism();
+	TestPusherCarryHostParity();
+	TestModelToWorldTransformBoundary();
+	TestModelPolygonPositiveAreaOverlap();
+	TestMoverSupportRequiresQ8Clearance();
 	TestStartsolidAllsolid();
+	TestCoplanarBrushProvenance();
 	TestMoreThan1024StationaryLeaves();
 	TestHostPmoveBoundary();
 #ifdef SG_HOST_REAL_PMOVE_TEST

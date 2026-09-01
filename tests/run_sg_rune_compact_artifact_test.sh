@@ -7,7 +7,7 @@ trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 
 strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align'
 allocation_test='-DSG_RUNE_COMPACT_ARTIFACT_TEST_WRAP_CALLOC -Wl,--wrap=calloc'
-sources='tests/sg_rune_compact_artifact_test.c slipgate/sg_rune_compact_artifact.c slipgate/sg_rune_compact_wire.c slipgate/sg_rune_compact_model.c slipgate/sg_rune_compact_analytic.c slipgate/sg_rune_compact_static.c'
+sources='tests/sg_rune_compact_artifact_test.c slipgate/sg_rune_compact_artifact.c slipgate/sg_rune_compact_wire.c slipgate/sg_rune_compact_model.c slipgate/sg_rune_compact_source_surface_catalog.c slipgate/sg_rune_compact_weapon_catalog.c slipgate/sg_rune_compact_analytic.c slipgate/sg_rune_compact_static.c'
 
 cd "$repo_dir"
 for cc in gcc clang

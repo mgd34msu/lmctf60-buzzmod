@@ -35,10 +35,8 @@
 #define SG_RUNE_CODEC_NO_ACTIVATION_PLAN UINT32_MAX
 #define SG_RUNE_CODEC_SEED_WATER UINT16_C(1)
 #define SG_RUNE_CODEC_SEED_TOMBSTONE UINT16_C(2)
-#define SG_RUNE_CODEC_SEED_OBJECTIVE UINT16_C(4)
 #define SG_RUNE_CODEC_SEED_FLAG_MASK \
-	(SG_RUNE_CODEC_SEED_WATER | SG_RUNE_CODEC_SEED_TOMBSTONE | \
-	 SG_RUNE_CODEC_SEED_OBJECTIVE)
+	(SG_RUNE_CODEC_SEED_WATER | SG_RUNE_CODEC_SEED_TOMBSTONE)
 
 typedef enum
 {
@@ -186,8 +184,7 @@ typedef enum
 	RLCODEC_BAD_STRING_POOL = 132,
 	RLCODEC_DUPLICATE_NODE_KEY = 133,
 	RLCODEC_BAD_MECHANISM_GRAPH = 134,
-	RLCODEC_NONZERO_RESERVED = 135,
-	RLCODEC_BAD_ROUTE_CONTRACT = 136
+	RLCODEC_NONZERO_RESERVED = 135
 } sg_rune_codec_diagnostic_t;
 
 typedef struct sg_rune_codec_identity_s
@@ -213,9 +210,8 @@ typedef struct sg_rune_codec_seed_s
 
 typedef struct sg_rune_codec_header_s
 {
-	/* Byte offsets are stable. route_contract occupies bytes 4..5. */
+	/* Byte offsets are stable. Bytes 4..5 are reserved and must be zero. */
 	uint32_t magic;
-	uint16_t route_contract;
 	uint16_t header_bytes;
 	uint16_t seed_bytes;
 	uint16_t link_bytes;
@@ -401,7 +397,7 @@ sg_rune_codec_diagnostic_t SG_RuneCodecPushClosureCRC32(uint32_t entry_key,
 	const float push_velocity[3], uint32_t *crc_out);
 
 sg_rune_codec_diagnostic_t SG_RuneCodecValidate(
-	uint16_t route_contract, const sg_rune_codec_seed_t *seeds,
+	const sg_rune_codec_seed_t *seeds,
 	uint32_t num_seeds,
 	const sg_rune_codec_link_t *links, uint32_t num_links,
 	const sg_rune_codec_activation_node_t *nodes, uint32_t num_nodes,
@@ -415,7 +411,7 @@ sg_rune_codec_diagnostic_t SG_RuneCodecMatchIdentity(
 	const sg_rune_codec_identity_t *expected_identity);
 
 sg_rune_codec_diagnostic_t SG_RuneCodecEncode(
-	uint16_t route_contract, const sg_rune_codec_identity_t *identity,
+	const sg_rune_codec_identity_t *identity,
 	const sg_rune_codec_seed_t *seeds, uint32_t num_seeds,
 	const sg_rune_codec_link_t *links, uint32_t num_links,
 	const sg_rune_codec_activation_node_t *nodes, uint32_t num_nodes,

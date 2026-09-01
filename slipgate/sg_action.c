@@ -113,9 +113,8 @@ int SG_ActionEffectiveSuffix(int action)
 	int current = action;
 	int hops;
 
-	/* Keep parity with the generated Python contract helper.  The generator
-	 * rejects cycles, but this public boundary remains fail-closed if a stale
-	 * or hand-modified generated table ever reaches a build. */
+	/* The contract generator rejects cycles. This public boundary also rejects
+	 * a stale or hand-modified generated table. */
 	for (hops = 0; hops < SG_ACTION_COUNT; hops++)
 	{
 		const sg_action_desc_t *desc = SG_ActionDescribe(current);

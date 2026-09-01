@@ -1,5 +1,6 @@
 #include "sg_host_mechanism_law.h"
 
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 
@@ -154,6 +155,7 @@ static void AccelerateMove(float remaining, float speed, float accel,
 
 static int ScheduleAccelerated(float distance, float speed, float accel,
 	float decel, const sg_host_mechanism_law_t *law,
+	sg_host_mechanism_move_frame_fn frame, void *frame_context,
 	sg_host_mechanism_move_result_t *result_out)
 {
 	float remaining = distance;
@@ -190,6 +192,9 @@ static int ScheduleAccelerated(float distance, float speed, float accel,
 			return 0;
 		if (remaining <= current_speed)
 		{
+			if (remaining != 0.0f && frame != NULL &&
+				!frame(frame_context, remaining))
+				return 0;
 			result_out->residual_distance = remaining;
 			result_out->final_speed = remaining /
 				((float)law->frame_ms / 1000.0f);
@@ -203,6 +208,8 @@ static int ScheduleAccelerated(float distance, float speed, float accel,
 			return 1;
 		}
 		if (result_out->full_speed_frames == UINT64_MAX)
+			return 0;
+		if (frame != NULL && !frame(frame_context, current_speed))
 			return 0;
 		if (SameFloat(current_speed, move_speed))
 			result_out->full_speed_frames++;
@@ -239,6 +246,10 @@ void SG_HostMechanismLawDefault(sg_host_mechanism_law_t *law_out)
 	 * retain the stock 100 speed; these are distinct executable classes. */
 	law_out->door_default_speed = 200.0f;
 	law_out->door_rotating_default_speed = 100.0f;
+	law_out->button_default_speed = 40.0f;
+	law_out->door_default_lip = 8.0f;
+	law_out->button_default_lip = 4.0f;
+	law_out->platform_default_lip = 8.0f;
 	law_out->platform_default_speed = 20.0f;
 	law_out->platform_default_accel = 5.0f;
 	law_out->platform_default_decel = 5.0f;
@@ -270,6 +281,10 @@ int SG_HostMechanismLawValid(const sg_host_mechanism_law_t *law)
 		law->frame_schedule_ms == 100U &&
 		SameFloat(law->door_default_speed, 200.0f) &&
 		SameFloat(law->door_rotating_default_speed, 100.0f) &&
+		SameFloat(law->button_default_speed, 40.0f) &&
+		SameFloat(law->door_default_lip, 8.0f) &&
+		SameFloat(law->button_default_lip, 4.0f) &&
+		SameFloat(law->platform_default_lip, 8.0f) &&
 		SameFloat(law->platform_default_speed, 20.0f) &&
 		SameFloat(law->platform_default_accel, 5.0f) &&
 		SameFloat(law->platform_default_decel, 5.0f) &&
@@ -277,8 +292,9 @@ int SG_HostMechanismLawValid(const sg_host_mechanism_law_t *law)
 		law->train_default_damage == SG_HOST_MECHANISM_DEFAULT_TRAIN_DAMAGE;
 }
 
-int SG_HostMechanismMoveSchedule(const sg_host_mechanism_law_t *law,
+static int MoveSchedule(const sg_host_mechanism_law_t *law,
 	float distance, float speed, float accel, float decel, int current_entity,
+	sg_host_mechanism_move_frame_fn frame, void *frame_context,
 	sg_host_mechanism_move_result_t *result_out)
 {
 	float frames;
@@ -311,7 +327,7 @@ int SG_HostMechanismMoveSchedule(const sg_host_mechanism_law_t *law,
 	if (result_out->accelerated)
 	{
 		if (!ScheduleAccelerated(distance, speed, accel, decel, law,
-			result_out))
+			frame, frame_context, result_out))
 		{
 			memset(result_out, 0, sizeof(*result_out));
 			return 0;
@@ -328,6 +344,11 @@ int SG_HostMechanismMoveSchedule(const sg_host_mechanism_law_t *law,
 		}
 		if (frame_distance >= distance)
 		{
+			if (frame != NULL && !frame(frame_context, distance))
+			{
+				memset(result_out, 0, sizeof(*result_out));
+				return 0;
+			}
 			result_out->final_speed = distance /
 				((float)law->frame_ms / 1000.0f);
 			if (!AddMilliseconds(result_out->first_think_ms, law->frame_ms,
@@ -386,6 +407,18 @@ int SG_HostMechanismMoveSchedule(const sg_host_mechanism_law_t *law,
 		}
 		if (result_out->residual_distance == 0.0f)
 		{
+			if (frame != NULL)
+			{
+				uint64_t frame_index;
+
+				for (frame_index = 0U; frame_index < full_speed_frames;
+					frame_index++)
+					if (!frame(frame_context, speed * frame_seconds))
+					{
+						memset(result_out, 0, sizeof(*result_out));
+						return 0;
+					}
+			}
 			if (!AddFrames(result_out->first_think_ms,
 				result_out->full_speed_frames, law->frame_ms,
 				&result_out->completion_ms))
@@ -407,8 +440,229 @@ int SG_HostMechanismMoveSchedule(const sg_host_mechanism_law_t *law,
 			memset(result_out, 0, sizeof(*result_out));
 			return 0;
 		}
+		if (frame != NULL)
+		{
+			uint64_t frame_index;
+
+			for (frame_index = 0U; frame_index < full_speed_frames;
+				frame_index++)
+				if (!frame(frame_context, speed * frame_seconds))
+				{
+					memset(result_out, 0, sizeof(*result_out));
+					return 0;
+				}
+			if (!frame(frame_context, result_out->residual_distance))
+			{
+				memset(result_out, 0, sizeof(*result_out));
+				return 0;
+			}
+		}
 		return 1;
 	}
+}
+
+int SG_HostMechanismMoveSchedule(const sg_host_mechanism_law_t *law,
+	float distance, float speed, float accel, float decel, int current_entity,
+	sg_host_mechanism_move_result_t *result_out)
+{
+	return MoveSchedule(law, distance, speed, accel, decel, current_entity,
+		NULL, NULL, result_out);
+}
+
+int SG_HostMechanismMoveFrames(const sg_host_mechanism_law_t *law,
+	float distance, float speed, float accel, float decel, int current_entity,
+	sg_host_mechanism_move_frame_fn frame, void *frame_context,
+	sg_host_mechanism_move_result_t *result_out)
+{
+	if (frame == NULL)
+		return 0;
+	return MoveSchedule(law, distance, speed, accel, decel, current_entity,
+		frame, frame_context, result_out);
+}
+
+static int AngleMoveSchedule(const sg_host_mechanism_law_t *law,
+	const float angular_delta[3], float speed, int current_entity,
+	sg_host_mechanism_angle_frame_fn frame, void *frame_context,
+	sg_host_mechanism_move_result_t *result_out)
+{
+	float squared_length = 0.0f;
+	float length;
+	float frame_seconds;
+	float travel_time;
+	float frames_float;
+	uint64_t frames;
+	float velocity[3];
+	float position[3] = { 0.0f, 0.0f, 0.0f };
+	float remaining[3];
+	uint32_t axis;
+
+	if (result_out == NULL)
+		return 0;
+	memset(result_out, 0, sizeof(*result_out));
+	if (!SG_HostMechanismLawValid(law) || angular_delta == NULL ||
+		!isfinite(speed) || speed <= 0.0f)
+		return 0;
+	for (axis = 0U; axis < 3U; axis++) {
+		if (!isfinite(angular_delta[axis]))
+			return 0;
+		/* q_shared.c:VectorLength accumulates binary32 products and assigns
+		 * sqrt's result back to a vec_t. */
+		squared_length += angular_delta[axis] * angular_delta[axis];
+		if (!isfinite(squared_length))
+			return 0;
+	}
+	length = (float)sqrt((double)squared_length);
+	frame_seconds = (float)law->frame_ms / 1000.0f;
+	if (!isfinite(length) || !isfinite(frame_seconds) ||
+		frame_seconds <= 0.0f)
+		return 0;
+	result_out->valid = 1;
+	/* AngleMove_Calc defers only when this pusher is not current. */
+	result_out->first_think_ms = current_entity ? 0U : law->frame_ms;
+	if (length == 0.0f)
+	{
+		result_out->completion_ms = result_out->first_think_ms;
+		return 1;
+	}
+	travel_time = length / speed;
+	if (!isfinite(travel_time) || travel_time < 0.0f)
+	{
+		memset(result_out, 0, sizeof(*result_out));
+		return 0;
+	}
+	if (travel_time < frame_seconds)
+	{
+		result_out->residual_distance = length;
+		result_out->final_speed = length / frame_seconds;
+		if (!isfinite(result_out->final_speed) || !AddMilliseconds(
+			result_out->first_think_ms, law->frame_ms,
+			&result_out->completion_ms))
+		{
+			memset(result_out, 0, sizeof(*result_out));
+			return 0;
+		}
+		if (frame != NULL && !frame(frame_context, angular_delta))
+		{
+			memset(result_out, 0, sizeof(*result_out));
+			return 0;
+		}
+		return 1;
+	}
+	/* AngleMove_Begin stores floor(traveltime / FRAMETIME) in a float. */
+	frames_float = floorf(travel_time / frame_seconds);
+	if (!isfinite(frames_float) || frames_float < 0.0f ||
+		(double)frames_float > (double)UINT64_MAX)
+	{
+		memset(result_out, 0, sizeof(*result_out));
+		return 0;
+	}
+	frames = (uint64_t)frames_float;
+	result_out->full_speed_frames = frames;
+	for (axis = 0U; axis < 3U; axis++)
+		velocity[axis] = angular_delta[axis] * (1.0f / travel_time);
+	for (axis = 0U; axis < 3U; axis++) {
+		/* SV_Physics_Pusher advances avelocity * FRAMETIME each frame.
+		 * Match its repeated binary32 additions before AngleMove_Final tests
+		 * VectorCompare against zero. */
+		uint64_t frame_index;
+
+		if (!isfinite(velocity[axis]))
+		{
+			memset(result_out, 0, sizeof(*result_out));
+			return 0;
+		}
+		for (frame_index = 0U; frame_index < frames; frame_index++)
+			position[axis] += velocity[axis] * frame_seconds;
+		remaining[axis] = angular_delta[axis] - position[axis];
+		if (!isfinite(position[axis]) || !isfinite(remaining[axis]))
+		{
+			memset(result_out, 0, sizeof(*result_out));
+			return 0;
+		}
+	}
+	if (frame != NULL) {
+		float frame_delta[3];
+		uint64_t frame_index;
+
+		for (axis = 0U; axis < 3U; axis++)
+			frame_delta[axis] = velocity[axis] * frame_seconds;
+		for (frame_index = 0U; frame_index < frames; frame_index++)
+			if (!frame(frame_context, frame_delta)) {
+				memset(result_out, 0, sizeof(*result_out));
+				return 0;
+			}
+		if ((remaining[0] != 0.0f || remaining[1] != 0.0f ||
+			remaining[2] != 0.0f) && !frame(frame_context, remaining)) {
+			memset(result_out, 0, sizeof(*result_out));
+			return 0;
+		}
+	}
+	result_out->residual_distance = (float)sqrt((double)(
+		remaining[0] * remaining[0] + remaining[1] * remaining[1] +
+		remaining[2] * remaining[2]));
+	if (!isfinite(result_out->residual_distance) ||
+		(frames == UINT64_MAX && (remaining[0] != 0.0f ||
+			remaining[1] != 0.0f || remaining[2] != 0.0f)) ||
+		!AddFrames(result_out->first_think_ms, frames +
+			(remaining[0] == 0.0f && remaining[1] == 0.0f &&
+			remaining[2] == 0.0f ? 0U : 1U), law->frame_ms,
+			&result_out->completion_ms))
+	{
+		memset(result_out, 0, sizeof(*result_out));
+		return 0;
+	}
+	result_out->final_speed = result_out->residual_distance == 0.0f ?
+		0.0f : result_out->residual_distance / frame_seconds;
+	if (!isfinite(result_out->final_speed))
+	{
+		memset(result_out, 0, sizeof(*result_out));
+		return 0;
+	}
+	return 1;
+}
+
+int SG_HostMechanismAngleMoveSchedule(const sg_host_mechanism_law_t *law,
+	const float angular_delta[3], float speed, int current_entity,
+	sg_host_mechanism_move_result_t *result_out)
+{
+	return AngleMoveSchedule(law, angular_delta, speed, current_entity,
+		NULL, NULL, result_out);
+}
+
+int SG_HostMechanismAngleMoveFrames(const sg_host_mechanism_law_t *law,
+	const float angular_delta[3], float speed, int current_entity,
+	sg_host_mechanism_angle_frame_fn frame, void *frame_context,
+	sg_host_mechanism_move_result_t *result_out)
+{
+	if (frame == NULL)
+		return 0;
+	return AngleMoveSchedule(law, angular_delta, speed, current_entity,
+		frame, frame_context, result_out);
+}
+
+int SG_HostMechanismPushDisplacement(float input, float *output)
+{
+	float scaled;
+	double integral;
+
+	if (output == NULL || !isfinite(input))
+		return 0;
+	/* This is verbatim in operation order with g_phys.c:SV_Push. */
+	scaled = input * 8.0f;
+	if (!isfinite(scaled))
+		return 0;
+	if (scaled > 0.0f)
+		scaled += 0.5f;
+	else
+		scaled -= 0.5f;
+	if (!isfinite(scaled))
+		return 0;
+	integral = trunc((double)scaled);
+	if (!isfinite(integral) || integral < (double)INT_MIN ||
+		integral > (double)INT_MAX)
+		return 0;
+	*output = 0.125f * (float)(int)integral;
+	return isfinite(*output);
 }
 
 int SG_HostMechanismDoorStepEx(const sg_host_mechanism_law_t *law,

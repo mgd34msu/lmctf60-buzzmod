@@ -2,19 +2,35 @@
 #ifndef SG_BOT_LOCALIZATION_H
 #define SG_BOT_LOCALIZATION_H
 
-#include "sg_compact_localization.h"
+/* g_local.h defines world as a convenience macro.  The compact spatial API
+ * also has a parameter named world, so hide the game macro while reading the
+ * reusable compact headers and restore it for gameplay callers. */
+#ifdef world
+#define SG_BOT_LOCALIZATION_RESTORE_WORLD_MACRO 1
+#undef world
+#endif
+#include "sg_bot_localization_owner.h"
+#ifdef SG_BOT_LOCALIZATION_RESTORE_WORLD_MACRO
+#define world (&g_edicts[0])
+#undef SG_BOT_LOCALIZATION_RESTORE_WORLD_MACRO
+#endif
 
 #include <limits.h>
 #include <string.h>
 
 struct edict_s;
 struct sg_bot_s;
+struct sg_strategy_runtime_bot_observation_s;
 
 /* The compact artifact owner installs one accepted borrowed binding for this
  * level and clears it before replacing or destroying the model it borrows.
  * Install copies the binding, not the model. A NULL binding uninstalls it. */
-int SG_BotLocalizationProviderSet(
-	const sg_compact_localization_binding_t *binding);
+/* Bot-only host observation authority for strategy/tactic field queries.
+ * Issue returns a one-use opaque capability for the exact current localized
+ * subject and frame. Human clients never enter this owner. */
+const struct sg_strategy_runtime_bot_observation_s *
+SG_BotLocalizationStrategyObservationIssue(struct sg_bot_s *bot,
+	const sg_compact_localized_state_t *localized);
 
 void SG_BotLocalizationFrameBegin(struct sg_bot_s *bot);
 void SG_BotLocalizationFrameEnd(struct sg_bot_s *bot);

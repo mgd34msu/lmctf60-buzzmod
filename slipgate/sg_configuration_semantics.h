@@ -45,7 +45,9 @@ typedef enum sg_configuration_semantic_plane_source_e
 	SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_LEAVE_ZERO,
 	SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_LEAVE_END,
 	SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_ORDER,
-	SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_CLIP
+	SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_CLIP,
+	/* Host trace leaf-selection boundary, shifted by the active hull. */
+	SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_BSP_TRAVERSAL
 } sg_configuration_semantic_plane_source_t;
 
 typedef enum sg_configuration_semantic_face_kind_e

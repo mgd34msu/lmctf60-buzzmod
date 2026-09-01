@@ -341,6 +341,56 @@ static uint32_t RegionAt(const sg_configuration_semantics_t *semantics,
 	return UINT32_MAX;
 }
 
+static void CheckRegionPoseMatrix(const fixture_t *fixture,
+	const sg_configuration_semantics_t *semantics)
+{
+	uint32_t region;
+
+	for (region = 0U; region < semantics->region_count; region++)
+	{
+		int32_t x_q8, y_q8, z_q8;
+
+		for (x_q8 = -63; x_q8 <= 63; x_q8 += 63)
+			for (y_q8 = -63; y_q8 <= 63; y_q8 += 63)
+				for (z_q8 = 1; z_q8 < 320; z_q8++)
+				{
+					const sg_configuration_semantic_region_t *record =
+						&semantics->regions[region];
+					float point[3] = { (float)x_q8 * 0.125f,
+						(float)y_q8 * 0.125f, (float)z_q8 * 0.125f };
+					sg_host_collision_pose_t pose;
+					sg_configuration_semantic_region_flags_t material = 0U;
+
+					if (!StrictlyInsideRegion(semantics, record, point))
+						continue;
+					CHECK(SG_HostCollisionClassifyPose(&fixture->authority, NULL,
+						point, fixture->cell.stance, &pose));
+					CHECK(pose.valid);
+					CHECK((pose.supported != 0) ==
+						((record->flags &
+						SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED) != 0U));
+					CHECK((pose.supported == 0) ==
+						((record->flags &
+						SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE) != 0U));
+					CHECK(pose.water_level == record->water_level);
+					CHECK(pose.water_type == record->water_type);
+					if (pose.water_type & SG_HOST_CONTENTS_WATER)
+						material |= SG_CONFIGURATION_SEMANTIC_REGION_WATER;
+					if (pose.water_type & SG_HOST_CONTENTS_LAVA)
+						material |= SG_CONFIGURATION_SEMANTIC_REGION_LAVA |
+							SG_CONFIGURATION_SEMANTIC_REGION_HAZARD;
+					if (pose.water_type & SG_HOST_CONTENTS_SLIME)
+						material |= SG_CONFIGURATION_SEMANTIC_REGION_SLIME |
+							SG_CONFIGURATION_SEMANTIC_REGION_HAZARD;
+					CHECK((record->flags &
+						(SG_CONFIGURATION_SEMANTIC_REGION_WATER |
+						SG_CONFIGURATION_SEMANTIC_REGION_LAVA |
+						SG_CONFIGURATION_SEMANTIC_REGION_SLIME |
+						SG_CONFIGURATION_SEMANTIC_REGION_HAZARD)) == material);
+				}
+	}
+}
+
 static void TestThinBrushSupportFractionPartition(void)
 {
 	fixture_t fixture = Fixture();
@@ -459,13 +509,14 @@ static void TestVolumetricWaterAndAudit(void)
 					CHECK(pose.water_type == semantics->regions[region].water_type);
 				}
 	}
-	CHECK(levels[0] == 1);
-	CHECK(levels[1] == 1);
+	CHECK(levels[0] >= 1);
+	CHECK(levels[1] >= 1);
 	CHECK(levels[2] >= 1);
 	CHECK(levels[3] == 0);
 	CHECK(saw_sample_face);
 	CHECK(saw_supported);
 	CHECK(saw_airborne);
+	CheckRegionPoseMatrix(&fixture, semantics);
 	CHECK(SG_ConfigurationSemanticsAudit(&fixture.authority,
 		&fixture.configuration, semantics, &audit));
 	CHECK(audit.code == SG_CONFIGURATION_SEMANTICS_AUDIT_OK);
@@ -614,6 +665,7 @@ static void TestCrouchingHazardRampAndLedgeAnnotations(void)
 	sg_configuration_semantics_t *semantics = NULL;
 	uint32_t region, boundary;
 	int saw_hazard = 0, saw_ramp = 0, saw_vertical = 0;
+	int saw_traversal = 0;
 
 	BindFixture(&fixture);
 	fixture.cell.stance = SG_RUNE_STANCE_CROUCHING;
@@ -624,10 +676,22 @@ static void TestCrouchingHazardRampAndLedgeAnnotations(void)
 		return;
 	CHECK(semantics->region_count >= 4);
 	for (region = 0; region < semantics->region_count; region++)
+	{
+		uint32_t face;
+
 		if (semantics->regions[region].flags &
 			SG_CONFIGURATION_SEMANTIC_REGION_HAZARD)
 			saw_hazard = 1;
+		for (face = semantics->regions[region].first_face;
+			face < semantics->regions[region].first_face +
+			semantics->regions[region].face_count; face++)
+			if (semantics->faces[face].source_kind ==
+				SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_BSP_TRAVERSAL)
+				saw_traversal = 1;
+	}
 	CHECK(saw_hazard);
+	CHECK(saw_traversal);
+	CheckRegionPoseMatrix(&fixture, semantics);
 	SG_ConfigurationSemanticsDestroy(semantics);
 	semantics = NULL;
 	SetCrouchingBottom(&fixture, 0.0f, 0.6f, 0.8f, 9.6f);

@@ -426,6 +426,22 @@ sg_rune_source_status_t SG_RuneSourceAuthorityCopy(
 	return SourceHandleCurrent(authority);
 }
 
+sg_rune_source_status_t SG_RuneSourceAuthoritySnapshot(
+	const sg_rune_source_authority_t *authority,
+	sg_rune_source_snapshot_t *snapshot_out)
+{
+	sg_rune_source_status_t status;
+
+	if (snapshot_out == NULL)
+		return SG_RUNE_SOURCE_INVALID_ARGUMENT;
+	memset(snapshot_out, 0, sizeof(*snapshot_out));
+	status = SourceHandleCurrent(authority);
+	if (status != SG_RUNE_SOURCE_OK)
+		return status;
+	memcpy(snapshot_out, &authority->snapshot, sizeof(*snapshot_out));
+	return SourceHandleCurrent(authority);
+}
+
 sg_rune_source_status_t SG_RuneSourceAuthorityCurrent(
 	const sg_rune_source_authority_t *authority)
 {

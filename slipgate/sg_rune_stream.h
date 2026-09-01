@@ -61,8 +61,6 @@ typedef void (*sg_rune_stream_free_fn)(void *context, void *allocation);
 
 typedef struct sg_rune_stream_source_s
 {
-	/* Zero-initialized legacy sources are route-complete. */
-	uint16_t route_contract;
 	const struct rune_identity_s *identity;
 	const struct rune_seed_s *seeds;
 	uint32_t num_seeds;

@@ -72,6 +72,11 @@ sg_rune_source_status_t SG_RuneSourceAuthorityCopy(
 	char *entity_text_out, size_t entity_text_capacity,
 	sg_rune_source_entity_record_t *entity_records_out,
 	size_t entity_record_capacity);
+/* Read the sealed metadata without copying entity payload.  This is the
+ * production admission path for source-owned law inputs. */
+sg_rune_source_status_t SG_RuneSourceAuthoritySnapshot(
+	const sg_rune_source_authority_t *authority,
+	sg_rune_source_snapshot_t *snapshot_out);
 sg_rune_source_status_t SG_RuneSourceAuthorityCurrent(
 	const sg_rune_source_authority_t *authority);
 void SG_RuneSourceAuthorityDestroy(sg_rune_source_authority_t *authority);

@@ -50,7 +50,8 @@ typedef enum sg_rune_compact_geometry_record_domain_e
 	SG_RUNE_COMPACT_GEOMETRY_RECORD_WORLD,
 	SG_RUNE_COMPACT_GEOMETRY_RECORD_CELL,
 	SG_RUNE_COMPACT_GEOMETRY_RECORD_FACE,
-	SG_RUNE_COMPACT_GEOMETRY_RECORD_PORTAL
+	SG_RUNE_COMPACT_GEOMETRY_RECORD_PORTAL,
+	SG_RUNE_COMPACT_GEOMETRY_RECORD_SOURCE_SURFACE
 } sg_rune_compact_geometry_record_domain_t;
 
 typedef struct sg_rune_compact_geometry_error_s
@@ -85,6 +86,13 @@ typedef struct sg_rune_compact_geometry_view_s
 	uint32_t vertex_count;
 	const sg_rune_compact_portal_t *portals;
 	uint32_t portal_count;
+	/* Canonical all-model source inventory.  Its vertex array is separate from
+	 * compact facet vertices because model-local surfaces are not static cell
+	 * boundaries. */
+	const sg_rune_compact_source_surface_t *source_surfaces;
+	uint32_t source_surface_count;
+	const sg_rune_q8_vec3_t *source_surface_vertices;
+	uint32_t source_surface_vertex_count;
 	/* A configuration cell can cover several compact cells after the standing /
 	 * crouching overlay.  Spans index the flat owned reference array. */
 	const sg_rune_compact_geometry_cell_span_t

@@ -50,12 +50,10 @@
 /* Native seed flags are independent of their wire encoding. */
 #define RSF_WATER	1       /* the seed is a point INSIDE a water volume, not
                              * a floor point: reached and left by swimming */
-#define RSF_TOMBSTONE	2   /* retained geometry owner outside the closed
-                             * two-objective route core; has no links and
-                             * makes localization fail closed instead of
-                             * snapping through it to a farther live seed */
-#define RSF_OBJECTIVE	4   /* authenticated local-only flag root; may be a
-                             * terminal graph sink */
+#define RSF_TOMBSTONE	2   /* retained geometry owner outside the active
+	                         * graph; has no links and makes localization fail
+	                         * closed instead of snapping through it to a
+	                         * farther live seed */
 
 /* Fail-closed native controller markers retained by the runtime adapter. */
 #define RUNE_DECLARED_CONTROL_MARKER 254
@@ -116,7 +114,6 @@ typedef struct rune_identity_s
 typedef struct rune_artifact_s
 {
 	uint32_t magic;
-	uint16_t route_contract;
 	uint32_t payload_crc32;
 	uint32_t header_crc32;
 	uint32_t action_contract_crc32;

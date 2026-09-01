@@ -140,15 +140,14 @@ extern int Time_Left;
 
 void ShutdownGame (void)
 {
-	SG_DangerCheckpoint("shutdown");
-	SG_DangerPersistenceReset();
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
+	/* Retire plan leases and the complete compact production owner while its
+	 * field, localization, and decoded-model storage are still live. */
+	SG_CompactProductionStorageWillFree();
 	gi.dprintf ("==== ShutdownGame ====\n");
 
 	sl_GameEnd( &gi, level );	// StdLog - Mark Davies
 
 	SG_RosterStorageReset();
-	(void)SG_BotLocalizationProviderSet(NULL);
 	SG_RuneSourceAuthorityReset();
 	SG_HostLawProductionReset();
 	SG_LevelIdentityReset();
@@ -744,10 +743,6 @@ void ExitLevel (void)
 	POVLock_StopAll();
 	Com_sprintf (command, sizeof(command), "gamemap \"%s\"\n", level.changemap);
 
-	/* This is the final point where the current rune identity, graph, and
-	 * whole-level danger lease are all authoritative.  Failure is logged and
-	 * deliberately cannot block rotation. */
-	SG_DangerCheckpoint("exit-level");
 	gi.AddCommandString (command);
 	level.changemap = NULL;
 	level.exitintermission = 0;

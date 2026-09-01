@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "sg_destination.h"
+#include "sg_rune_compact_field.h"
 
 #define SG_STRATEGY_MAX_GOALS 64U
 #define SG_STRATEGY_MAX_DEPENDENCIES 8U
@@ -266,13 +267,16 @@ typedef struct sg_strategy_activation_s
 	sg_strategy_goal_id_t goal_id;
 } sg_strategy_activation_t;
 
-typedef enum sg_strategy_destination_status_e
+typedef enum sg_strategy_field_state_e
 {
-	SG_STRATEGY_DESTINATION_UNOBSERVED = 0,
-	SG_STRATEGY_DESTINATION_UNREACHABLE,
-	SG_STRATEGY_DESTINATION_REACHABLE,
-	SG_STRATEGY_DESTINATION_STATUS_COUNT
-} sg_strategy_destination_status_t;
+	SG_STRATEGY_FIELD_DISCONNECTED = 0,
+	SG_STRATEGY_FIELD_LOCAL_DESTINATION,
+	SG_STRATEGY_FIELD_CELL_DESTINATION,
+	SG_STRATEGY_FIELD_MECHANISMS_REQUIRED,
+	SG_STRATEGY_FIELD_BLOCKED_NOW,
+	SG_STRATEGY_FIELD_STEP,
+	SG_STRATEGY_FIELD_STATE_COUNT
+} sg_strategy_field_state_t;
 
 typedef struct sg_strategy_destination_observation_s
 {
@@ -280,12 +284,11 @@ typedef struct sg_strategy_destination_observation_s
 	sg_strategy_goal_id_t goal_id;
 	sg_strategy_target_id_t target_id;
 	uint64_t observation_revision;
-	uint64_t pose_revision;
+	uint64_t target_generation;
 	uint64_t observed_at_ms;
 	uint64_t valid_until_ms;
-	sg_strategy_destination_status_t status;
-	uint32_t cost_ms;
-	sg_destination_handle_t handle;
+	sg_strategy_field_state_t field_state;
+	sg_rune_compact_field_cost_t cost_to_go;
 } sg_strategy_destination_observation_t;
 
 typedef struct sg_strategy_fact_observation_s
@@ -411,12 +414,11 @@ typedef struct sg_strategy_choice_runtime_s
 	uint8_t attempts;
 	uint16_t reserved;
 	uint64_t observation_revision;
-	uint64_t pose_revision;
+	uint64_t target_generation;
 	uint64_t observed_at_ms;
 	uint64_t valid_until_ms;
-	sg_strategy_destination_status_t status;
-	uint32_t cost_ms;
-	sg_destination_handle_t handle;
+	sg_strategy_field_state_t field_state;
+	sg_rune_compact_field_cost_t cost_to_go;
 } sg_strategy_choice_runtime_t;
 
 typedef struct sg_strategy_goal_runtime_s
@@ -483,8 +485,10 @@ typedef struct sg_strategy_instruction_s
 	uint8_t reserved[3];
 	sg_strategy_activation_t activation;
 	sg_destination_ref_t destination;
-	sg_destination_handle_t handle;
-	uint32_t cost_ms;
+	sg_strategy_target_id_t target_id;
+	uint64_t target_generation;
+	sg_strategy_field_state_t field_state;
+	sg_rune_compact_field_cost_t cost_to_go;
 	sg_strategy_tactical_block_reason_t block_reason;
 	sg_strategy_destination_wait_reason_t destination_wait_reason;
 } sg_strategy_instruction_t;

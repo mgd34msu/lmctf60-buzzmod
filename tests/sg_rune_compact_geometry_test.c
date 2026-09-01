@@ -13,6 +13,7 @@
 typedef struct fixture_s
 {
 	sg_configuration_space_t configuration;
+	sg_configuration_semantics_t semantics;
 	sg_configuration_cell_t cells[8];
 	sg_configuration_face_t faces[96];
 	sg_rune_vec3_t vertices[320];
@@ -163,6 +164,7 @@ static void InitFixture(fixture_t *fixture)
 	fixture->configuration.vertices = fixture->vertices;
 	fixture->configuration.stance_overlaps = fixture->overlaps;
 	fixture->configuration.portals = fixture->portals;
+	fixture->semantics.identity = fixture->configuration.identity;
 	fixture->world.models = &fixture->model;
 	fixture->world.model_count = 1U;
 	fixture->world.leaves = &fixture->leaf;
@@ -183,7 +185,8 @@ static int Materialize(fixture_t *fixture, sg_rune_compact_geometry_t **geometry
 	sg_rune_compact_geometry_error_t *error)
 {
 	return SG_RuneCompactGeometryOwnerMaterialize(&fixture->configuration,
-		&fixture->world, &fixture->identity, NULL, geometry, error);
+		&fixture->semantics, &fixture->world, &fixture->identity, NULL,
+		geometry, error);
 }
 
 static int TestThreeAtomOverlap(void)
@@ -513,7 +516,8 @@ static int TestOomSentinel(void)
 		fixture.live_allocations = 0U;
 		sentinel = (sg_rune_compact_geometry_t *)(uintptr_t)0x1234U;
 		if (SG_RuneCompactGeometryOwnerMaterialize(&fixture.configuration,
-			&fixture.world, &fixture.identity, &allocator, &sentinel, &error))
+			&fixture.semantics, &fixture.world, &fixture.identity, &allocator,
+			&sentinel, &error))
 		{
 			CHECK(sentinel != NULL);
 			SG_RuneCompactGeometryDestroy(sentinel);
@@ -536,7 +540,8 @@ static int TestOomSentinel(void)
 		fixture.live_allocations = 0U;
 		sentinel = (sg_rune_compact_geometry_t *)(uintptr_t)0x1234U;
 		if (SG_RuneCompactGeometryOwnerMaterialize(&fixture.configuration,
-			&fixture.world, &fixture.identity, &allocator, &sentinel, NULL))
+			&fixture.semantics, &fixture.world, &fixture.identity, &allocator,
+			&sentinel, NULL))
 		{
 			CHECK(sentinel != NULL);
 			SG_RuneCompactGeometryDestroy(sentinel);
@@ -666,6 +671,7 @@ int SG_RuneCompactBuilderOwnerRead(const sg_rune_compact_builder_t *builder,
 	memset(view_out, 0, sizeof(*view_out));
 	view_out->world = &public_builder_fixture->world;
 	view_out->configuration = &public_builder_fixture->configuration;
+	view_out->semantics = &public_builder_fixture->semantics;
 	return 1;
 }
 

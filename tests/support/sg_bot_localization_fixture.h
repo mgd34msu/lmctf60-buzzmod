@@ -14,9 +14,9 @@ static inline void SG_TestBotLocalizationCellSet(sg_bot_t *bot, int cell)
 	bot->localized_state.rune_identity = 1U;
 	bot->localized_state.topology_revision = 1U;
 	bot->localized_state.frame_sequence = 1U;
-	bot->localized_state.field_pose.phase.phase_id = 0U;
-	bot->localized_state.field_pose.phase.cell_id = (uint32_t)cell;
-	bot->localized_state.field_pose.region_id = 0U;
+	bot->localized_state.localized_at_ms = 1U;
+	bot->localized_state.location.cell.value = (uint32_t)cell;
+	bot->localized_state.valid = 1U;
 }
 
 #endif

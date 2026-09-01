@@ -6,27 +6,21 @@ manifest-bound configuration, BSP/RUNE corpus, sidecars, and fleet inputs.
 
 ## Setup
 
-Run `tools/setup.sh` for toolchain checks and the analysis virtual environment.
+Run `tools/setup.sh` for C toolchain, engine, map, and asset checks.
 External inputs remain explicit:
 
 - a compatible q2ded engine;
 - map BSP files;
-- human or serverrecord demos for analysis.
-
-`tools/requirements.txt` pins Python analysis dependencies. Most RUNE readers,
-controllers, and corpus checks use only the standard library.
+- human or serverrecord demos used as retained development evidence.
 
 ## Tool groups
 
-- RUNE: `runeio.py`, `runelint.py`, `runeaccept.c`, `runegen.sh`,
-  `rune_corpus_controller.py`, and `bspmechanisms.py`.
-- Runtime evidence: `film.py`, `stallcensus.py`, `conduct.py`, and the sheet
-  renderers.
-- Telemetry and diagnostics: `gamestat.sh`, `rolestat.py`, `hookevents.py`,
-  `hookdiag.py`, and the focused census tools.
-- Fleet: the current tracked launch scripts are development-only. Production
-  requires the persistent authenticated runner described in the completion
-  plan.
+- RUNE generation and corpus assembly: `runegen.sh` plus the server-side
+  `sv rune` implementation.
+- RUNE inspection: `runecompactread.gnu` or `runecompactread.make`. Both call
+  the same production C wire inspector.
+- Local launch and deployment: `deploy.sh`, `iterate.sh`, and `iterate2.sh`.
+- Human capture, telemetry, and learning: the corresponding C game modules.
 
 Run a tool with `--help` for its current arguments. `tools/README.md` explains
 cross-tool inputs and outputs without duplicating every option.
@@ -48,6 +42,6 @@ cross-tool inputs and outputs without duplicating every option.
 
 ## Current boundary
 
-The current branch has the 175-map RUNE controller and strict readers. It does
-not yet contain the reviewed persistent fleet runner or release-bundle
-transaction. Integrate those before any production cutover.
+The current branch is replacing the Python tool layer. The final path uses the
+game module, one C RUNE inspector, shell process orchestration, and Make release
+targets. Optional fleet machinery does not block release.

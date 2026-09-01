@@ -23,6 +23,9 @@ sg_host_law_result_t SG_HostLawPublicationOwnerIssueStatic(
 	const sg_host_static_identity_t *identity,
 	sg_host_law_publication_t **publication_out);
 #endif
+typedef struct sg_host_law_pmove_evaluator_s
+	sg_host_law_pmove_evaluator_t;
+
 sg_host_law_result_t SG_HostLawPublicationOwnerIssueEnginePair(
 	sg_host_engine_runtime_t *runtime,
 	sg_host_law_publication_t **construction_out,
@@ -39,6 +42,36 @@ SG_HostLawConstructionOwnerCopyBsp(
 	const sg_host_law_construction_t *construction, uint8_t *bytes_out,
 	size_t capacity, size_t *size_out,
 	sg_host_static_identity_t *identity_out);
+/* Retain only the construction-authenticated Pmove binding and currentness.
+ * The evaluator owns no BSP.  Callers pair it with their own identity-matched
+ * collision authority, which keeps the evaluator valid after the source
+ * construction handle is destroyed. */
+SG_HOST_LAW_PRIVATE_VISIBILITY sg_host_law_result_t
+SG_HostLawConstructionOwnerPmoveEvaluatorAcquire(
+	const sg_host_law_construction_t *construction,
+	sg_host_law_pmove_evaluator_t **evaluator_out);
+SG_HOST_LAW_PRIVATE_VISIBILITY sg_host_law_result_t
+SG_HostLawPmoveEvaluatorCurrent(
+	const sg_host_law_pmove_evaluator_t *evaluator);
+SG_HOST_LAW_PRIVATE_VISIBILITY sg_host_law_result_t
+SG_HostLawPmoveEvaluatorRun(
+	const sg_host_law_pmove_evaluator_t *evaluator,
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	sg_host_pmove_result_t *result_out,
+	sg_host_pmove_error_t *error_out);
+SG_HOST_LAW_PRIVATE_VISIBILITY sg_host_law_result_t
+SG_HostLawPmoveEvaluatorReplayFrame(
+	const sg_host_law_pmove_evaluator_t *evaluator,
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	const sg_host_pmove_replay_workspace_t *workspace,
+	sg_host_pmove_replay_t *replay_out,
+	sg_host_pmove_error_t *error_out);
+SG_HOST_LAW_PRIVATE_VISIBILITY void SG_HostLawPmoveEvaluatorDestroy(
+	sg_host_law_pmove_evaluator_t *evaluator);
 void SG_HostLawPublicationOwnerDestroy(
 	sg_host_law_publication_t *publication);
 sg_host_law_result_t SG_HostLawPublicationOwnerPmove(

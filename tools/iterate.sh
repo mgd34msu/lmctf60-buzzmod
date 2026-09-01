@@ -92,7 +92,5 @@ echo "=== WAVE $NAME: duel=$DUEL fives=$F1,$F2,$F3,$F4,$F5 dens=$DENS ctrl=$CTRL
 for i in 0 1 2 3 4 5 6 7 8 9; do
     echo "---- ${LABELS[$i]} ${MAPS[$i]} ----"
     "$SCRIPT_DIR/gamestat.sh" "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log"
-    python3 "$SCRIPT_DIR/effstat.py" "$LOG_DIR/${LABELS[$i]}-${MAPS[$i]}.log"
 done
-python3 "$SCRIPT_DIR/botledger.py" "$NAME" "$LOG_DIR"/*.log
 echo "logs: $LOG_DIR"

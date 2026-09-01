@@ -34,10 +34,6 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_rune_proof.h"
 #include "slipgate/sg_compound_publication.h"
 #include "slipgate/sg_compound_swim_game.h"
-#include "slipgate/sg_danger_lease.h"
-#include "slipgate/sg_danger_policy.h"
-#include "slipgate/sg_sidecar_loader.h"
-#include "slipgate/sg_sidecar_store.h"
 #include "slipgate/sg_timed_vault_egress.h"
 
 #define FIELD_INF       0x3fffffff
@@ -49,7 +45,6 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_drop_live.h"
 #include "slipgate/sg_swim_live.h"
 #include "slipgate/sg_clock.h"
-#include "slipgate/sg_danger.h"
 #include "slipgate/sg_defense_shift.h"
 #include "slipgate/sg_weights.h"
 #include "slipgate/sg_tilt.h"
@@ -58,6 +53,7 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_strategy_runtime_bridge.h"
+#include "slipgate/sg_strategy_runtime_bridge_private.h"
 #include "slipgate/sg_traversal_transition.h"
 #include "slipgate/sg_route_dither.h"
 #include "slipgate/sg_escort_dose.h"
@@ -68,6 +64,20 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_field_projection.h"
 #include "slipgate/sg_host_law_owner.h"
 #include "slipgate/sg_bot_localization.h"
+#ifdef world
+#define SG_ARACH_RESTORE_WORLD_MACRO 1
+#undef world
+#endif
+#include "slipgate/sg_rune_compact_localize.h"
+#include "slipgate/sg_rune_compact_production.h"
+#include "slipgate/sg_rune_compact_learning_game.h"
+#ifdef SG_ARACH_RESTORE_WORLD_MACRO
+#define world (&g_edicts[0])
+#undef SG_ARACH_RESTORE_WORLD_MACRO
+#endif
+#include "slipgate/sg_tactic_execution.h"
+#include "slipgate/sg_tactic_execution_owner_private.h"
+#include "slipgate/sg_tactic_runtime.h"
 
 #include <errno.h>
 #include <math.h>
@@ -95,12 +105,10 @@ static qboolean sg_strike_telemetry_valid[2];
 static uint32_t sg_strike_telemetry_epoch[2];
 static sg_strike_phase_t sg_strike_telemetry_phase[2];
 static rune_t	*sg_rune;
+static sg_rune_compact_production_t sg_compact_production =
+	SG_RUNE_COMPACT_PRODUCTION_INITIALIZER;
 static qboolean sg_physics_warned;
 static float sg_last_frame_time;
-static sg_danger_lease_t sg_danger_lease = SG_DANGER_LEASE_INITIALIZER;
-static uint16_t sg_danger_selected_port;
-static char sg_danger_game_directory[MAX_OSPATH];
-
 static void Role_LevelReset(void)
 {
 	sg_grab_time[0] = sg_grab_time[1] = -1000.0f;
@@ -164,9 +172,6 @@ unsigned char *sg_def_icept[2]; /* per-seed steal-response END
                                         * flag leaves, aimed at the
                                         * carrier's future, not his now */
 /* The four public DPO views share this one TAG_LEVEL allocation. */
-static unsigned char *sg_defense_payload;
-static unsigned int sg_sidecar_log_mask;
-
 unsigned char *sg_human_escape; /* the ESCAPEE's cut: only the flag
                                         * carrier's own entity trajectory in
                                         * the 20s after each steal (.hme) --
@@ -182,93 +187,6 @@ unsigned char *sg_human_live; /* same, cut from the 20s windows
 int	sg_escape_count[2][SG_ESC_BUCKETS];  /* [0]=red flag stolen, [1]=blue */
 int	sg_escape_total[2];                  /* 0 = no prior for that flag */
 
-
-/*
- * A deliberately tiny reader for the one shape escapepriors.py writes:
- * find the quoted key, then read eight integers out of the bracket that
- * follows it. No JSON library, and no pretence of being one -- anything
- * that is not exactly the expected shape leaves the prior unset and the
- * pricing silent, which is the same outcome as a missing file.
- *
- * Matching the key WITH its quotes is what keeps "lmctf01" from matching
- * inside "lmctf01:red" or "lmctf01b", and the tool guarantees no map name
- * appears anywhere in the file outside the maps object.
- */
-static qboolean Escape_Parse(const char *buf, const char *key, int *out)
-{
-	const char *p;
-	char quoted[80];
-	int i, got[SG_ESC_BUCKETS];
-
-	Com_sprintf(quoted, sizeof(quoted), "\"%s\"", key);
-	p = strstr(buf, quoted);
-	if (!p)
-		return false;
-	p += strlen(quoted);
-	while (*p == ' ' || *p == '\t' || *p == ':')
-		p++;
-	if (*p != '[')
-		return false;
-	p++;
-	for (i = 0; i < SG_ESC_BUCKETS; i++)
-	{
-		while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r' ||
-		       *p == ',')
-			p++;
-		if (*p < '0' || *p > '9')
-			return false;
-		got[i] = atoi(p);
-		while (*p >= '0' && *p <= '9')
-			p++;
-	}
-	for (i = 0; i < SG_ESC_BUCKETS; i++)
-		out[i] = got[i];
-	return true;
-}
-
-static void Escape_Load(const char *mapname)
-{
-	char path[MAX_OSPATH];
-	char lower[64], key[80];
-	static char buf[32768];
-	cvar_t *gamedir = sg_host.cvar("gamedir", "", 0);
-	size_t n;
-	FILE *f;
-	int c, i, k;
-
-	memset(sg_escape_count, 0, sizeof(sg_escape_count));
-	sg_escape_total[0] = sg_escape_total[1] = 0;
-
-	Com_sprintf(path, sizeof(path), "%s/escape-priors.json",
-	            gamedir->string[0] ? gamedir->string : ".");
-	f = fopen(path, "rb");
-	if (!f)
-		return;
-	n = fread(buf, 1, sizeof(buf) - 1, f);
-	fclose(f);
-	buf[n] = 0;
-
-	/* the file is keyed in lower case; a server that spelled the map
-	 * LMCTF35 on the map command still means the same map */
-	for (i = 0; mapname[i] && i < (int)sizeof(lower) - 1; i++)
-		lower[i] = (char)tolower((unsigned char)mapname[i]);
-	lower[i] = 0;
-
-	for (k = 0; k < 2; k++)
-	{
-		Com_sprintf(key, sizeof(key), "%s:%s", lower,
-		            k == 0 ? "red" : "blue");
-		if (!Escape_Parse(buf, key, sg_escape_count[k]) &&
-		    !Escape_Parse(buf, lower, sg_escape_count[k]))
-			continue;
-		for (c = 0, i = 0; i < SG_ESC_BUCKETS; i++)
-			c += sg_escape_count[k][i];
-		sg_escape_total[k] = c;
-	}
-	if (sg_escape_total[0] > 0 || sg_escape_total[1] > 0)
-		sg_host.dprint("rune: escape bearings loaded (%s: red n=%d, blue n=%d)\n",
-		           path, sg_escape_total[0], sg_escape_total[1]);
-}
 
 typedef enum rune_load_attempt_e
 {
@@ -338,149 +256,6 @@ void Rune_Free(rune_t *r)
 	sg_host.level_free(r);
 }
 
-/* Wire validation owns duplicates and route ownership.  This final component
- * is intentionally world-dependent: both live flag stands must localize.
- * Complete artifacts require every live seed to reach both stands; the
- * authenticated local-only contract requires at least one and rejects neutral
- * geometry as well as a needlessly weakened complete graph. */
-static rune_validation_result_t Rune_ValidateObjectiveCore(rune_t *r)
-{
-	int *first_in = NULL, *next_in = NULL, *queue = NULL;
-	byte *reach[2] = { NULL, NULL };
-	edict_t *stands[2];
-	int roots[2];
-	int ns = r->hdr.num_seeds, nl = r->hdr.num_links;
-	int i, which;
-	qboolean complete = true;
-	const char *failure = NULL;
-	rune_validation_status_t status = RUNE_VALIDATION_REJECTED;
-
-	/* The stand markers are stable even while a live flag is carried, and are
-	 * the same objective positions Fields_Setup localizes immediately after the
-	 * load. Rune_NearestSeed also enforces the tombstone/outgoing-owner rule. */
-	stands[0] = SG_FlagStand(CTF_TEAM_RED, true);
-	stands[1] = SG_FlagStand(CTF_TEAM_BLUE, true);
-	if (!stands[0] || !stands[1])
-	{
-		failure = "flag objective stand unavailable";
-		status = RUNE_VALIDATION_INFRA;
-		goto done;
-	}
-	for (which = 0; which < 2; which++)
-	{
-		roots[which] = r->artifact.route_contract ==
-			RUNE_ROUTE_CONTRACT_LOCAL_ONLY
-			? SG_LocalObjectiveSeed(r, stands[which]->s.origin)
-			: Rune_NearestSeed(r, stands[which]->s.origin);
-		if (roots[which] < 0)
-		{
-			failure = r->artifact.route_contract ==
-				RUNE_ROUTE_CONTRACT_LOCAL_ONLY
-				? "flag stand does not resolve to one local-only objective"
-				: "flag objective root is not routable";
-			goto done;
-		}
-		if (r->artifact.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY &&
-		    !(r->seeds[roots[which]].flags & RSF_OBJECTIVE))
-		{
-			failure = "local-only objective marker does not match flag root";
-			goto done;
-		}
-	}
-
-	first_in = sg_host.level_alloc(sizeof(*first_in) * (size_t)ns);
-	next_in = sg_host.level_alloc(sizeof(*next_in) *
-	                              (size_t)(nl ? nl : 1));
-	queue = sg_host.level_alloc(sizeof(*queue) * (size_t)ns);
-	reach[0] = sg_host.level_alloc((size_t)ns);
-	reach[1] = sg_host.level_alloc((size_t)ns);
-	if (!first_in || !next_in || !queue || !reach[0] || !reach[1])
-	{
-		failure = "graph-contract allocation failure";
-		status = RUNE_VALIDATION_INFRA;
-		goto done;
-	}
-	for (i = 0; i < ns; i++)
-		first_in[i] = -1;
-	for (i = 0; i < nl; i++)
-	{
-		next_in[i] = first_in[r->links[i].to];
-		first_in[r->links[i].to] = i;
-	}
-
-	for (which = 0; which < 2; which++)
-	{
-		int head = 0, tail = 0;
-
-		memset(reach[which], 0, (size_t)ns);
-		reach[which][roots[which]] = 1;
-		queue[tail++] = roots[which];
-		while (head < tail)
-		{
-			int at = queue[head++];
-			int li;
-
-			for (li = first_in[at]; li >= 0; li = next_in[li])
-			{
-				int from = r->links[li].from;
-
-				if (reach[which][from])
-					continue;
-				reach[which][from] = 1;
-				queue[tail++] = from;
-			}
-		}
-	}
-	for (i = 0; i < ns; i++)
-	{
-		if (r->seeds[i].flags & RSF_TOMBSTONE)
-			continue;
-		if (!reach[0][i] || !reach[1][i])
-			complete = false;
-		if (r->artifact.route_contract == RUNE_ROUTE_CONTRACT_COMPLETE &&
-		    !reach[0][i])
-		{
-			failure = "live seed outside red objective reverse component";
-			goto done;
-		}
-		if (r->artifact.route_contract == RUNE_ROUTE_CONTRACT_COMPLETE &&
-		    !reach[1][i])
-		{
-			failure = "live seed outside blue objective reverse component";
-			goto done;
-		}
-		if (r->artifact.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY &&
-		    !reach[0][i] && !reach[1][i])
-		{
-			failure = "live seed outside both objective reverse components";
-			goto done;
-		}
-	}
-	if (r->artifact.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY)
-	{
-		if (roots[0] == roots[1])
-			failure = "local-only objectives resolve to one root";
-		else if (complete)
-			failure = "complete objective graph mislabeled local-only";
-	}
-	else if (r->artifact.route_contract != RUNE_ROUTE_CONTRACT_COMPLETE)
-		failure = "unknown route contract";
-
-done:
-	if (first_in)
-		sg_host.level_free(first_in);
-	if (next_in)
-		sg_host.level_free(next_in);
-	if (queue)
-		sg_host.level_free(queue);
-	if (reach[0])
-		sg_host.level_free(reach[0]);
-	if (reach[1])
-		sg_host.level_free(reach[1]);
-	return Rune_ValidationResult(failure ? status : RUNE_VALIDATION_OK,
-		failure);
-}
-
 static rune_validation_result_t Rune_BuildOutboundIndexes(rune_t *r)
 {
 	int i;
@@ -513,11 +288,9 @@ static rune_validation_result_t Rune_BuildOutboundIndexes(rune_t *r)
 	{
 		qboolean tombstone =
 		    (r->seeds[i].flags & RSF_TOMBSTONE) != 0;
-		qboolean objective =
-		    (r->seeds[i].flags & RSF_OBJECTIVE) != 0;
 
-		if ((tombstone && (r->linked_seed[i] || objective)) ||
-		    (!tombstone && !r->linked_seed[i] && !objective))
+		if ((tombstone && r->linked_seed[i]) ||
+		    (!tombstone && !r->linked_seed[i]))
 			return Rune_ValidationResult(RUNE_VALIDATION_REJECTED,
 				"invalid route-core seed ownership");
 	}
@@ -582,7 +355,7 @@ rune_t *Rune_Load(const char *mapname)
 	qboolean proof_scope_active = false;
 	qboolean accepted = false;
 	qboolean infrastructure = false;
-	cvar_t *gamedir;
+	cvar_t *game_directory_cvar;
 	const char *game_directory;
 
 	memset(&captured, 0, sizeof(captured));
@@ -592,9 +365,9 @@ rune_t *Rune_Load(const char *mapname)
 	sg_last_rune_load = RUNE_LOAD_MISSING;
 	sg_last_rune_failure_stage = "missing";
 	SG_HooksInit();
-	gamedir = sg_host.cvar("gamedir", "", 0);
-	game_directory = gamedir && gamedir->string && gamedir->string[0]
-		? gamedir->string : ".";
+	game_directory_cvar = sg_host.cvar("gamedir", "", 0);
+	game_directory = game_directory_cvar && game_directory_cvar->string &&
+		game_directory_cvar->string[0] ? game_directory_cvar->string : ".";
 
 	if (!SG_RuneAuthorityCapture(mapname, &captured))
 	{
@@ -694,12 +467,9 @@ rune_t *Rune_Load(const char *mapname)
 	proof_scope_active = false;
 	if (failure)
 		goto cleanup;
-	failure_stage = "objective-core";
-	validation = Rune_ValidateObjectiveCore(rune);
-	failure = validation.reason;
-	infrastructure = validation.status == RUNE_VALIDATION_INFRA;
-	if (failure)
-		goto cleanup;
+	/* Objective reachability is a runtime destination query.  Artifact
+	 * admission stops at the structural outbound-index and mechanism checks;
+	 * no legacy route-contract or reverse-Dijkstra closure is consulted here. */
 	if (!SG_RuneAuthorityCapture(rune->artifact.identity.map_name, &active) ||
 	    !SG_RuneAuthorityMatchesArtifact(&active, &rune->artifact))
 	{
@@ -749,511 +519,16 @@ cleanup:
  * water seed has no graph path to air. */
 int	*sg_airnext;
 
-typedef struct sg_sidecar_candidates_s
-{
-	unsigned char *human;
-	unsigned char *flag_live;
-	unsigned char *escape;
-	unsigned char *defense;
-	unsigned char *danger;
-	int *danger_red;
-	int *danger_blue;
-	size_t human_size;
-	size_t flag_live_size;
-	size_t escape_size;
-	size_t defense_size;
-	size_t danger_size;
-	qboolean danger_loaded;
-	qboolean danger_persistence;
-} sg_sidecar_candidates_t;
-
-static void *Sidecar_LevelAllocate(void *context, size_t size)
-{
-	(void)context;
-	if (size == 0 || size > (size_t)INT_MAX)
-		return NULL;
-	return sg_host.level_alloc((int)size);
-}
-
-static void Sidecar_LevelDeallocate(void *context, void *allocation)
-{
-	(void)context;
-	if (allocation)
-		sg_host.level_free(allocation);
-}
-
-static void Sidecar_CandidatesRelease(sg_sidecar_candidates_t *candidates)
-{
-	if (!candidates)
-		return;
-	Sidecar_LevelDeallocate(NULL, candidates->human);
-	Sidecar_LevelDeallocate(NULL, candidates->flag_live);
-	Sidecar_LevelDeallocate(NULL, candidates->escape);
-	Sidecar_LevelDeallocate(NULL, candidates->defense);
-	Sidecar_LevelDeallocate(NULL, candidates->danger);
-	Sidecar_LevelDeallocate(NULL, candidates->danger_red);
-	Sidecar_LevelDeallocate(NULL, candidates->danger_blue);
-	memset(candidates, 0, sizeof(*candidates));
-}
-
-static void Sidecar_LogLoad(sg_sidecar_kind_t kind, const char *path,
-	const sg_sidecar_load_result_t *result)
-{
-	unsigned int bit;
-
-	if (!result || kind < 0 || kind >= SG_SIDECAR_KIND_COUNT ||
-	    result->diagnostic == SCD_ABSENT)
-		return;
-	bit = 1U << (unsigned int)kind;
-	if (sg_sidecar_log_mask & bit)
-		return;
-	if (result->diagnostic == SCD_OK)
-		return;
-	sg_sidecar_log_mask |= bit;
-	if (result->plane != SG_SIDECAR_INDEX_NONE ||
-	    result->index != SG_SIDECAR_INDEX_NONE)
-	{
-		sg_host.dprint("slipgate: sidecar %s ignored path=%s stage=%s "
-			"diagnostic=%s plane=%u index=%u os=%d\n",
-			SG_SidecarKindName(kind), path && path[0] ? path : "<invalid>",
-			SG_SidecarStageName(result->stage),
-			SG_SidecarDiagnosticName(result->diagnostic),
-			(unsigned int)result->plane, (unsigned int)result->index,
-			result->os_error);
-	}
-	else
-	{
-		sg_host.dprint("slipgate: sidecar %s ignored path=%s stage=%s "
-			"diagnostic=%s os=%d\n", SG_SidecarKindName(kind),
-			path && path[0] ? path : "<invalid>",
-			SG_SidecarStageName(result->stage),
-			SG_SidecarDiagnosticName(result->diagnostic),
-			result->os_error);
-	}
-}
-
-static void Sidecar_LogPublished(const char *game_directory,
-	sg_sidecar_kind_t kind, const rune_t *r, size_t payload_size)
-{
-	char path[MAX_OSPATH];
-	unsigned int bit;
-
-	if (!r || kind < 0 || kind >= SG_SIDECAR_KIND_COUNT)
-		return;
-	bit = 1U << (unsigned int)kind;
-	if (sg_sidecar_log_mask & bit)
-		return;
-	path[0] = '\0';
-	(void)SG_SidecarPath(path, sizeof(path), game_directory, kind,
-		&r->artifact);
-	sg_sidecar_log_mask |= bit;
-	sg_host.dprint("slipgate: sidecar %s loaded path=%s bytes=%u\n",
-		SG_SidecarKindName(kind), path[0] ? path : "<invalid>",
-		(unsigned int)payload_size);
-}
-
-static sg_sidecar_load_result_t Sidecar_LoadCandidate(
-	const char *game_directory,
-	sg_sidecar_kind_t kind, const rune_t *r, unsigned char **payload_out,
-	size_t *payload_size_out)
-{
-	sg_sidecar_load_ops_t ops;
-	sg_sidecar_load_result_t result;
-	char path[MAX_OSPATH];
-
-	memset(&result, 0, sizeof(result));
-	result.diagnostic = SCD_INVALID_ARGUMENT;
-	result.stage = SCS_ARGUMENT;
-	result.plane = SG_SIDECAR_INDEX_NONE;
-	result.index = SG_SIDECAR_INDEX_NONE;
-	if (!r || !payload_out || !payload_size_out)
-		return result;
-	*payload_out = NULL;
-	*payload_size_out = 0;
-	path[0] = '\0';
-	(void)SG_SidecarPath(path, sizeof(path), game_directory, kind,
-		&r->artifact);
-	SG_SidecarDefaultLoadOps(&ops);
-	ops.allocate = Sidecar_LevelAllocate;
-	ops.deallocate = Sidecar_LevelDeallocate;
-	result = SG_SidecarLoadFile(game_directory, kind, &r->artifact,
-		r->linked_seed, (size_t)r->hdr.num_seeds, payload_out,
-		payload_size_out, &ops);
-	Sidecar_LogLoad(kind, path, &result);
-	return result;
-}
-
-static const char *Danger_GameDirectory(void)
-{
-	cvar_t *game_cvar = sg_host.cvar("gamedir", "", 0);
-
-	return game_cvar && game_cvar->string && game_cvar->string[0]
-		? game_cvar->string : ".";
-}
-
-static sg_danger_port_value_t Danger_PortValue(const char *name)
-{
-	cvar_t *value = sg_host.cvar(name, "0", 0);
-	sg_danger_port_value_t result;
-
-	result.string = value ? value->string : NULL;
-	result.flags = value ? value->flags : 0;
-	return result;
-}
-
-static sg_danger_policy_status_t Danger_CurrentPolicy(
-	uint16_t *selected_port_out)
-{
-	sg_danger_port_value_t port;
-	sg_danger_port_value_t ip_hostport;
-	sg_danger_port_value_t hostport;
-	const char *selector;
-	sg_danger_policy_status_t selector_status;
-
-	SG_CvarsInit();
-	selector = sg_cv.dangerpersistport ? sg_cv.dangerpersistport->string : NULL;
-	/* Parse the opt-in before looking up engine port cvars.  The default-off
-	 * path must be observationally inert: asking the engine for an absent cvar
-	 * creates it, which is needless state mutation when persistence is disabled
-	 * (and can hide a misspelled engine configuration). */
-	selector_status = SG_DangerPolicySelect(selector, NULL, NULL, NULL,
-		selected_port_out);
-	if (selector_status == SG_DANGER_POLICY_DISABLED ||
-	    selector_status == SG_DANGER_POLICY_BAD_SELECTOR)
-		return selector_status;
-	port = Danger_PortValue("port");
-	ip_hostport = Danger_PortValue("ip_hostport");
-	hostport = Danger_PortValue("hostport");
-	return SG_DangerPolicySelect(selector, &port, &ip_hostport, &hostport,
-		selected_port_out);
-}
-
-static void Danger_PersistenceRelease(void)
-{
-	sg_danger_lease_result_t result;
-
-	result = SG_DangerLeaseRelease(&sg_danger_lease);
-	if (result.status != SG_DANGER_LEASE_OK)
-	{
-		sg_host.dprint("slipgate: danger lease release failed status=%s "
-			"os=%d cleanup=%d\n", SG_DangerLeaseReason(result.status),
-			result.os_error, result.cleanup_error);
-	}
-	sg_danger_selected_port = 0;
-	sg_danger_game_directory[0] = '\0';
-}
-
-static qboolean Danger_PersistenceAcquire(const char *game_directory,
-	const rune_t *r)
-{
-	sg_danger_policy_status_t policy;
-	sg_danger_lease_result_t lease;
-	uint16_t selected_port = 0;
-	char danger_path[MAX_OSPATH];
-	char lock_path[MAX_OSPATH];
-	char leased_directory[MAX_OSPATH];
-	int written;
-
-	if (!game_directory || !r || SG_DangerLeaseHeld(&sg_danger_lease))
-		return false;
-	policy = Danger_CurrentPolicy(&selected_port);
-	if (policy == SG_DANGER_POLICY_DISABLED)
-		return false;
-	if (policy != SG_DANGER_POLICY_OK)
-	{
-		sg_host.dprint("slipgate: danger persistence disabled: %s\n",
-			SG_DangerPolicyReason(policy));
-		return false;
-	}
-	written = snprintf(leased_directory, sizeof(leased_directory), "%s",
-		game_directory);
-	if (written < 0 || (size_t)written >= sizeof(leased_directory))
-	{
-		sg_host.dprint("slipgate: danger persistence disabled: game "
-			"directory is too long\n");
-		return false;
-	}
-	if (SG_SidecarPath(danger_path, sizeof(danger_path), game_directory,
-		SG_SIDECAR_DANGER, &r->artifact) != SCD_OK)
-	{
-		sg_host.dprint("slipgate: danger persistence disabled: invalid "
-			"authenticated sidecar path\n");
-		return false;
-	}
-	lock_path[0] = '\0';
-	lease = SG_DangerLeaseAcquire(&sg_danger_lease, danger_path, lock_path,
-		sizeof(lock_path), NULL);
-	if (lease.status != SG_DANGER_LEASE_OK)
-	{
-		sg_host.dprint("slipgate: danger persistence disabled: lease=%s "
-			"path=%s os=%d cleanup=%d\n",
-			SG_DangerLeaseReason(lease.status),
-			lock_path[0] ? lock_path : "<invalid>", lease.os_error,
-			lease.cleanup_error);
-		return false;
-	}
-	sg_danger_selected_port = selected_port;
-	memcpy(sg_danger_game_directory, leased_directory,
-		(size_t)written + 1U);
-	sg_host.dprint("slipgate: danger persistence selected port=%u "
-		"lock=%s\n", (unsigned int)selected_port, lock_path);
-	return true;
-}
-
-typedef struct danger_checkpoint_context_s
-{
-	const rune_t *rune;
-	uint64_t revision;
-	uint16_t selected_port;
-	char game_directory[MAX_OSPATH];
-} danger_checkpoint_context_t;
-
-static sg_sidecar_revalidate_t Danger_InstalledRuneMatches(
-	const danger_checkpoint_context_t *context, int *os_error_out)
-{
-	sg_rune_authority_t authority;
-	rune_artifact_t installed_artifact;
-	sg_rune_file_inspect_status_t status;
-	char path[MAX_OSPATH];
-
-	if (os_error_out)
-		*os_error_out = 0;
-	if (!context || !context->rune ||
-	    !SG_RuneAuthorityCapture(context->rune->artifact.identity.map_name,
-	        &authority) ||
-	    !SG_RuneAuthorityMatchesArtifact(&authority,
-	        &context->rune->artifact) ||
-	    !SG_RuneInstallDestinationPath(path, sizeof(path),
-	        context->game_directory,
-	        context->rune->artifact.identity.map_name))
-		return SG_SIDECAR_REVALIDATE_DRIFT;
-	status = SG_RuneFileInspect(path, &authority.identity,
-		&installed_artifact, os_error_out);
-	if (status == SG_RUNE_FILE_INSPECT_ERROR)
-		return SG_SIDECAR_REVALIDATE_ERROR;
-	if (status != SG_RUNE_FILE_INSPECT_MATCH)
-		return SG_SIDECAR_REVALIDATE_DRIFT;
-	return SG_RuneArtifactsEqual(&installed_artifact,
-		&context->rune->artifact)
-		? SG_SIDECAR_REVALIDATE_MATCH : SG_SIDECAR_REVALIDATE_DRIFT;
-}
-static sg_sidecar_revalidate_t Danger_CheckpointRevalidate(void *opaque,
-	const rune_artifact_t *artifact, int *os_error_out)
-{
-	danger_checkpoint_context_t *context = opaque;
-	uint16_t selected_port = 0;
-	const char *game_directory;
-
-	if (os_error_out)
-		*os_error_out = 0;
-	if (!context || !context->rune || !artifact ||
-	    context->rune != SG_Rune() ||
-	    !SG_RuneArtifactsEqual(&context->rune->artifact, artifact) ||
-	    !SG_DangerLeaseHeld(&sg_danger_lease) ||
-	    sg_danger_game_directory[0] == '\0' ||
-	    strcmp(context->game_directory, sg_danger_game_directory) != 0 ||
-	    context->selected_port == 0 ||
-	    context->selected_port != sg_danger_selected_port ||
-	    Danger_Revision() != context->revision ||
-	    !Danger_CheckpointPending() ||
-	    !SG_RunePhysicsCompatible(context->rune) ||
-	    Danger_CurrentPolicy(&selected_port) != SG_DANGER_POLICY_OK ||
-	    selected_port != context->selected_port)
-		return SG_SIDECAR_REVALIDATE_DRIFT;
-	game_directory = Danger_GameDirectory();
-	if (strcmp(game_directory, context->game_directory) != 0)
-		return SG_SIDECAR_REVALIDATE_DRIFT;
-	return Danger_InstalledRuneMatches(context, os_error_out);
-}
-
-void SG_DangerCheckpoint(const char *event)
-{
-	danger_checkpoint_context_t context;
-	sg_sidecar_store_result_t result;
-	unsigned char *payload = NULL;
-	unsigned char *encoded = NULL;
-	const rune_t *r = SG_Rune();
-	const char *current_game_directory;
-	size_t payload_capacity;
-	size_t payload_size = 0;
-	size_t encoded_capacity = 0;
-	size_t encoded_size = 0;
-	uint64_t revision = 0;
-	int written;
-
-	SG_HooksInit();
-	if (!r || !Danger_IsActive() || !Danger_PersistenceEnabled() ||
-		!Danger_IsDirty() || !SG_DangerLeaseHeld(&sg_danger_lease))
-		return;
-	if (!Danger_CheckpointPending())
-	{
-		/* Dirty learned state is intentionally not serialized under a drifted
-		 * identity or movement law.  Say that it was retained only in memory so
-		 * an operator never mistakes a quiet shutdown for a durable checkpoint. */
-		sg_host.dprint("slipgate: danger checkpoint retained event=%s "
-			"revision=%llu reason=identity-or-physics-drift\n",
-			event ? event : "unknown",
-			(unsigned long long)Danger_Revision());
-		return;
-	}
-	current_game_directory = Danger_GameDirectory();
-	if (sg_danger_game_directory[0] == '\0' ||
-	    strcmp(current_game_directory, sg_danger_game_directory) != 0)
-	{
-		sg_host.dprint("slipgate: danger checkpoint retained event=%s "
-			"revision=%llu reason=game-directory-drift\n",
-			event ? event : "unknown",
-			(unsigned long long)Danger_Revision());
-		return;
-	}
-	payload_capacity = Danger_PayloadBytes(r);
-	if (!payload_capacity || payload_capacity > (size_t)INT_MAX ||
-		SG_SidecarFileSize(SG_SIDECAR_DANGER, &r->artifact,
-			&encoded_capacity) != SCD_OK ||
-		encoded_capacity > (size_t)INT_MAX)
-	{
-		sg_host.dprint("slipgate: danger checkpoint skipped event=%s "
-			"reason=invalid-bound-size\n", event ? event : "unknown");
-		return;
-	}
-	payload = sg_host.game_alloc((int)payload_capacity);
-	encoded = sg_host.game_alloc((int)encoded_capacity);
-	if (!payload || !encoded)
-	{
-		sg_host.dprint("slipgate: danger checkpoint failed event=%s "
-			"stage=allocation\n", event ? event : "unknown");
-		goto cleanup;
-	}
-	if (!Danger_CapturePayload(payload, payload_capacity, &payload_size,
-		&revision) || payload_size != payload_capacity ||
-		SG_SidecarEncode(SG_SIDECAR_DANGER, &r->artifact,
-			r->linked_seed, (size_t)r->hdr.num_seeds, payload,
-			payload_size, encoded, encoded_capacity, &encoded_size) != SCD_OK ||
-		encoded_size != encoded_capacity)
-	{
-		sg_host.dprint("slipgate: danger checkpoint failed event=%s "
-			"stage=encode\n", event ? event : "unknown");
-		goto cleanup;
-	}
-	memset(&context, 0, sizeof(context));
-	context.rune = r;
-	context.revision = revision;
-	context.selected_port = sg_danger_selected_port;
-	written = snprintf(context.game_directory,
-		sizeof(context.game_directory), "%s", sg_danger_game_directory);
-	if (written < 0 || (size_t)written >= sizeof(context.game_directory))
-	{
-		sg_host.dprint("slipgate: danger checkpoint failed event=%s "
-			"stage=path\n", event ? event : "unknown");
-		goto cleanup;
-	}
-	result = SG_SidecarStoreFile(context.game_directory,
-		SG_SIDECAR_DANGER, &r->artifact, r->linked_seed,
-		(size_t)r->hdr.num_seeds, encoded, encoded_size,
-		Danger_CheckpointRevalidate, &context, NULL);
-	if (result.diagnostic == SCD_OK && result.stage == SCS_DONE &&
-		result.replacement_complete && result.durability_complete &&
-		Danger_MarkCommitted(revision))
-	{
-		sg_host.dprint("slipgate: danger checkpoint committed event=%s "
-			"revision=%llu bytes=%u\n", event ? event : "unknown",
-			(unsigned long long)revision, (unsigned int)encoded_size);
-	}
-	else
-	{
-		sg_host.dprint("slipgate: danger checkpoint retained event=%s "
-			"revision=%llu stage=%s diagnostic=%s os=%d close=%d "
-			"cleanup=%d replaced=%d durable=%d\n",
-			event ? event : "unknown", (unsigned long long)revision,
-			SG_SidecarStageName(result.stage),
-			SG_SidecarDiagnosticName(result.diagnostic), result.os_error,
-			result.close_error, result.cleanup_error,
-			result.replacement_complete, result.durability_complete);
-	}
-
-cleanup:
-	if (encoded)
-		sg_host.game_free(encoded);
-	if (payload)
-		sg_host.game_free(payload);
-}
-
-void SG_DangerPersistenceReset(void)
-{
-	Danger_PersistenceRelease();
-	Danger_ResetLevel();
-}
-
-static int *Air_Build(const rune_t *r)
-{
-	int n;
-	int *airnext = NULL, *dist = NULL, *incoming = NULL;
-	int *next_incoming = NULL, *queue = NULL;
-	qboolean complete = false;
-
-	if (!r || r->hdr.num_seeds <= 0)
-		return NULL;
-	n = r->hdr.num_seeds;
-	airnext = sg_host.level_alloc(sizeof(int) * (size_t)n);
-	dist = sg_host.level_alloc(sizeof(int) * n);
-	incoming = sg_host.level_alloc(sizeof(int) * n);
-	next_incoming = sg_host.level_alloc(sizeof(int) *
-	    (r->hdr.num_links > 0 ? r->hdr.num_links : 1));
-	queue = sg_host.level_alloc(sizeof(int) * n);
-	if (!airnext || !dist || !incoming || !next_incoming || !queue)
-		goto cleanup;
-	/* Dry seeds are the only zero-distance air sources.  In particular, do
-	 * not call a submerged water seed "air" merely because it owns a direct
-	 * shoreline edge: that suppresses the relaxation below and leaves its
-	 * next hop at -1, sending an emergency swimmer straight into an overhang.
-	 * A proved water-to-dry SWIM is handled like every other edge and records
-	 * the dry seed as the first real step toward breath. */
-	/* Index every incoming water-origin SWIM once, then run a reverse
-	 * multi-source BFS from all dry seeds. The old 64 whole-graph relaxation
-	 * silently truncated valid long pools and depended on link order; this is
-	 * O(seeds+links), converges for the full format bounds, and chooses a shortest
-	 * number-of-strokes escape. */
-	complete = SG_WaterEscapeIndexBuild(r->seeds, n, r->links,
-	    r->hdr.num_links, airnext, dist, incoming, next_incoming, queue);
-
-cleanup:
-	complete = complete && airnext && dist && incoming && next_incoming && queue;
-	if (dist)
-		sg_host.level_free(dist);
-	if (incoming)
-		sg_host.level_free(incoming);
-	if (next_incoming)
-		sg_host.level_free(next_incoming);
-	if (queue)
-		sg_host.level_free(queue);
-	if (!complete)
-	{
-		if (airnext)
-			sg_host.level_free(airnext);
-		return NULL;
-	}
-	return airnext;
-}
 
 static qboolean SG_LevelSetupAttempt(void)
 {
-	rune_t *candidate = NULL;
-	int *candidate_air = NULL;
-	sg_sidecar_candidates_t sidecars;
-	sg_field_setup_inputs_t field_inputs;
-	sg_sidecar_load_result_t danger_load;
-	sg_rune_authority_t active;
 	cvar_t *game_cvar;
 	const char *game_directory;
-	uint32_t mechanism_failure_index = UINT32_MAX;
-	qboolean fields_ready = false;
+	sg_rune_compact_production_result_t compact_result;
+	char compact_path[MAX_OSPATH];
 
 	SG_SetupFailure("setup", false);
 
-	memset(&sidecars, 0, sizeof(sidecars));
-	memset(&field_inputs, 0, sizeof(field_inputs));
-	memset(&danger_load, 0, sizeof(danger_load));
-	danger_load.diagnostic = SCD_ABSENT;
 	SG_HooksInit();     /* the host table, before any module reaches out */
 	if (sg_setup_failed)
 	{
@@ -1271,305 +546,66 @@ static qboolean SG_LevelSetupAttempt(void)
 				level.mapname, SG_HostLawStatusString(host_law_result.status),
 				SG_HostLawFieldString(host_law_result.field));
 	}
-
-	if (sg_rune)
+	if (sg_compact_production.active != 0U)
 	{
-		if (strcmp(sg_rune_map, level.mapname) == 0)
-		{
-			if (SG_RunePhysicsCompatible(sg_rune))
-			{
-				return true;
-			}
-			sg_host.dprint("slipgate: setup held: active identity or "
-			               "physics law differs from loaded artifact\n");
-			SG_SetupFailure("active-identity", false);
-			return false;
-		}
-		sg_host.dprint("slipgate: disabled: loaded rune identity differs "
-		               "from active map case\n");
-		SG_SetupFailure("active-identity", false);
-		return false;
-	}
-	SG_StrikeAdapterReset(&sg_strike_adapter);
-	memset(sg_strike_role_valid, 0, sizeof(sg_strike_role_valid));
-	memset(sg_strike_enemy_pressure_cache, 0,
-	       sizeof(sg_strike_enemy_pressure_cache));
-	memset(sg_strike_enemy_pressure_goal_cache, 0xff,
-	       sizeof(sg_strike_enemy_pressure_goal_cache));
-	memset(sg_strike_duty_cache, 0, sizeof(sg_strike_duty_cache));
-	sg_strike_frame_ready = false;
-	memset(sg_strike_telemetry_valid, 0,
-	       sizeof(sg_strike_telemetry_valid));
-
-	/* once per map, ahead of the rune: a map with no rune still answers
-	 * `sv sg weights`, and the admin editing the file between maps expects
-	 * the next map to be running it */
-	Weights_Load();
-	SG_DangerPersistenceReset();
-	/* Clear the prior level's published views before building this level's
-	 * authenticated sidecar candidates. */
-	sg_human_use = NULL;
-	sg_human_live = NULL;
-	sg_human_escape = NULL;
-	sg_def_post[0] = sg_def_post[1] = NULL;
-	sg_def_icept[0] = sg_def_icept[1] = NULL;
-	sg_defense_payload = NULL;
-	sg_airnext = NULL;
-	memset(&sg_fields, 0, sizeof(sg_fields));
-
-	candidate = Rune_Load(level.mapname);
-	if (!candidate)
-	{
-		SG_SetupFailure(sg_last_rune_failure_stage,
-			sg_last_rune_load == RUNE_LOAD_REJECTED);
-		if (sg_last_rune_load == RUNE_LOAD_MISSING)
-			sg_host.dprint("slipgate: no rune for %s -- run 'sv rune' first\n",
-			               level.mapname);
-		else if (sg_last_rune_load == RUNE_LOAD_INFRA)
-			sg_host.dprint("slipgate: disabled: rune infrastructure failure for %s; "
-				"see rune diagnostic above\n", level.mapname);
-		else
-			sg_host.dprint("slipgate: disabled: rejected rune for %s; "
-			               "see rune diagnostic above\n", level.mapname);
+		if (SG_RuneCompactProductionCurrent(&sg_compact_production) &&
+			strcmp(sg_rune_map, level.mapname) == 0)
+			return true;
+		sg_host.dprint("slipgate: compact rune held: active runtime authority "
+			"is stale or belongs to another map\n");
+		SG_SetupFailure("compact-active-authority", true);
 		return false;
 	}
 	game_cvar = sg_host.cvar("gamedir", "", 0);
 	game_directory = game_cvar && game_cvar->string && game_cvar->string[0]
 	    ? game_cvar->string : ".";
-	Sidecar_LoadCandidate(game_directory, SG_SIDECAR_HUMAN, candidate,
-		&sidecars.human, &sidecars.human_size);
-	Sidecar_LoadCandidate(game_directory, SG_SIDECAR_FLAG_LIVE, candidate,
-		&sidecars.flag_live, &sidecars.flag_live_size);
-	Sidecar_LoadCandidate(game_directory, SG_SIDECAR_ESCAPE, candidate,
-		&sidecars.escape, &sidecars.escape_size);
-	Sidecar_LoadCandidate(game_directory, SG_SIDECAR_DEFENSE, candidate,
-		&sidecars.defense, &sidecars.defense_size);
-	sidecars.danger_persistence = Danger_PersistenceAcquire(game_directory,
-		candidate);
-	if (sidecars.danger_persistence)
+	if (!SG_RuneInstallDestinationPath(compact_path, sizeof(compact_path),
+		game_directory, level.mapname))
 	{
-		danger_load = Sidecar_LoadCandidate(game_directory,
-			SG_SIDECAR_DANGER, candidate, &sidecars.danger,
-			&sidecars.danger_size);
-		if (danger_load.diagnostic == SCD_OK)
-		{
-			size_t plane_bytes = (size_t)candidate->hdr.num_seeds *
-				sizeof(*sidecars.danger_red);
-
-			sidecars.danger_red = Sidecar_LevelAllocate(NULL, plane_bytes);
-			sidecars.danger_blue = Sidecar_LevelAllocate(NULL, plane_bytes);
-			if (!sidecars.danger_red || !sidecars.danger_blue ||
-				!Danger_DecodeCandidate(candidate, sidecars.danger,
-					sidecars.danger_size, sidecars.danger_red,
-					sidecars.danger_blue,
-					(size_t)candidate->hdr.num_seeds))
-			{
-				sg_host.dprint("slipgate: sidecar DNG ignored "
-					"stage=integration diagnostic=SCD_INTERNAL_ERROR; "
-					"persistence disabled for this level\n");
-				Danger_PersistenceRelease();
-				sidecars.danger_persistence = false;
-			}
-			else
-				sidecars.danger_loaded = true;
-		}
-		else if (danger_load.diagnostic != SCD_ABSENT)
-		{
-			/* A failed read is not permission to replace the existing file with
-			 * a fresh model later in the same level.  Keep gameplay ephemeral. */
-			Danger_PersistenceRelease();
-			sidecars.danger_persistence = false;
-		}
+		sg_host.dprint("slipgate: compact rune rejected map=%s stage=path "
+			"reason=invalid-or-too-long\n", level.mapname);
+		SG_SetupFailure("compact-path", false);
+		return false;
 	}
-	if (sidecars.defense)
+	compact_result = SG_RuneCompactProductionInit(&sg_compact_production);
+	if (compact_result.status == SG_RUNE_COMPACT_PRODUCTION_OK)
+		compact_result = SG_RuneCompactProductionLoad(&sg_compact_production,
+			compact_path);
+	if (compact_result.status != SG_RUNE_COMPACT_PRODUCTION_OK)
 	{
-		size_t plane_size = (size_t)candidate->hdr.num_seeds;
-
-		/* Decode already proves the exact DPO shape. Keep this boundary
-		 * defensive so no future loader can hand field construction a partial
-		 * or transposed candidate. */
-		if (sidecars.defense_size != plane_size * SG_DPO_PLANE_COUNT)
-		{
-			sg_host.dprint("slipgate: sidecar DPO ignored stage=integration "
-			               "diagnostic=SCD_INTERNAL_ERROR\n");
-			Sidecar_LevelDeallocate(NULL, sidecars.defense);
-			sidecars.defense = NULL;
-			sidecars.defense_size = 0;
-		}
-		else
-		{
-			field_inputs.dpo[SG_DPO_POST_RED] = sidecars.defense;
-			field_inputs.dpo[SG_DPO_POST_BLUE] =
-				sidecars.defense + plane_size;
-			field_inputs.dpo[SG_DPO_INTERCEPT_RED] =
-				sidecars.defense + plane_size * 2U;
-			field_inputs.dpo[SG_DPO_INTERCEPT_BLUE] =
-				sidecars.defense + plane_size * 3U;
-		}
+		sg_host.dprint("slipgate: compact rune rejected map=%s stage=%s "
+			"artifact=%s artifact_stage=%u wire=%s host=%s(%s) runtime=%s "
+			"os_error=%d\n", level.mapname,
+			SG_RuneCompactProductionStatusString(compact_result.status),
+			SG_RuneCompactArtifactLoadDiagnosticString(
+				compact_result.artifact.diagnostic),
+			(unsigned int)compact_result.artifact.stage,
+			SG_RuneCompactWireErrorString(
+				compact_result.artifact.wire_error.code),
+			SG_HostLawStatusString(compact_result.host.status),
+			SG_HostLawFieldString(compact_result.host.field),
+			SG_CompactRuntimeLevelStatusString(compact_result.runtime),
+			compact_result.artifact.os_error);
+		SG_SetupFailure("compact-load", true);
+		SG_RuneCompactProductionClear(&sg_compact_production);
+		return false;
 	}
-	candidate_air = Air_Build(candidate);
-	if (!candidate_air)
-	{
-		sg_host.dprint("slipgate: air-index setup failed; disabled until "
-		               "the next level\n");
-		sg_setup_failed = true;
-		SG_SetupFailure("air-index", false);
-		goto fail;
-	}
-	if (!SG_TimedVaultEgressScopeBegin(candidate->seeds,
-	        candidate->hdr.num_seeds, candidate->links,
-	        candidate->hdr.num_links))
-	{
-		sg_host.dprint("slipgate: timed-vault water escape setup failed\n");
-		sg_setup_failed = true;
-		SG_SetupFailure("timed-vault", false);
-		goto fail;
-	}
-	/* Fields_Setup writes sg_fields while consuming only the local candidate.
-	 * Those fields are not usable until sg_rune is published below; every
-	 * failure path zeros the structure before releasing the candidate. */
-	if (!Fields_Setup(candidate, &field_inputs))
-	{
-		sg_host.dprint("slipgate: field setup failed (no flags?); "
-		               "disabled until the next level\n");
-		sg_host.flush();
-		sg_setup_failed = true;
-		SG_SetupFailure("fields", false);
-		goto fail;
-	}
-	fields_ready = true;
-	if (!SG_RuneAuthorityCapture(candidate->artifact.identity.map_name,
-	    &active) ||
-	    !SG_RuneAuthorityMatchesArtifact(&active, &candidate->artifact))
-	{
-		sg_host.dprint("slipgate: field setup discarded: active identity or "
-		               "proof law drifted before publication\n");
-		sg_setup_failed = true;
-		SG_SetupFailure("authority-recheck", false);
-		goto fail;
-	}
-	{
-		sg_compound_publication_result_t compound_result =
-			SG_CompoundPublicationRevalidate(candidate);
-
-		if (compound_result.status != SG_COMPOUND_PUBLICATION_OK)
-		{
-			sg_host.dprint("slipgate: compound publication discarded: "
-			               "status=%s index=%u\n",
-			               SG_CompoundPublicationStatusName(
-			                   compound_result.status),
-			               (unsigned int)compound_result.link_index);
-			sg_setup_failed = true;
-			SG_SetupFailure("compound-publication", false);
-			goto fail;
-		}
-	}
-	/* Rebind at the publication boundary as one transaction.  A failed
-	 * incarnation or topology check leaves sg_rune unpublished and follows the
-	 * ordinary candidate cleanup path. */
-	if (!SG_RuneMechanismBindingsReady(candidate,
-	        &mechanism_failure_index))
-	{
-		sg_host.dprint("slipgate: mechanism publication discarded: index=%u\n",
-		    (unsigned int)mechanism_failure_index);
-		sg_setup_failed = true;
-		SG_SetupFailure("mechanism-publication", false);
-		goto fail;
-	}
-
-	/* This is the sole synchronous publication transaction.  Danger_Publish
-	 * requires SG_Rune() identity, so expose the candidate only within this
-	 * call and roll it back before any frame can observe a failure. */
-	sg_rune = candidate;
-	candidate = NULL;
-	if (!Danger_Publish(sg_rune,
-		sidecars.danger_loaded ? sidecars.danger_red : NULL,
-		sidecars.danger_loaded ? sidecars.danger_blue : NULL,
-		sidecars.danger_loaded ? (size_t)sg_rune->hdr.num_seeds : 0,
-		sidecars.danger_persistence))
-	{
-		sg_host.dprint("slipgate: danger publication failed; disabled until "
-			"the next level\n");
-		candidate = sg_rune;
-		sg_rune = NULL;
-		sg_setup_failed = true;
-		SG_SetupFailure("danger-publication", false);
-		goto fail;
-	}
-	sg_airnext = candidate_air;
-	candidate_air = NULL;
-	sg_human_use = sidecars.human;
-	sidecars.human = NULL;
-	sg_human_live = sidecars.flag_live;
-	sidecars.flag_live = NULL;
-	sg_human_escape = sidecars.escape;
-	sidecars.escape = NULL;
-	sg_defense_payload = sidecars.defense;
-	sidecars.defense = NULL;
-	if (sg_defense_payload)
-	{
-		size_t plane_size = (size_t)sg_rune->hdr.num_seeds;
-
-		sg_def_post[0] = sg_defense_payload;
-		sg_def_post[1] = sg_defense_payload + plane_size;
-		sg_def_icept[0] = sg_defense_payload + plane_size * 2U;
-		sg_def_icept[1] = sg_defense_payload + plane_size * 3U;
-	}
-	memcpy(sg_rune_map, sg_rune->artifact.identity.map_name,
-	    sizeof(sg_rune_map));
-	if (sg_human_use)
-		Sidecar_LogPublished(game_directory, SG_SIDECAR_HUMAN, sg_rune,
-			sidecars.human_size);
-	if (sg_human_live)
-		Sidecar_LogPublished(game_directory, SG_SIDECAR_FLAG_LIVE, sg_rune,
-			sidecars.flag_live_size);
-	if (sg_human_escape)
-		Sidecar_LogPublished(game_directory, SG_SIDECAR_ESCAPE, sg_rune,
-			sidecars.escape_size);
-	if (sg_defense_payload)
-		Sidecar_LogPublished(game_directory, SG_SIDECAR_DEFENSE, sg_rune,
-			sidecars.defense_size);
-	if (sidecars.danger_loaded)
-		Sidecar_LogPublished(game_directory, SG_SIDECAR_DANGER, sg_rune,
-			sidecars.danger_size);
-	Sidecar_LevelDeallocate(NULL, sidecars.danger);
-	Sidecar_LevelDeallocate(NULL, sidecars.danger_red);
-	Sidecar_LevelDeallocate(NULL, sidecars.danger_blue);
-	sidecars.danger = NULL;
-	sidecars.danger_red = NULL;
-	sidecars.danger_blue = NULL;
-	Escape_Load(sg_rune_map); /* map-keyed configuration, not a graph sidecar */
+	memcpy(sg_rune_map, level.mapname, sizeof(sg_rune_map));
+	sg_rune_map[sizeof(sg_rune_map) - 1U] = '\0';
 	Caco_Reset();
+	{
+		const sg_rune_compact_model_t *compact_model =
+			SG_RuneCompactProductionModel(&sg_compact_production);
 
-	sg_host.dprint("slipgate: route contract %s\n",
-	    sg_rune->artifact.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY
-	        ? "local-only" : "complete");
-	sg_host.dprint("slipgate: objective roots red=%d blue=%d\n",
-	               sg_fields.red_flag_seed, sg_fields.blue_flag_seed);
-	sg_host.dprint("slipgate: rune ready %s, %d seeds, %d links, "
-	               "%u mechanism nodes, %u plans, gravity %.0f, all fields "
-	               "up\n", sg_rune->artifact.identity.map_name,
-	               sg_rune->hdr.num_seeds, sg_rune->hdr.num_links,
-	               (unsigned int)sg_rune->artifact.num_mechanism_nodes,
-	               (unsigned int)sg_rune->artifact.num_mechanism_plans,
-	               sg_rune->artifact.identity.gravity);
+		sg_host.dprint("slipgate: compact rune ready %s, %u cells, %u portals, "
+			"%u movement fibers, %u weapon kernels\n", level.mapname,
+			(unsigned int)compact_model->cell_count,
+			(unsigned int)compact_model->portal_count,
+			(unsigned int)compact_model->movement_fiber_count,
+			(unsigned int)compact_model->weapon_kernel_count);
+	}
 	return true;
 
-fail:
-	SG_TimedVaultEgressScopeEnd();
-	Danger_PersistenceRelease();
-	Danger_ResetLevel();
-	Sidecar_CandidatesRelease(&sidecars);
-	if (candidate_air)
-		sg_host.level_free(candidate_air);
-	Rune_Free(candidate);
-	/* Fields allocations are TAG_LEVEL and remain owned by the level allocator;
-	 * clearing every published pointer makes the failed attempt unusable and the
-	 * setup-failure latch prevents repeated allocation until teardown. */
-	if (fields_ready || sg_setup_failed)
-		memset(&sg_fields, 0, sizeof(sg_fields));
-	sg_airnext = NULL;
-	return false;
 }
 
 static qboolean SG_LevelSetupWithSource(const char *source)
@@ -1595,9 +631,9 @@ qboolean SG_LevelSetup(void)
 
 void SG_LevelSetupAfterRuneWrite(void)
 {
-	if (sg_rune)
+	if (SG_RuneCompactProductionCurrent(&sg_compact_production))
 	{
-		sg_host.dprint("slipgate: rune written; active rune remains in effect "
+		sg_host.dprint("slipgate: compact rune written; active rune remains in effect "
 		               "until the next map setup\n");
 		if (sg_host.flush)
 			sg_host.flush();
@@ -1606,6 +642,84 @@ void SG_LevelSetupAfterRuneWrite(void)
 
 	sg_autoload_attempted = true;
 	(void)SG_LevelSetupWithSource("write");
+}
+
+/* This is intentionally a narrow engine-owned translation of recorder facts.
+ * A PMove record names an exact compact cell and its measured command time;
+ * it may refine the cost of an already verified walking capability there.  A
+ * hook event does not name a compact landing, weapon response, or strategic
+ * outcome, so it is skipped rather than guessed.  The consumer rejects any
+ * future engine mapping that names a fact outside this immutable model. */
+static sg_rune_compact_learning_consumer_validation_t
+SG_CompactLearningValidate(void *context, const sg_rune_compact_model_t *model,
+	const sg_human_trace_v3_segment_ref_t *segment,
+	const sg_human_trace_v3_event_t *event,
+	sg_rune_compact_learning_consumer_claim_t *claim_out)
+{
+	sg_rune_q8_vec3_t point;
+	sg_rune_compact_location_t location;
+	uint32_t capability_index;
+	uint32_t axis;
+
+	(void)context;
+	(void)segment;
+	if (model == NULL || event == NULL || claim_out == NULL)
+		return SG_RUNE_COMPACT_LEARNING_CONSUMER_VALIDATION_FATAL;
+	if (event->kind != SG_HUMAN_TRACE_V3_EVENT_STEP ||
+		event->command_msec == 0U)
+		return SG_RUNE_COMPACT_LEARNING_CONSUMER_VALIDATION_SKIP;
+	if (event->grounded != 1U || event->step_evidence !=
+		SG_HUMAN_TRACE_V3_STEP_EVIDENCE_ORDINARY_DRY_WALK)
+		return SG_RUNE_COMPACT_LEARNING_CONSUMER_VALIDATION_SKIP;
+	for (axis = 0U; axis < 3U; axis++)
+		point.value[axis] = (int32_t)event->after_origin[axis];
+	if (SG_RuneCompactLocalize(model, &point, &location) !=
+		SG_RUNE_COMPACT_LOCALIZE_OK ||
+		(location.valid_stances & SG_RUNE_STANCE_VALID_STANDING) == 0U)
+		return SG_RUNE_COMPACT_LEARNING_CONSUMER_VALIDATION_SKIP;
+	for (capability_index = 0U;
+		capability_index < model->movement_capability_count;
+		capability_index++)
+	{
+		const sg_rune_movement_capability_t *capability =
+			&model->movement_capabilities[capability_index];
+
+		if (capability->cell.value != location.cell.value ||
+			capability->kind != SG_RUNE_MOVEMENT_CAPABILITY_WALK ||
+			(capability->source_stances & SG_RUNE_STANCE_VALID_STANDING) == 0U)
+			continue;
+		memset(claim_out, 0, sizeof(*claim_out));
+		claim_out->key.kind =
+			SG_RUNE_COMPACT_LEARNING_STABLE_CELL_CAPABILITY_COST;
+		claim_out->key.value.cost.cell = location.cell;
+		claim_out->key.value.cost.capability.value = capability_index;
+		claim_out->key.value.cost.stance = SG_RUNE_STANCE_VALID_STANDING;
+		claim_out->value = (float)event->command_msec / 1000.0f;
+		return SG_RUNE_COMPACT_LEARNING_CONSUMER_VALIDATION_ACCEPT;
+	}
+	return SG_RUNE_COMPACT_LEARNING_CONSUMER_VALIDATION_SKIP;
+}
+
+void SG_CompactProductionPostMatchLearning(void)
+{
+	sg_rune_compact_learning_consumer_report_t report;
+	sg_rune_compact_learning_consumer_status_t status;
+
+	if (!SG_RuneCompactProductionCurrent(&sg_compact_production))
+		return;
+	memset(&report, 0, sizeof(report));
+	status = SG_RuneCompactLearningProductionIngest(
+		&sg_compact_production, level.mapname, SG_CompactLearningValidate,
+		NULL, &report);
+	if (status != SG_RUNE_COMPACT_LEARNING_CONSUMER_OK)
+		sg_host.dprint("slipgate: compact learning rejected map=%s status=%s\n",
+			level.mapname,
+			SG_RuneCompactLearningConsumerStatusString(status));
+}
+
+uint32_t SG_CompactProductionLearningPriorCount(void)
+{
+	return SG_RuneCompactLearningProductionPriorCount(&sg_compact_production);
 }
 
 /* ----------------------------------------------------------------- body */
@@ -1953,33 +1067,6 @@ static int StrikeFieldCost(const int *field, int seed)
 	return field[seed];
 }
 
-/* A local-only graph deliberately has no proved route across one objective
- * cut.  Keep every ordinary role field while it is reachable; only replace an
- * infinite selection with the authenticated union field.  This prevents a
- * missing flag closure from masquerading as lost localization while never
- * implying an edge between the retained components. */
-static qboolean RouteLocalNormalize(sg_bot_t *bot, sg_think_t *tc)
-{
-	const int *local;
-
-	if (!bot || !tc || !SG_Rune() ||
-	    SG_Rune()->artifact.route_contract != RUNE_ROUTE_CONTRACT_LOCAL_ONLY ||
-	    SG_BotLocalizationCell(bot) < 0 || SG_BotLocalizationCell(bot) >= SG_Rune()->hdr.num_seeds ||
-	    !tc->goal_field || tc->goal_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
-		return false;
-	local = sg_fields.to_local_objective;
-	if (!local || local[SG_BotLocalizationCell(bot)] >= SG_FIELD_INF)
-		return false;
-	tc->goal_field = local;
-	tc->route_field = local;
-	tc->route_pure = true;
-	tc->scoop_mission = false;
-	tc->rune_handoff_route = false;
-	tc->mega = 0.0f;
-	bot->last_goalcost = local[SG_BotLocalizationCell(bot)];
-	return true;
-}
-
 static qboolean StrikeAttackEligible(sg_role_t role, qboolean carrying,
 	int ordered_role)
 {
@@ -2238,7 +1325,7 @@ static void StrikePrepareFrame(void)
 			input->carrier_distance = VectorLength(delta);
 			input->carrier_screen_clear = SG_StrikeCarrierScreenClear(
 			    SG_CanSee(ent, carriers[bot_team_index]->s.origin,
-			        carriers[bot_team_index]->viewheight),
+				        (float)carriers[bot_team_index]->viewheight),
 			        StrikeFieldCost(home_field, seed),
 			        StrikeFieldCost(home_field,
 			            sg_caco_team_belief.carrier[bot_team_index].seed));
@@ -2328,14 +1415,33 @@ sg_strike_duty_t SG_StrikeDutySnapshot(const sg_bot_t *bot)
 	return SG_STRIKE_DUTY_NONE;
 }
 
-static sg_role_t StrikeRoleForBot(const sg_bot_t *bot, qboolean carrying)
+static sg_role_t StrikeRoleForBot(sg_bot_t *bot, qboolean carrying)
 {
 	int slot = bot ? (int)(bot - sg_bots) : -1;
 
 	if (slot >= 0 && slot < SG_MAXBOTS && sg_strike_frame_ready &&
 	    sg_strike_role_valid[slot])
 		return sg_strike_role_cache[slot];
-	return SG_Role((sg_bot_t *)bot, carrying);
+	return SG_Role(bot, carrying);
+}
+
+static sg_role_t CompactRoleForBot(sg_bot_t *bot, qboolean carrying)
+{
+	int forced;
+
+	if (!bot || !bot->ent)
+		return SG_ROLE_ATTACK;
+	if (carrying)
+		return SG_ROLE_CARRY;
+	forced = SG_ChatOrderedRole(bot->ent);
+	if (forced >= 0 &&
+	    (forced != SG_ROLE_ESCORT || SG_ChatEscortTarget(bot->ent)))
+	{
+		if (forced == SG_ROLE_DEFEND)
+			bot->def_stand = true;
+		return (sg_role_t)forced;
+	}
+	return SG_ROLE_ATTACK;
 }
 
 static uint64_t StrategyNowMs(void)
@@ -2347,6 +1453,142 @@ static uint64_t StrategyNowMs(void)
 	if (milliseconds >= (double)UINT64_MAX - 1.0)
 		return UINT64_MAX;
 	return (uint64_t)milliseconds + 1U;
+}
+
+static edict_t *StrategyCarrierEntity(
+	const sg_destination_carrier_ref_t *carrier)
+{
+	edict_t *entity;
+	int client;
+
+	if (!carrier || (carrier->team != CTF_TEAM_RED &&
+	    carrier->team != CTF_TEAM_BLUE))
+		return NULL;
+	if (carrier->selector == SG_DESTINATION_CARRIER_EXACT)
+	{
+		if (carrier->client_id >= (uint16_t)game.maxclients)
+			return NULL;
+		entity = &g_edicts[(int)carrier->client_id + 1];
+		return entity->inuse && entity->client &&
+			entity->client->ctf.teamnum == carrier->team &&
+			ClientHasFlag(entity) != NULL ? entity : NULL;
+	}
+	if (carrier->selector != SG_DESTINATION_CARRIER_ANY)
+		return NULL;
+	for (client = 0; client < game.maxclients; client++)
+	{
+		entity = &g_edicts[client + 1];
+		if (entity->inuse && entity->client &&
+		    entity->client->ctf.teamnum == carrier->team &&
+		    ClientHasFlag(entity) != NULL)
+			return entity;
+	}
+	return NULL;
+}
+
+static int StrategyTeamCarrierPresent(int team)
+{
+	sg_destination_carrier_ref_t carrier;
+
+	memset(&carrier, 0, sizeof(carrier));
+	carrier.team = (uint8_t)team;
+	carrier.selector = SG_DESTINATION_CARRIER_ANY;
+	carrier.client_id = UINT16_MAX;
+	return StrategyCarrierEntity(&carrier) != NULL;
+}
+
+static int StrategyExecutionLivePose(const sg_destination_ref_t *destination,
+	const sg_compact_localized_state_t *localized_player,
+	sg_rune_compact_field_service_live_pose_t *pose_out)
+{
+	edict_t *entity = NULL;
+	uint32_t axis;
+
+	if (!destination || !localized_player || !pose_out)
+		return 0;
+	memset(pose_out, 0, sizeof(*pose_out));
+	switch (destination->kind)
+	{
+	case SG_DESTINATION_FLAG:
+		if (destination->value.flag.location == SG_DESTINATION_FLAG_HOME)
+			return 1;
+		if (destination->value.flag.location != SG_DESTINATION_FLAG_CURRENT)
+			return 0;
+		entity = ctf_flagsearch(destination->value.flag.team);
+		if (entity != NULL && SG_FlagCarrier(entity) != NULL)
+			entity = SG_FlagCarrier(entity);
+		break;
+	case SG_DESTINATION_CARRIER:
+	case SG_DESTINATION_ESCORT:
+	case SG_DESTINATION_INTERCEPT:
+		entity = StrategyCarrierEntity(&destination->value.carrier);
+		break;
+	case SG_DESTINATION_LEARNED_POINT:
+	case SG_DESTINATION_WAYPOINT:
+		/* These semantic kinds require an owner-specific current observation.
+		 * This host does not issue either kind, so fail closed if one appears. */
+		return 0;
+	case SG_DESTINATION_ITEM:
+	case SG_DESTINATION_WEAPON:
+	case SG_DESTINATION_ARMOR:
+	case SG_DESTINATION_POWERUP:
+	case SG_DESTINATION_DEFENSIVE_POST:
+		return 1;
+	case SG_DESTINATION_KIND_COUNT:
+	default:
+		return 0;
+	}
+	if (!entity || !entity->inuse || localized_player->frame_sequence == 0U ||
+	    localized_player->localized_at_ms == 0U)
+		return 0;
+	pose_out->present = 1U;
+	pose_out->generation = localized_player->frame_sequence;
+	pose_out->observed_at_ms = localized_player->localized_at_ms;
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		pose_out->position[axis] = entity->s.origin[axis];
+		pose_out->velocity[axis] = entity->velocity[axis];
+	}
+	return 1;
+}
+
+static int StrategyPopulateExecutionPoses(
+	sg_strategy_runtime_plan_request_t *request)
+{
+	uint16_t execution_index;
+
+	if (!request || !request->localized_player)
+		return 0;
+	for (execution_index = 0U; execution_index < request->execution_count;
+	     execution_index++)
+	{
+		sg_strategy_runtime_execution_t *execution =
+			&request->executions[execution_index];
+		const sg_destination_ref_t *destination = NULL;
+		uint16_t goal_index;
+
+		for (goal_index = 0U; goal_index < request->spec.goal_count; goal_index++)
+		{
+			const sg_strategy_goal_spec_t *goal =
+				&request->spec.goals[goal_index];
+			uint8_t choice_index;
+
+			if (goal->id != execution->goal_id)
+				continue;
+			for (choice_index = 0U; choice_index < goal->choice_count;
+			     choice_index++)
+				if (goal->choices[choice_index].id == execution->target_id)
+				{
+					if (destination != NULL)
+						return 0;
+					destination = &goal->choices[choice_index].destination;
+				}
+		}
+		if (!destination || !StrategyExecutionLivePose(destination,
+			request->localized_player, &execution->live_pose))
+			return 0;
+	}
+	return 1;
 }
 
 static uint64_t StrategyCommitmentWord(uint64_t hash, uint64_t word)
@@ -2393,17 +1635,9 @@ static void StrategyPointDestination(sg_destination_ref_t *destination,
 		destination->value.point.point_id = semantic_id;
 }
 
-#define SG_STRATEGY_WEAPON_PREPARATION_GOAL_ID UINT32_C(1)
-#define SG_STRATEGY_ARMOR_PREPARATION_GOAL_ID UINT32_C(2)
-#define SG_STRATEGY_SUPPLY_PREPARATION_GOAL_ID UINT32_C(3)
-#define SG_STRATEGY_LEAD_PREPARATION_GOAL_ID UINT32_C(4)
-#define SG_STRATEGY_PRIMARY_GOAL_ID UINT32_C(5)
-#define SG_STRATEGY_WEAPON_PREPARATION_TARGET_ID UINT32_C(1)
-#define SG_STRATEGY_ARMOR_PREPARATION_TARGET_ID UINT32_C(2)
-#define SG_STRATEGY_SUPPLY_PREPARATION_TARGET_ID UINT32_C(3)
-#define SG_STRATEGY_LEAD_PREPARATION_TARGET_ID UINT32_C(4)
-#define SG_STRATEGY_PRIMARY_TARGET_ID UINT32_C(5)
-#define SG_STRATEGY_PRIMARY_ALTERNATE_TARGET_ID UINT32_C(6)
+#define SG_STRATEGY_PRIMARY_GOAL_ID UINT32_C(1)
+#define SG_STRATEGY_PRIMARY_TARGET_ID UINT32_C(1)
+#define SG_STRATEGY_PRIMARY_ALTERNATE_TARGET_ID UINT32_C(2)
 
 static uint64_t StrategyCommitmentDestination(uint64_t hash,
 	const sg_destination_ref_t *destination)
@@ -2547,39 +1781,11 @@ static int StrategyRequestChoice(sg_strategy_runtime_plan_request_t *request,
 	return 1;
 }
 
-static int StrategyAppendPreparation(
-	sg_strategy_runtime_plan_request_t *request,
-	sg_strategy_goal_id_t goal_id,
-	sg_strategy_goal_id_t *previous_goal_id,
-	sg_strategy_target_id_t target_id,
-	const sg_destination_ref_t *destination, int role)
-{
-	sg_strategy_goal_spec_t *goal;
-
-	if (!request || !previous_goal_id || target_id == 0U || !destination)
-		return 0;
-	goal = StrategyRequestGoal(request, goal_id,
-		SG_STRATEGY_GOAL_COLLECT_ITEM, INT16_C(100));
-	if (!goal || !StrategyRequestChoice(request, goal, target_id,
-		destination, role))
-		return 0;
-	goal->failure.try_alternatives = 0U;
-	if (*previous_goal_id != 0U)
-	{
-		goal->dependency_count = 1U;
-		goal->dependencies[0].goal_id = *previous_goal_id;
-		goal->dependencies[0].accept = SG_STRATEGY_DEPENDENCY_SETTLED;
-	}
-	*previous_goal_id = goal_id;
-	return 1;
-}
-
 static int StrategyPrimaryDestination(sg_bot_t *bot, sg_think_t *tc,
 	sg_strike_duty_t strike_duty, sg_strategy_goal_kind_t *kind_out,
 	sg_destination_ref_t *primary_out, sg_destination_ref_t *alternate_out,
 	int *has_alternate_out)
 {
-	const int *route_field;
 	int team;
 	int enemy;
 
@@ -2588,7 +1794,6 @@ static int StrategyPrimaryDestination(sg_bot_t *bot, sg_think_t *tc,
 		return 0;
 	team = tc->team;
 	enemy = SG_EnemyTeam(team);
-	route_field = tc->goal_field;
 	memset(primary_out, 0, sizeof(*primary_out));
 	memset(alternate_out, 0, sizeof(*alternate_out));
 	*has_alternate_out = 0;
@@ -2598,11 +1803,6 @@ static int StrategyPrimaryDestination(sg_bot_t *bot, sg_think_t *tc,
 		StrategyFlagDestination(primary_out, team, SG_DESTINATION_FLAG_HOME);
 		StrategyFlagDestination(alternate_out, team,
 			SG_DESTINATION_FLAG_CURRENT);
-	}
-	else if (tc->rune_handoff_route)
-	{
-		*kind_out = SG_STRATEGY_GOAL_ESCORT_CARRIER;
-		StrategyCarrierDestination(primary_out, SG_DESTINATION_ESCORT, team, -1);
 	}
 	else if (strike_duty == SG_STRIKE_DUTY_RECOVER ||
 	         tc->role == SG_ROLE_RECOVER)
@@ -2630,7 +1830,7 @@ static int StrategyPrimaryDestination(sg_bot_t *bot, sg_think_t *tc,
 		}
 	}
 	else if (tc->role == SG_ROLE_DEFEND &&
-	         route_field == sg_fields.to_icept[SG_TeamIdx(team)])
+	         StrategyTeamCarrierPresent(enemy))
 	{
 		*kind_out = SG_STRATEGY_GOAL_INTERCEPT_CARRIER;
 		StrategyCarrierDestination(primary_out, SG_DESTINATION_INTERCEPT,
@@ -2689,12 +1889,9 @@ static int StrategyPlanRequest(sg_bot_t *bot, sg_think_t *tc,
 	sg_strike_duty_t strike_duty, sg_strategy_runtime_plan_request_t *request)
 {
 	sg_strategy_goal_spec_t *primary;
-	sg_destination_ref_t preparation_destination;
 	sg_destination_ref_t primary_destination;
 	sg_destination_ref_t alternate_destination;
 	sg_strategy_goal_kind_t primary_kind;
-	sg_strategy_goal_id_t previous_goal_id = 0U;
-	int target_ent;
 	int has_alternate;
 
 	if (!bot || !tc || !request)
@@ -2702,74 +1899,6 @@ static int StrategyPlanRequest(sg_bot_t *bot, sg_think_t *tc,
 	memset(request, 0, sizeof(*request));
 	if (!StrategyPolicyAuthority(bot, tc, &request->authority))
 		return 0;
-	/* These preparations are an ordered queue, not an else-if selection.
-	 * Once admitted, later per-frame role policy cannot erase an earlier
-	 * terminal record; the reducer settles them in this exact dependency order. */
-	if (tc->strike_weapon_pursuit && bot->strike_weapon_target_ent >= 0)
-	{
-		target_ent = bot->strike_weapon_target_ent;
-		memset(&preparation_destination, 0, sizeof(preparation_destination));
-		preparation_destination.kind = SG_DESTINATION_WEAPON;
-		preparation_destination.value.item.item_id =
-			(uint64_t)(unsigned)target_ent + 1U;
-		if (!SG_StrikeWeaponTargetField(bot, NULL) ||
-		    !StrategyAppendPreparation(request,
-			SG_STRATEGY_WEAPON_PREPARATION_GOAL_ID, &previous_goal_id,
-			SG_STRATEGY_WEAPON_PREPARATION_TARGET_ID,
-			&preparation_destination, (int)tc->role))
-			return 0;
-	}
-	if (tc->collectible_item_field[SG_FC_ARMOR])
-	{
-		const int *armor_field;
-
-		armor_field = SG_CollectibleArmorTargetField(bot, &target_ent);
-		if (armor_field && target_ent > 0 && SG_BotLocalizationCell(bot) >= 0 &&
-		    SG_BotLocalizationCell(bot) < SG_Rune()->hdr.num_seeds &&
-		    armor_field[SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
-		{
-			memset(&preparation_destination, 0,
-				sizeof(preparation_destination));
-			preparation_destination.kind = SG_DESTINATION_ARMOR;
-			preparation_destination.value.item.item_id =
-				(uint64_t)(unsigned)target_ent + 1U;
-			if (!StrategyAppendPreparation(request,
-				SG_STRATEGY_ARMOR_PREPARATION_GOAL_ID, &previous_goal_id,
-				SG_STRATEGY_ARMOR_PREPARATION_TARGET_ID,
-				&preparation_destination, (int)tc->role))
-				return 0;
-		}
-	}
-	if (SG_DefenseSupplyActive(bot) &&
-	    bot->def_supply_phase == SG_DEF_SUPPLY_OUTBOUND &&
-	    bot->def_supply_ent >= 0)
-	{
-		target_ent = bot->def_supply_ent;
-		memset(&preparation_destination, 0, sizeof(preparation_destination));
-		preparation_destination.kind = SG_DESTINATION_WEAPON;
-		preparation_destination.value.item.item_id =
-			(uint64_t)(unsigned)target_ent + 1U;
-		if (!SG_DefenseSupplyTargetField(bot) ||
-		    !StrategyAppendPreparation(request,
-			SG_STRATEGY_SUPPLY_PREPARATION_GOAL_ID, &previous_goal_id,
-			SG_STRATEGY_SUPPLY_PREPARATION_TARGET_ID,
-			&preparation_destination, (int)tc->role))
-			return 0;
-	}
-	if (bot->lead_ent > 0)
-	{
-		target_ent = bot->lead_ent;
-		memset(&preparation_destination, 0, sizeof(preparation_destination));
-		preparation_destination.kind = SG_DESTINATION_POWERUP;
-		preparation_destination.value.item.item_id =
-			(uint64_t)(unsigned)target_ent + 1U;
-		if (!Lead_Field(bot, tc->role, tc->carrying,
-			SG_ChatOrderedRole(tc->e)) || !StrategyAppendPreparation(request,
-			SG_STRATEGY_LEAD_PREPARATION_GOAL_ID, &previous_goal_id,
-			SG_STRATEGY_LEAD_PREPARATION_TARGET_ID,
-			&preparation_destination, (int)tc->role))
-			return 0;
-	}
 	if (!StrategyPrimaryDestination(bot, tc, strike_duty, &primary_kind,
 		&primary_destination, &alternate_destination, &has_alternate))
 		return 0;
@@ -2779,12 +1908,6 @@ static int StrategyPlanRequest(sg_bot_t *bot, sg_think_t *tc,
 		SG_STRATEGY_PRIMARY_TARGET_ID,
 		&primary_destination, (int)tc->role))
 		return 0;
-	if (previous_goal_id != 0U)
-	{
-		primary->dependency_count = 1U;
-		primary->dependencies[0].goal_id = previous_goal_id;
-		primary->dependencies[0].accept = SG_STRATEGY_DEPENDENCY_SETTLED;
-	}
 	if (has_alternate && !StrategyRequestChoice(request, primary,
 		SG_STRATEGY_PRIMARY_ALTERNATE_TARGET_ID,
 		&alternate_destination, (int)tc->role))
@@ -2804,7 +1927,7 @@ static int StrategyAuthorityEqual(
 
 /* Refresh an admitted plan without importing legacy execution data.  The
  * destination-field authority re-resolves every retained semantic target and
- * owns the resulting field pointer; settled prerequisites therefore remain
+ * leases the resulting compact field handle; settled prerequisites remain
  * committed while the next goal activates. */
 static int StrategyActivePlanRequest(const sg_strategy_caller_t *caller,
 	sg_strategy_runtime_plan_request_t *request)
@@ -3203,18 +2326,6 @@ static int StrategyFramePlanRequest(sg_bot_t *bot, sg_think_t *tc,
 	return StrategyPlanRequest(bot, tc, strike_duty, request);
 }
 
-static qboolean StrategyLegacyExecutionFallback(sg_think_t *tc)
-{
-	if (!tc || !tc->goal_field)
-		return false;
-	/* Destination authority is intentionally absent while the authenticated
-	 * field/localization provider is dependency-blocked.  Keep the existing
-	 * legacy route moving, but never manufacture a typed binding from it. */
-	tc->strategy_plan_id = 0U;
-	tc->strategy_activation_id = 0U;
-	return true;
-}
-
 static sg_strategy_tactical_block_reason_t StrategyBlockReason(
 	const sg_bot_t *bot, const sg_think_t *tc)
 {
@@ -3227,46 +2338,6 @@ static sg_strategy_tactical_block_reason_t StrategyBlockReason(
 	            bot->air_hook_launch_active))
 		return SG_STRATEGY_BLOCK_HOOK_OPPORTUNITY;
 	return SG_STRATEGY_BLOCK_NONE;
-}
-
-static int StrategyPreparationStillLive(const sg_bot_t *bot,
-	const sg_think_t *tc, const sg_strategy_instruction_t *instruction)
-{
-	if (!bot || !tc || !instruction)
-		return 0;
-	switch (instruction->goal_id)
-	{
-	case SG_STRATEGY_WEAPON_PREPARATION_GOAL_ID:
-		return tc->strike_weapon_pursuit &&
-			bot->strike_weapon_target_ent >= 0 &&
-			instruction->destination.kind == SG_DESTINATION_WEAPON &&
-			instruction->destination.value.item.item_id ==
-				(uint64_t)(unsigned)bot->strike_weapon_target_ent + 1U;
-	case SG_STRATEGY_ARMOR_PREPARATION_GOAL_ID:
-	{
-		int target_ent = -1;
-
-		return SG_CollectibleArmorTargetField((sg_bot_t *)bot, &target_ent) &&
-			target_ent > 0 &&
-			instruction->destination.kind == SG_DESTINATION_ARMOR &&
-			instruction->destination.value.item.item_id ==
-				(uint64_t)(unsigned)target_ent + 1U;
-	}
-	case SG_STRATEGY_SUPPLY_PREPARATION_GOAL_ID:
-		return SG_DefenseSupplyActive(bot) &&
-			bot->def_supply_phase == SG_DEF_SUPPLY_OUTBOUND &&
-			bot->def_supply_ent >= 0 &&
-			instruction->destination.kind == SG_DESTINATION_WEAPON &&
-			instruction->destination.value.item.item_id ==
-				(uint64_t)(unsigned)bot->def_supply_ent + 1U;
-	case SG_STRATEGY_LEAD_PREPARATION_GOAL_ID:
-		return bot->lead_ent > 0 &&
-			instruction->destination.kind == SG_DESTINATION_POWERUP &&
-			instruction->destination.value.item.item_id ==
-				(uint64_t)(unsigned)bot->lead_ent + 1U;
-	default:
-		return 0;
-	}
 }
 
 static void StrategyAdvanceLiveGoal(sg_bot_t *bot, const sg_think_t *tc,
@@ -3297,8 +2368,6 @@ static void StrategyAdvanceLiveGoal(sg_bot_t *bot, const sg_think_t *tc,
 	switch (goal_kind)
 	{
 	case SG_STRATEGY_GOAL_COLLECT_ITEM:
-		if (!StrategyPreparationStillLive(bot, tc, instruction))
-			outcome = SG_STRATEGY_OUTCOME_COMPLETED;
 		break;
 	case SG_STRATEGY_GOAL_CAPTURE_FLAG:
 		if (tc->carrying)
@@ -3337,25 +2406,56 @@ static void StrategyAdvanceLiveGoal(sg_bot_t *bot, const sg_think_t *tc,
 }
 
 static qboolean StrategyCommitFrame(sg_bot_t *bot, sg_think_t *tc,
-	sg_strike_duty_t strike_duty)
+	sg_strike_duty_t strike_duty, sg_tactic_execution_t *execution_out,
+	qboolean *navigation_permitted_out, qboolean *owner_committed_out)
 {
 	sg_strategy_runtime_plan_request_t request;
+	sg_rune_compact_portal_snapshot_frame_t portal_snapshot;
+	const sg_compact_localized_state_t *localized_player;
+	const sg_strategy_runtime_bot_observation_t *plan_observation;
+	const sg_strategy_runtime_bot_observation_t *query_observation;
 	sg_strategy_caller_plan_t plan;
 	sg_strategy_caller_output_t output;
-	const int *legacy_field;
+	sg_strategy_caller_output_proof_t output_proof;
+	sg_strategy_runtime_caller_query_proof_t query_proof;
+	sg_rune_compact_field_result_t field_result;
+	sg_rune_compact_field_local_context_t local_context;
+	sg_tactic_runtime_step_input_t step_input;
+	const sg_rune_compact_model_t *model;
 	uint64_t now_ms;
 
-	if (!bot || !tc)
+	if (execution_out != NULL)
+		memset(execution_out, 0, sizeof(*execution_out));
+	if (navigation_permitted_out != NULL)
+		*navigation_permitted_out = false;
+	if (owner_committed_out != NULL)
+		*owner_committed_out = false;
+	if (!bot || !tc || !execution_out || !navigation_permitted_out ||
+		!owner_committed_out)
 		return false;
-	now_ms = StrategyNowMs();
 	memset(&plan, 0, sizeof(plan));
-	legacy_field = tc->goal_field;
-	if (!SG_StrategyRuntimeTargetProviderAvailable())
-		return StrategyLegacyExecutionFallback(tc);
-	StrategyAdvanceLiveGoal(bot, tc, now_ms);
-	if (!StrategyFramePlanRequest(bot, tc, strike_duty, &request) ||
-	    !(request.localized_player = SG_BotLocalizationCurrent(bot)) ||
-	    !SG_StrategyRuntimePlanResolve(&request, &plan))
+	if (!SG_StrategyRuntimeCompactProviderAvailable())
+	{
+		tc->strategy_plan_id = 0U;
+		tc->strategy_activation_id = 0U;
+		return false;
+	}
+	memset(&portal_snapshot, 0, sizeof(portal_snapshot));
+	if (!(localized_player = SG_BotLocalizationCurrent(bot)) ||
+	    !(plan_observation =
+		SG_BotLocalizationStrategyObservationIssue(bot, localized_player)) ||
+	    !StrategyFramePlanRequest(bot, tc, strike_duty, &request) ||
+	    !SG_RuneCompactProductionFrameSnapshot(&sg_compact_production,
+		localized_player->frame_sequence, &portal_snapshot))
+		return false;
+	now_ms = localized_player->localized_at_ms;
+	request.localized_player = localized_player;
+	request.mechanisms = portal_snapshot.mechanisms;
+	request.portal_roots = portal_snapshot.portal_roots;
+	request.bot_observation = plan_observation;
+	if (!StrategyPopulateExecutionPoses(&request))
+		return false;
+	if (!SG_StrategyRuntimePlanResolve(&request, &plan))
 		return false;
 	if (!SG_StrategyCallerSubmit(&bot->strategy, &plan, 1U, now_ms,
 		StrategyBlockReason(bot, tc), &output))
@@ -3363,30 +2463,156 @@ static qboolean StrategyCommitFrame(sg_bot_t *bot, sg_think_t *tc,
 		SG_StrategyCallerPlanDiscard(&plan);
 		return false;
 	}
-	if (!output.execution_field)
+	StrategyAdvanceLiveGoal(bot, tc, now_ms);
+	if (!SG_StrategyCallerPulse(&bot->strategy, 1U, now_ms,
+		StrategyBlockReason(bot, tc), &output))
 		return false;
-	tc->role = (sg_role_t)output.role;
-	tc->goal_field = output.execution_field;
-	tc->route_field = output.execution_field;
-	if (output.execution_field != legacy_field)
+	query_observation =
+		SG_BotLocalizationStrategyObservationIssue(bot, localized_player);
+	if (!query_observation)
+		return false;
+	if (!SG_StrategyRuntimeQueryCallerOutputWithContext(&bot->strategy,
+		&output, localized_player,
+		portal_snapshot.mechanisms, portal_snapshot.portal_roots,
+		query_observation, &field_result, &local_context, &output_proof,
+		&query_proof))
+		return false;
+	model = SG_RuneCompactFieldServiceModel(output.field_service);
+	if (field_result.kind == SG_RUNE_COMPACT_FIELD_STEP &&
+		output.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE)
 	{
-		tc->route_pure = false;
-		tc->rune_handoff_route = false;
-		tc->scoop_mission = false;
-		tc->strike_weapon_pursuit = false;
+		sg_tactic_execution_owner_t *execution_owner;
+		sg_tactic_execution_owner_status_t owner_status;
+		sg_tactic_execution_token_t token;
+		sg_tactic_execution_diagnostic_t diagnostic;
+
+		memset(&step_input, 0, sizeof(step_input));
+		step_input.model = model;
+		step_input.strategy_caller = &bot->strategy;
+		step_input.strategy_output = &output;
+		step_input.strategy_proof = &output_proof;
+		step_input.query_proof = &query_proof;
+		step_input.localized = localized_player;
+		step_input.local_context = &local_context;
+		step_input.field_result = &field_result;
+		execution_owner = SG_CompactRuntimeLevelExecutionOwner(
+			&sg_compact_production.runtime);
+		if (!execution_owner)
+		{
+			(void)SG_StrategyRuntimeCallerQueryProofRelease(&bot->strategy,
+				&output, &output_proof, &query_proof);
+			return false;
+		}
+		memset(&token, 0, sizeof(token));
+		memset(&diagnostic, 0, sizeof(diagnostic));
+		owner_status = SG_TacticExecutionOwnerPrepare(execution_owner,
+			&step_input, &token, &diagnostic);
+		if (owner_status == SG_TACTIC_EXECUTION_OWNER_OK)
+		{
+			owner_status = SG_TacticExecutionOwnerCommit(execution_owner,
+				&token, &diagnostic);
+			if (owner_status == SG_TACTIC_EXECUTION_OWNER_OK)
+				*owner_committed_out = true;
+		}
+		else
+			(void)SG_StrategyRuntimeCallerQueryProofRelease(&bot->strategy,
+				&output, &output_proof, &query_proof);
+		/* The sealed owner is the only STEP command authority.  Until a family
+		 * sealer is complete, Prepare fails before consuming the strategy proof
+		 * and this scalar dispatch remains diagnostic/holding only. */
+		if (!SG_TacticExecutionDispatch(model, &field_result, execution_out))
+			return false;
 	}
+	else
+	{
+		if (!SG_TacticExecutionDispatch(model, &field_result, execution_out))
+		{
+			(void)SG_StrategyRuntimeCallerQueryProofRelease(&bot->strategy,
+				&output, &output_proof, &query_proof);
+			return false;
+		}
+		if (!SG_StrategyRuntimeCallerQueryProofRelease(&bot->strategy,
+			&output, &output_proof, &query_proof))
+			return false;
+	}
+	tc->role = (sg_role_t)output.role;
 	tc->strategy_plan_id = output.plan_id;
 	tc->strategy_activation_id = output.activation_id;
+	/* The selector authenticates a capability and exact successor, but its
+	 * scalar result is not a body-command witness.  A STEP therefore keeps the
+	 * strategy commitment live without synthesizing usercmd motion or falling
+	 * through to the retired action-link descent path. */
+	*navigation_permitted_out = output.instruction.kind ==
+		SG_STRATEGY_INSTRUCTION_EXECUTE && field_result.kind !=
+		SG_RUNE_COMPACT_FIELD_STEP;
 	return true;
 }
 
 static void StrategyInterrupt(sg_bot_t *bot, qboolean alive,
 	sg_strategy_tactical_block_reason_t reason)
 {
+	const sg_compact_localized_state_t *localized;
 	sg_strategy_caller_output_t output;
+	uint64_t at_ms;
 
-	(void)SG_StrategyCallerPulse(&bot->strategy, alive ? 1U : 0U,
-		StrategyNowMs(), reason, &output);
+	localized = SG_BotLocalizationCurrent(bot);
+	at_ms = localized ? localized->localized_at_ms : StrategyNowMs();
+	if (!alive)
+		(void)SG_StrategyCallerRetireCurrentLife(&bot->strategy,
+			at_ms, &output);
+	else
+		(void)SG_StrategyCallerPulse(&bot->strategy, 1U, at_ms,
+			reason, &output);
+}
+
+static void CancelTacticSubject(const sg_localization_subject_t *subject)
+{
+	sg_tactic_execution_owner_t *execution_owner;
+
+	if (!subject || subject->reserved != 0U ||
+		subject->client_id == 0U || subject->client_id == UINT32_MAX ||
+		subject->spawn_generation == 0U)
+		return;
+	execution_owner = SG_CompactRuntimeLevelExecutionOwner(
+		&sg_compact_production.runtime);
+	if (execution_owner)
+		SG_TacticExecutionOwnerCancelSubject(execution_owner, subject);
+}
+
+void SG_CancelBotSlotTacticLife(sg_bot_t *bot)
+{
+	int slot;
+
+	if (!bot)
+		return;
+	for (slot = 0; slot < SG_MAXBOTS; slot++)
+	{
+		if (bot != &sg_bots[slot])
+			continue;
+		CancelTacticSubject(&bot->localization_subject);
+		return;
+	}
+}
+
+void SG_CancelCurrentBotTacticLife(edict_t *ent)
+{
+	const sg_localization_subject_t *subject;
+	int slot;
+
+	if (!ent || !ent->client || ent->s.number <= 0 ||
+		!SG_OwnsBot(ent) || ent->client->ctf.ctfid == 0U)
+		return;
+	for (slot = 0; slot < SG_MAXBOTS; slot++)
+	{
+		if (!sg_bots[slot].active || sg_bots[slot].ent != ent)
+			continue;
+		subject = &sg_bots[slot].localization_subject;
+		if (subject->client_id != (uint32_t)ent->s.number ||
+			subject->spawn_generation != ent->client->ctf.ctfid)
+			return;
+		SG_CancelBotSlotTacticLife(&sg_bots[slot]);
+		return;
+	}
 }
 
 
@@ -3598,20 +2824,23 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd,
 	qboolean allow_command)
 {
+	sg_tactic_execution_owner_t *execution_owner;
+	const sg_compact_localized_state_t *localized;
+
 	if (!e->deadflag)
 		return false;
+	execution_owner = SG_CompactRuntimeLevelExecutionOwner(
+		&sg_compact_production.runtime);
+	localized = SG_BotLocalizationCurrent(bot);
+	if (execution_owner && localized)
+		SG_TacticExecutionOwnerCancelSubject(execution_owner,
+			&localized->subject);
 	StrategyInterrupt(bot, false, SG_STRATEGY_BLOCK_CONTROLLER);
 
-	/* my own death, at my own seed: the most honest sighting there
-	 * is, and the danger dimension's only teacher */
 	if (!bot->death_taught)
 	{
-		/* Intermission is scoreboard time, not active play.  A corpse that is
-		 * first observed there must not teach persisted danger from time in
-		 * which navigation and combat are frozen. */
 		if (!level.intermissiontime && SG_BotLocalizationCell(bot) >= 0)
 		{
-			Danger_Learn(e->client->ctf.teamnum, SG_BotLocalizationCell(bot));
 			Tilt_Note(e, bot);  /* the same death, remembered personally */
 		}
 			Bot_ResetLifeActions(bot);
@@ -3912,6 +3141,121 @@ static qboolean Bot_DeclaredDoorGuardRestore(sg_bot_t *bot)
 	return true;
 }
 
+static short CompactTacticMove(float value)
+{
+	if (!isfinite(value))
+		return 0;
+	if (value > 400.0f)
+		value = 400.0f;
+	else if (value < -400.0f)
+		value = -400.0f;
+	return (short)lrintf(value);
+}
+
+static qboolean CompactTacticTarget(const sg_tactic_execution_t *execution,
+	vec3_t target_out)
+{
+	int axis;
+
+	if (!execution || !target_out)
+		return false;
+	if (execution->kind != SG_TACTIC_EXECUTION_LOCAL_DESTINATION ||
+	    execution->destination.kind != SG_RUNE_COMPACT_DESTINATION_POINT)
+		return false;
+	for (axis = 0; axis < 3; axis++)
+		target_out[axis] =
+			(float)execution->destination.value.point.value[axis] / 8.0f;
+	return true;
+}
+
+/* This is the sole unsealed compact command boundary. Typed transitions,
+ * temporary blocks, and mechanism requirements retain the strategy lease
+ * while emitting no navigation; they cannot fall through into a legacy
+ * action-link controller. Only a terminal local point is plain steering. */
+static void CompactTacticEmit(sg_bot_t *bot, edict_t *e,
+	const sg_tactic_execution_t *execution, qboolean navigation_permitted)
+{
+	usercmd_t cmd;
+	vec3_t target;
+	vec3_t direction;
+	qboolean have_target = false;
+	qboolean engaged = false;
+	float horizontal_length = 0.0f;
+	float navigation_yaw = 0.0f;
+	float command_yaw;
+	float command_radians;
+
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.msec = 100;
+	VectorClear(target);
+	VectorClear(direction);
+	if (navigation_permitted)
+		have_target = CompactTacticTarget(execution, target);
+	if (have_target)
+	{
+		VectorSubtract(target, e->s.origin, direction);
+		horizontal_length = sqrtf(direction[0] * direction[0] +
+			direction[1] * direction[1]);
+		if (!isfinite(horizontal_length) || horizontal_length <= 1.0f)
+			have_target = false;
+		else
+		{
+			direction[0] /= horizontal_length;
+			direction[1] /= horizontal_length;
+			navigation_yaw = atan2f(direction[1], direction[0]) *
+				180.0f / (float)M_PI;
+			cmd.angles[YAW] = (short)(ANGLE2SHORT(navigation_yaw) -
+				e->client->ps.pmove.delta_angles[YAW]);
+		}
+	}
+	SG_CombatFrame(e, &cmd, &engaged);
+	bot->engaged_last = engaged;
+	if (have_target)
+	{
+		command_yaw = (float)SHORT2ANGLE(((int)cmd.angles[YAW] +
+			e->client->ps.pmove.delta_angles[YAW]) & 65535);
+		command_radians = command_yaw * (float)M_PI / 180.0f;
+		cmd.forwardmove = CompactTacticMove(400.0f *
+			(direction[0] * cosf(command_radians) +
+			 direction[1] * sinf(command_radians)));
+		cmd.sidemove = CompactTacticMove(400.0f *
+			(direction[0] * sinf(command_radians) -
+			 direction[1] * cosf(command_radians)));
+	}
+	ClientThink(e, &cmd);
+}
+
+static void CompactBotThink(sg_bot_t *bot, edict_t *e)
+{
+	sg_tactic_execution_t execution;
+	sg_think_t tc;
+	qboolean navigation_permitted = false;
+	qboolean owner_committed = false;
+	qboolean carrying;
+
+	memset(&tc, 0, sizeof(tc));
+	tc.e = e;
+	tc.team = e->client->ctf.teamnum;
+	carrying = SG_BotCarrying(e);
+	tc.carrying = carrying;
+	tc.role = CompactRoleForBot(bot, carrying);
+	Caco_See(NULL, e);
+	Think_RespawnEdge(bot, e);
+	bot->death_taught = false;
+	if (e->waterlevel == 0)
+		bot->swim_air_seed = -1;
+	if (!StrategyCommitFrame(bot, &tc, SG_STRIKE_DUTY_NONE, &execution,
+		&navigation_permitted, &owner_committed))
+	{
+		memset(&execution, 0, sizeof(execution));
+		execution.kind = SG_TACTIC_EXECUTION_DISCONNECTED;
+	}
+	bot->last_role = (int)tc.role;
+	bot->was_carrying = carrying;
+	if (!owner_committed)
+		CompactTacticEmit(bot, e, &execution, navigation_permitted);
+}
+
 void SG_BotThink(sg_bot_t *bot)
 {
 	edict_t *e = bot->ent;
@@ -3920,6 +3264,7 @@ void SG_BotThink(sg_bot_t *bot)
 	int team, bestlink = -1;
 	qboolean carrying;
 	qboolean rune_compatible;
+	qboolean compact_current;
 	qboolean declared_door_guarded;
 	const sg_strike_team_t *strike_team = NULL;
 	const sg_strike_frame_t *strike_frame = NULL;
@@ -3955,9 +3300,10 @@ void SG_BotThink(sg_bot_t *bot)
 		return;
 	}
 
+	compact_current = SG_RuneCompactProductionCurrent(&sg_compact_production);
 	rune_compatible = SG_RunePhysicsCompatible(sg_rune);
 	declared_door_guarded = Bot_DeclaredDoorGuardAction(bot);
-	if (!rune_compatible && !declared_door_guarded)
+	if (!compact_current && !rune_compatible && !declared_door_guarded)
 		SG_BotLocalizationInvalidate(bot);
 	{
 		sg_compound_guard_run_t run_state;
@@ -4001,6 +3347,11 @@ void SG_BotThink(sg_bot_t *bot)
 	}
 	if (Think_Dead(bot, e, &tc.cmd, true))
 		return;
+	if (compact_current)
+	{
+		CompactBotThink(bot, e);
+		return;
+	}
 	if (!rune_compatible)
 	{
 		StrategyInterrupt(bot, true, SG_STRATEGY_BLOCK_CONTROLLER);
@@ -4289,7 +3640,6 @@ void SG_BotThink(sg_bot_t *bot)
 	/* Objective's tactical waypoint search calls Surface_At, so every pricing
 	 * input must exist before Objective—not be filled later by PickLink. */
 	tc.health = e->health;
-	tc.danger = Danger_Field(team);
 	tc.push = (role == SG_ROLE_ATTACK &&
 	           SG_TimerPending(sg_push_until[SG_TeamIdx(team)]));
 
@@ -4336,7 +3686,6 @@ void SG_BotThink(sg_bot_t *bot)
 		}
 	}
 	Think_Objective(bot, &tc);
-	(void)RouteLocalNormalize(bot, &tc);
 
 	/* Strike is a coordinator overlay, not a second role allocator.  It may
 	 * select the route owned by a duty (home, carrier, or enemy flag) while
@@ -4405,10 +3754,6 @@ void SG_BotThink(sg_bot_t *bot)
 			StrikeRetireGenericRail(bot, &tc);
 		}
 	}
-	(void)RouteLocalNormalize(bot, &tc);
-	if (!StrategyCommitFrame(bot, &tc, strike_duty))
-		return;
-	role = tc.role;
 	Think_TacticalRoute(bot, &tc);
 
 	goal_field = tc.goal_field;
@@ -4554,13 +3899,16 @@ void SG_RunFrame(void)
 	 * hooks.  TAG_LEVEL is already gone on this path, so every map pointer and
 	 * owner callback is stale when the time or map-name sentinel trips. */
 	if (SG_TimerPending(sg_last_frame_time) ||
-	    (sg_rune && strcmp(sg_rune_map, level.mapname) != 0))
+	    ((sg_rune || sg_compact_production.active != 0U) &&
+		strcmp(sg_rune_map, level.mapname) != 0))
 	{
 		/* This detector is a recovery path after the host has already retired
 		 * TAG_LEVEL.  Clear callback entrypoints and dangling plan leases without
 		 * calling back into the lost owner; the synchronous SpawnEntities and
 		 * ReadLevel paths perform the normal exact release. */
-		SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
+		if (sg_compact_production.runtime.execution_owner)
+			SG_TacticExecutionOwnerLost(
+				sg_compact_production.runtime.execution_owner);
 		for (i = 0; i < SG_MAXBOTS; i++)
 			SG_StrategyCallerOwnerLost(&sg_bots[i].strategy);
 		SG_LevelChange();
@@ -4594,12 +3942,6 @@ void SG_RunFrame(void)
 		sg_physics_warned = false;
 	}
 	SG_CombatWhy();
-	/* Persisted danger measures active play.  Intermission can last well past
-	 * the normal scoreboard delay (or indefinitely on an unattended server),
-	 * so aging here would erase learned evidence while every client is frozen. */
-	if (!level.intermissiontime)
-		Danger_Decay();
-
 	if (sg_rune)
 	{
 		/* A permanent action capability must cross the cached field boundary
@@ -4610,6 +3952,10 @@ void SG_RunFrame(void)
 		Caco_Frame(sg_rune);
 		Fields_Refresh(sg_rune);
 	}
+	/* Compact-only levels have no legacy seed table, but their sparse beliefs
+	 * still age each frame against the accepted compact provider. */
+	else if (SG_CacoCompactBeliefActive())
+		Caco_Frame(NULL);
 	Botfill_Frame();
 	/* the scoreline and the clock, before anybody decides a role from them */
 	Clock_Frame();
@@ -4664,34 +4010,45 @@ void SG_RunFrame(void)
 /* ---------------------------------------------------------------- spawn */
 
 
+void SG_CompactProductionStorageWillFree(void)
+{
+	int i;
+	sg_tactic_execution_owner_t *execution_owner;
+
+	/* Plans own field-service leases.  Retire all plans first, then revoke the
+	 * compact providers and finally destroy their borrowed decoded model. */
+	execution_owner = sg_compact_production.runtime.execution_owner;
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		if (execution_owner)
+			SG_TacticExecutionOwnerCancelSubject(execution_owner,
+				&sg_bots[i].localization_subject);
+		SG_StrategyCallerDestroy(&sg_bots[i].strategy);
+	}
+	SG_RuneCompactProductionClear(&sg_compact_production);
+}
+
 void SG_LevelChange(void)
 {
 	int i;
 
-	/* An authenticated runtime provider may borrow map-owned snapshot, field,
-	 * and localization storage.  Clear it before any level owner tears those
-	 * sources down; bot movement then fails closed until the next accepted
-	 * provider registers. */
-	SG_StrategyRuntimeTargetProviderSet(NULL, NULL, NULL, NULL, NULL, NULL);
 	/* Map teardown is a terminal owner in its own right. Finish before the
 	 * roster removal so the original map snapshot remains attached; slot reset
 	 * then sees a closed state and is intentionally idempotent. */
 	for (i = 0; i < SG_MAXBOTS; i++)
 		(void)SG_HookDiagnosticsFinish(&sg_bots[i].hook_diagnostics,
 		    "map-transition", "level-change");
-	/* Retire only the field-view leases while every field/localization owner is
-	 * still alive.  The later full slot reset remains behind the compound-guard
-	 * level fence and sees an already empty, idempotent strategy caller. */
-	for (i = 0; i < SG_MAXBOTS; i++)
-		SG_StrategyCallerDestroy(&sg_bots[i].strategy);
-	(void)SG_BotLocalizationProviderSet(NULL);
+	if (sg_compact_production.runtime.execution_owner)
+		SG_TacticExecutionOwnerCancelAll(
+			sg_compact_production.runtime.execution_owner);
+	/* The later full slot reset remains behind the compound-guard level fence
+	 * and sees an already empty, idempotent strategy caller. */
+	SG_CompactProductionStorageWillFree();
 	SG_RuneSourceAuthorityReset();
 	SG_HostLawProductionReset();
 	SG_ButtonExecutionLevelReset();
 	SG_TimedVaultEgressScopeEnd();
 	(void)SG_CompoundGuardGameLevelReset();
-	/* The fallback transition path must be as fail-closed as SpawnEntities. */
-	SG_DangerPersistenceReset();
 	SG_LevelIdentityReset();
 	/* SpawnEntities calls this before TAG_LEVEL/edict teardown. Remove fake
 	 * clients through the real disconnect path while their objective state is
@@ -4716,8 +4073,6 @@ void SG_LevelChange(void)
 	sg_human_escape = NULL;
 	sg_def_post[0] = sg_def_post[1] = NULL;
 	sg_def_icept[0] = sg_def_icept[1] = NULL;
-	sg_defense_payload = NULL;
-	sg_sidecar_log_mask = 0;
 	sg_airnext = NULL;
 	memset(&sg_fields, 0, sizeof(sg_fields));
 	sg_field_red = sg_field_blue = NULL;

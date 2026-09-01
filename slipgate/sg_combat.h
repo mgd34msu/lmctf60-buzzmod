@@ -6,6 +6,9 @@
  * symlinked into the build root, so a "slipgate/..." path inside a header that
  * already lives in slipgate/ would not resolve */
 #include "sg_local.h"
+#include "sg_rune_compact_model.h"
+
+#include <stddef.h>
 
 /*
  * Explicit lifecycle boundaries for process-resident combat state.  A level
@@ -75,6 +78,26 @@ static inline qboolean SG_CombatPreviewCandidateEligible(
  * remains execution-only: this preview closes the confirmed forward-visible
  * gap without adding a second combat reaction path. */
 qboolean SG_CombatWouldEngage(edict_t *self);
+
+/* Read-only compact-field admission for a weapon-selection candidate.  The
+ * profile/family is first reduced through the sealed relation-class helper;
+ * combat then consumes only the matching class-indexed certified facts from
+ * the bot's source cell to a runtime belief's target cell.  It is deliberately
+ * not a fire permit: every actual shot still performs its exact live pre-fire
+ * trace. */
+qboolean SG_CombatCompactWeaponFieldSupports(
+	const sg_rune_compact_model_t *model, uint32_t source_cell,
+	uint32_t target_cell, uint32_t source_profile,
+	sg_rune_weapon_response_family_t family);
+
+/* Weighted certified response-field mass for one exact belief life.  Invalid
+ * or uncertified target cells contribute no support, while their finite mass
+ * remains in the denominator so malformed belief input cannot inflate a
+ * weapon's score. */
+float SG_CombatCompactWeaponFieldMass(
+	const sg_rune_compact_model_t *model, uint32_t source_cell,
+	uint32_t source_profile, sg_rune_weapon_response_family_t family,
+	const uint32_t *target_cells, const float *weights, size_t target_count);
 
 /*
  * Item-need weights, WEAPONS.md 2.3. `role` is the static row for the bot's

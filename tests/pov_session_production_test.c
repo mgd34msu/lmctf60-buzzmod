@@ -59,6 +59,15 @@ sg_host_law_result_t SG_HostLawProductionPmove(uint32_t subject_index,
 	return unavailable;
 }
 
+void SG_BotLocalizationObservePmove(edict_t *entity,
+	const sg_host_pmove_request_t *request,
+	const sg_host_pmove_result_t *result)
+{
+	(void)entity;
+	(void)request;
+	(void)result;
+}
+
 #define CHECK(condition) do { \
 	if (!(condition)) { \
 		fprintf(stderr, "pov_session_production_test:%d: %s\n", \

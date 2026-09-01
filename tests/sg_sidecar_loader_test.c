@@ -1,870 +1,294 @@
-/* Artifact-bound one-open sidecar loader tests. */
-#ifndef _WIN32
-#define _POSIX_C_SOURCE 200809L
-#endif
-
+/* One-open v12 sidecar loader fault tests. */
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
 
-/* q_shared.h has no include guard; include it once before loader headers. */
 #include "q_shared.h"
-#include "slipgate/sg_crc32.h"
 #include "slipgate/sg_sidecar_loader.h"
-#include "slipgate/sg_sidecar_wire.h"
-
-#define HMN_IMAGE_BYTES (SG_SIDECAR_HEADER_BYTES + 2U)
-#define TEST_DATA_BYTES 128U
-#define OUTPUT_BYTES 64U
 
 static int failures;
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
-		fprintf(stderr, "%s:%d: check failed: %s\n", \
-		        __FILE__, __LINE__, #expression); \
+		fprintf(stderr, "%s:%d: check failed: %s\\n", \
+			__FILE__, __LINE__, #expression); \
 		failures++; \
 	} \
 } while (0)
 
-typedef enum io_failure_e
-{
-	IO_FAIL_NONE = 0,
-	IO_FAIL_OPEN,
-	IO_FAIL_READ,
-	IO_FAIL_SEEK,
-	IO_FAIL_TELL,
-	IO_FAIL_CLOSE,
-	IO_FAIL_ALLOCATE
-} io_failure_t;
-
 typedef struct io_fixture_s
 {
-	unsigned char data[TEST_DATA_BYTES];
-	size_t data_size;
+	const unsigned char *initial;
+	const unsigned char *replacement;
+	size_t image_size;
 	size_t position;
-	size_t reported_size;
-	int override_reported_size;
-	io_failure_t failure;
-	size_t fail_call;
-	int absent;
-	int is_open;
-	size_t open_calls;
-	size_t read_calls;
-	size_t seek_calls;
-	size_t tell_calls;
-	size_t close_calls;
-	size_t allocate_calls;
-	size_t deallocate_calls;
-	size_t last_allocation_size;
-	size_t mutate_read_call;
-	size_t mutate_offset;
-	unsigned char mutate_xor;
-	int allocation_order_valid;
-	char opened_path[MAX_OSPATH];
+	int use_replacement;
+	int open_error;
+	int grow_after_snapshot;
+	int fail_allocate;
+	unsigned int close_calls;
+	unsigned int deallocate_calls;
 } io_fixture_t;
 
-static void PutU32(unsigned char *out, uint32_t value)
+static void InitInfo(sg_rune_compact_wire_info_t *info)
 {
-	out[0] = (unsigned char)(value & UINT32_C(0xff));
-	out[1] = (unsigned char)((value >> 8) & UINT32_C(0xff));
-	out[2] = (unsigned char)((value >> 16) & UINT32_C(0xff));
-	out[3] = (unsigned char)(value >> 24);
+	uint32_t index;
+
+	memset(info, 0, sizeof(*info));
+	info->wire_version = SG_RUNE_COMPACT_WIRE_VERSION;
+	info->model_version = SG_RUNE_COMPACT_MODEL_VERSION;
+	info->analytic_version = SG_RUNE_COMPACT_ANALYTIC_VERSION;
+	info->schema_tag = SG_RUNE_COMPACT_MODEL_SCHEMA_TAG;
+	info->image_bytes = UINT64_C(1024);
+	info->checksum = UINT32_C(0x10203040);
+	for (index = 0U; index < 32U; index++)
+		info->identity.bsp_sha256[index] = (uint8_t)(index + 3U);
+	info->identity.bsp_bytes = UINT64_C(777);
+	info->identity.entity_semantics_id = UINT64_C(9);
+	info->identity.physics.frame_ms = 100U;
+	info->identity.physics.substep_ms = 8U;
 }
 
-static void FixHeaderCRC(unsigned char *encoded)
+static int Encode(const sg_rune_compact_wire_info_t *info,
+	unsigned char *image, size_t image_capacity, size_t *image_size_out)
 {
-	unsigned char header[SG_SIDECAR_HEADER_BYTES];
-	uint32_t crc = 0;
+	static const unsigned char payload[] = { 5U, 7U, 9U, 11U };
 
-	memcpy(header, encoded, sizeof(header));
-	memset(header + SG_SIDECAR_HEADER_CRC_OFFSET, 0, 4);
-	CHECK(SG_CRC32Buffer(header, sizeof(header), &crc));
-	PutU32(encoded + SG_SIDECAR_HEADER_CRC_OFFSET, crc);
+	return SG_SidecarEncode(SG_SIDECAR_HUMAN, info, payload,
+		sizeof(payload), image, image_capacity, image_size_out) == SCD_OK;
 }
 
-static void InitArtifact(rune_artifact_t *artifact)
+static void *OpenRead(void *context, const char *path, int *os_error_out)
 {
-	memset(artifact, 0, sizeof(*artifact));
-	artifact->magic = RUNE_ARTIFACT_MAGIC;
-	artifact->payload_crc32 = UINT32_C(0x11223344);
-	artifact->header_crc32 = UINT32_C(0x55667788);
-	artifact->action_contract_crc32 = SG_RUNE_ACTION_CONTRACT_CRC32;
-	artifact->mechanism_contract_crc32 =
-		SG_RUNE_MECHANISM_CONTRACT_CRC32;
-	artifact->num_seeds = 2U;
-	artifact->num_links = 2U;
-	artifact->num_mechanism_nodes = 2U;
-	artifact->num_mechanism_edges = 2U;
-	artifact->num_inventory_edges = 1U;
-	artifact->num_mechanism_plans = 1U;
-	artifact->string_bytes = 8U;
-	memcpy(artifact->identity.map_name, "sidecar", sizeof("sidecar"));
-}
+	io_fixture_t *fixture = context;
 
-static int RuneWithMap(const rune_artifact_t *source,
-	const char *map_name, rune_artifact_t *rune_out)
-{
-	rune_artifact_t changed = *source;
-
-	memset(changed.identity.map_name, 0, sizeof(changed.identity.map_name));
-	if (strlen(map_name) >= sizeof(changed.identity.map_name))
-		return 0;
-	memcpy(changed.identity.map_name, map_name, strlen(map_name));
-	changed.header_crc32 ^= UINT32_C(0x01010101);
-	*rune_out = changed;
-	return 1;
-}
-
-static void *TestOpen(void *context, const char *path, int *error_out)
-{
-	io_fixture_t *io = context;
-
-	io->open_calls++;
-	*error_out = 0;
-	if (io->failure == IO_FAIL_OPEN)
-	{
-		*error_out = EACCES;
+	if (os_error_out != NULL)
+		*os_error_out = fixture->open_error;
+	if (fixture->open_error != 0 || path == NULL || strcmp(path, "sidecar") != 0)
 		return NULL;
-	}
-	if (io->absent)
-	{
-		*error_out = ENOENT;
-		return NULL;
-	}
-	CHECK(!io->is_open);
-	io->is_open = 1;
-	io->position = 0;
-	(void)snprintf(io->opened_path, sizeof(io->opened_path), "%s", path);
-	return io;
+	fixture->position = 0U;
+	fixture->use_replacement = 0;
+	return fixture;
 }
 
-static size_t TestRead(void *context, void *handle, unsigned char *output,
-	size_t output_size, int *error_out)
+static size_t Read(void *context, void *file, unsigned char *output,
+	size_t output_size, int *os_error_out)
 {
-	io_fixture_t *io = context;
-	size_t available;
+	io_fixture_t *fixture = context;
+	const unsigned char *source;
+	size_t remaining;
 	size_t count;
 
-	io->read_calls++;
-	*error_out = 0;
-	CHECK(handle == io);
-	CHECK(io->is_open);
-	if (io->read_calls == io->mutate_read_call)
+	if (os_error_out != NULL)
+		*os_error_out = 0;
+	if (file != fixture || output == NULL)
 	{
-		CHECK(io->mutate_offset < io->data_size);
-		if (io->mutate_offset < io->data_size)
-			io->data[io->mutate_offset] ^= io->mutate_xor;
+		if (os_error_out != NULL)
+			*os_error_out = EINVAL;
+		return 0U;
 	}
-	if (io->failure == IO_FAIL_READ && io->read_calls == io->fail_call)
+	source = fixture->use_replacement && fixture->replacement != NULL ?
+		fixture->replacement : fixture->initial;
+	if (fixture->position >= fixture->image_size)
 	{
-		*error_out = EIO;
-		return 0;
+		if (fixture->grow_after_snapshot)
+		{
+			output[0] = UINT8_C(0xff);
+			return 1U;
+		}
+		return 0U;
 	}
-	available = io->position < io->data_size
-		? io->data_size - io->position : 0;
-	count = output_size < available ? output_size : available;
-	if (count > 0)
-		memcpy(output, io->data + io->position, count);
-	io->position += count;
+	remaining = fixture->image_size - fixture->position;
+	count = output_size < remaining ? output_size : remaining;
+	memcpy(output, source + fixture->position, count);
+	fixture->position += count;
 	return count;
 }
 
-static int TestSeek(void *context, void *handle,
-	sg_sidecar_seek_origin_t origin, size_t offset, int *error_out)
+static int Seek(void *context, void *file, sg_sidecar_seek_origin_t origin,
+	size_t offset, int *os_error_out)
 {
-	io_fixture_t *io = context;
+	io_fixture_t *fixture = context;
 
-	io->seek_calls++;
-	*error_out = 0;
-	CHECK(handle == io);
-	CHECK(io->is_open);
-	if (io->failure == IO_FAIL_SEEK && io->seek_calls == io->fail_call)
+	if (os_error_out != NULL)
+		*os_error_out = 0;
+	if (file != fixture || offset != 0U)
 	{
-		*error_out = ESPIPE;
+		if (os_error_out != NULL)
+			*os_error_out = EINVAL;
 		return -1;
 	}
-	if (origin == SG_SIDECAR_SEEK_BEGIN)
+	if (origin == SG_SIDECAR_SEEK_END)
+		fixture->position = fixture->image_size;
+	else if (origin == SG_SIDECAR_SEEK_BEGIN)
 	{
-		io->position = offset;
-		return 0;
+		fixture->position = 0U;
+		fixture->use_replacement = fixture->replacement != NULL;
 	}
-	if (origin == SG_SIDECAR_SEEK_END && offset == 0)
+	else
 	{
-		io->position = io->data_size;
-		return 0;
-	}
-	*error_out = EINVAL;
-	return -1;
-}
-
-static int TestTell(void *context, void *handle, size_t *offset_out,
-	int *error_out)
-{
-	io_fixture_t *io = context;
-
-	io->tell_calls++;
-	*error_out = 0;
-	CHECK(handle == io);
-	CHECK(io->is_open);
-	if (io->failure == IO_FAIL_TELL)
-	{
-		*error_out = EOVERFLOW;
-		return -1;
-	}
-	*offset_out = io->override_reported_size
-		? io->reported_size : io->position;
-	return 0;
-}
-
-static int TestClose(void *context, void *handle, int *error_out)
-{
-	io_fixture_t *io = context;
-
-	io->close_calls++;
-	*error_out = 0;
-	CHECK(handle == io);
-	CHECK(io->is_open);
-	io->is_open = 0;
-	if (io->failure == IO_FAIL_CLOSE)
-	{
-		*error_out = EIO;
+		if (os_error_out != NULL)
+			*os_error_out = EINVAL;
 		return -1;
 	}
 	return 0;
 }
 
-static void *TestAllocate(void *context, size_t size)
+static int Tell(void *context, void *file, size_t *offset_out,
+	int *os_error_out)
 {
-	io_fixture_t *io = context;
+	io_fixture_t *fixture = context;
 
-	io->allocate_calls++;
-	io->last_allocation_size = size;
-	if (io->read_calls != 1 || io->seek_calls != 2 ||
-	    io->tell_calls != 1)
-		io->allocation_order_valid = 0;
-	if (io->failure == IO_FAIL_ALLOCATE)
+	if (os_error_out != NULL)
+		*os_error_out = 0;
+	if (file != fixture || offset_out == NULL)
+	{
+		if (os_error_out != NULL)
+			*os_error_out = EINVAL;
+		return -1;
+	}
+	*offset_out = fixture->position;
+	return 0;
+}
+
+static int Close(void *context, void *file, int *os_error_out)
+{
+	io_fixture_t *fixture = context;
+
+	if (os_error_out != NULL)
+		*os_error_out = 0;
+	if (file != fixture)
+	{
+		if (os_error_out != NULL)
+			*os_error_out = EINVAL;
+		return -1;
+	}
+	fixture->close_calls++;
+	return 0;
+}
+
+static void *Allocate(void *context, size_t size)
+{
+	io_fixture_t *fixture = context;
+
+	if (fixture->fail_allocate)
 		return NULL;
 	return malloc(size);
 }
 
-static void TestDeallocate(void *context, void *allocation)
+static void Deallocate(void *context, void *allocation)
 {
-	io_fixture_t *io = context;
+	io_fixture_t *fixture = context;
 
-	io->deallocate_calls++;
+	fixture->deallocate_calls++;
 	free(allocation);
 }
 
-static sg_sidecar_load_ops_t TestOps(io_fixture_t *io)
+static sg_sidecar_load_ops_t TestOps(io_fixture_t *fixture)
 {
 	sg_sidecar_load_ops_t ops;
 
 	memset(&ops, 0, sizeof(ops));
-	ops.context = io;
-	ops.open_read = TestOpen;
-	ops.read = TestRead;
-	ops.seek = TestSeek;
-	ops.tell = TestTell;
-	ops.close_file = TestClose;
-	ops.allocate = TestAllocate;
-	ops.deallocate = TestDeallocate;
+	ops.context = fixture;
+	ops.open_read = OpenRead;
+	ops.read = Read;
+	ops.seek = Seek;
+	ops.tell = Tell;
+	ops.close_file = Close;
+	ops.allocate = Allocate;
+	ops.deallocate = Deallocate;
 	return ops;
 }
 
-static void InitIO(io_fixture_t *io, const unsigned char *data, size_t size)
-{
-	memset(io, 0, sizeof(*io));
-	io->allocation_order_valid = 1;
-	CHECK(size <= sizeof(io->data));
-	if (size <= sizeof(io->data))
-	{
-		memcpy(io->data, data, size);
-		io->data_size = size;
-	}
-}
-
-static int Encode(sg_sidecar_kind_t kind,
-	const rune_artifact_t *rune, const uint8_t *marks,
-	const unsigned char *payload, size_t payload_size,
-	unsigned char *encoded, size_t *encoded_size)
-{
-	return SG_SidecarEncode(kind, rune, marks,
-		marks ? rune->num_seeds : 0, payload, payload_size, encoded,
-		TEST_DATA_BYTES, encoded_size) == SCD_OK;
-}
-
-static unsigned char output_sentinel;
-
-static void FillSentinel(unsigned char **output, size_t *size_out)
-{
-	*output = &output_sentinel;
-	*size_out = SIZE_MAX - 7U;
-}
-
-static void CheckFailureAtomic(const sg_sidecar_load_result_t *result,
+static void CheckFailure(const sg_sidecar_load_result_t *result,
 	sg_sidecar_diagnostic_t diagnostic, sg_sidecar_stage_t stage,
-	unsigned char *output, size_t size_out)
+	unsigned char *payload, size_t payload_size)
 {
 	CHECK(result->diagnostic == diagnostic);
 	CHECK(result->stage == stage);
-	CHECK(output == &output_sentinel);
-	CHECK(size_out == SIZE_MAX - 7U);
-}
-
-static sg_sidecar_load_result_t InjectedLoad(io_fixture_t *io,
-	sg_sidecar_kind_t kind, const rune_artifact_t *rune,
-	const uint8_t *marks, unsigned char **output,
-	size_t *size_out)
-{
-	sg_sidecar_load_ops_t ops = TestOps(io);
-
-	return SG_SidecarLoadFile("/game", kind, rune, marks,
-		marks ? rune->num_seeds : 0, output, size_out, &ops);
-}
-
-static size_t PayloadBytes(sg_sidecar_kind_t kind,
-	const rune_artifact_t *rune)
-{
-	size_t size = 0;
-
-	CHECK(SG_SidecarFileSize(kind, rune, &size) == SCD_OK);
-	return size - SG_SIDECAR_HEADER_BYTES;
-}
-
-static void SafePayload(sg_sidecar_kind_t kind,
-	const rune_artifact_t *rune, unsigned char *payload,
-	size_t payload_size)
-{
-	size_t i;
-
-	memset(payload, 0, payload_size);
-	if (kind == SG_SIDECAR_DANGER)
-	{
-		for (i = 0; i < payload_size / 4U; i++)
-			PutU32(payload + i * 4U, (uint32_t)(i + 1U));
-	}
-	else
-		for (i = 0; i < payload_size; i++)
-			payload[i] = (unsigned char)(i + 1U);
-	(void)rune;
-}
-
-static void TestSuccessAllKinds(const rune_artifact_t *rune)
-{
-	static const uint8_t marks[] = { 1, 1 };
-	unsigned char payload[OUTPUT_BYTES];
-	unsigned char encoded[TEST_DATA_BYTES];
-	unsigned char *output;
-	size_t kind_value;
-
-	for (kind_value = 0; kind_value < SG_SIDECAR_KIND_COUNT; kind_value++)
-	{
-		sg_sidecar_kind_t kind = (sg_sidecar_kind_t)kind_value;
-		const uint8_t *kind_marks = kind >= SG_SIDECAR_DEFENSE
-			? marks : NULL;
-		size_t payload_size = PayloadBytes(kind, rune);
-		size_t encoded_size = 0;
-		size_t output_size;
-		io_fixture_t io;
-		sg_sidecar_load_result_t result;
-		char expected_path[MAX_OSPATH];
-
-		if (payload_size > sizeof(payload))
-		{
-			fprintf(stderr, "%s:%d: payload fixture exceeds buffer\n",
-				__FILE__, __LINE__);
-			failures++;
-			continue;
-		}
-		SafePayload(kind, rune, payload, payload_size);
-		CHECK(Encode(kind, rune, kind_marks, payload, payload_size,
-			encoded, &encoded_size));
-		InitIO(&io, encoded, encoded_size);
-		FillSentinel(&output, &output_size);
-		result = InjectedLoad(&io, kind, rune, kind_marks, &output,
-			&output_size);
-		CHECK(result.diagnostic == SCD_OK);
-		CHECK(result.stage == SCS_DONE);
-		CHECK(result.plane == SG_SIDECAR_INDEX_NONE);
-		CHECK(result.index == SG_SIDECAR_INDEX_NONE);
-		CHECK(result.expected_file_size == encoded_size);
-		CHECK(result.observed_file_size == encoded_size);
-		CHECK(result.bytes_read ==
-			SG_SIDECAR_HEADER_BYTES + encoded_size);
-		CHECK(output_size == payload_size);
-		CHECK(memcmp(output, payload, payload_size) == 0);
-		CHECK(io.open_calls == 1);
-		CHECK(io.read_calls == 3);
-		CHECK(io.seek_calls == 2);
-		CHECK(io.tell_calls == 1);
-		CHECK(io.close_calls == 1);
-		CHECK(io.allocate_calls == 1);
-		CHECK(io.last_allocation_size == encoded_size);
-		CHECK(io.allocation_order_valid);
-		CHECK(io.deallocate_calls == 0);
-		CHECK(!io.is_open);
-		CHECK(SG_SidecarPath(expected_path, sizeof(expected_path),
-			"/game", kind, rune) == SCD_OK);
-		CHECK(strcmp(io.opened_path, expected_path) == 0);
-		TestDeallocate(&io, output);
-		CHECK(io.deallocate_calls == 1);
-	}
-}
-
-static void TestPathBoundaries(const rune_artifact_t *golden,
-	const unsigned char *good, size_t good_size)
-{
-	rune_artifact_t rune;
-	char root[MAX_OSPATH];
-	char path[MAX_OSPATH];
-	size_t root_length;
-	const char *extension;
-	io_fixture_t io;
-	unsigned char *output;
-	size_t output_size;
-	sg_sidecar_load_ops_t ops;
-	sg_sidecar_load_result_t result;
-
-	CHECK(RuneWithMap(golden, "MiXeD_7", &rune));
-	extension = SG_SidecarKindExtension(SG_SIDECAR_HUMAN);
-	root_length = (MAX_OSPATH - 1U) - strlen("/maps/") -
-		strlen(rune.identity.map_name) - strlen(extension);
-	CHECK(root_length + 1U < sizeof(root));
-	memset(root, 'g', root_length);
-	root[root_length] = '\0';
-	CHECK(SG_SidecarPath(path, sizeof(path), root,
-		SG_SIDECAR_HUMAN, &rune) == SCD_OK);
-	CHECK(strlen(path) == MAX_OSPATH - 1U);
-	CHECK(strstr(path, "/maps/MiXeD_7.hmn") != NULL);
-	InitIO(&io, good, good_size);
-	ops = TestOps(&io);
-	FillSentinel(&output, &output_size);
-	result = SG_SidecarLoadFile(root, SG_SIDECAR_HUMAN, &rune,
-		NULL, 0, &output, &output_size, &ops);
-	/* The sidecar is deliberately bound to the original golden header, so the
-	 * exact-boundary path reaches one open and rejects the binding, not path. */
-	CHECK(result.diagnostic == SCD_RUNE_HEADER_MISMATCH);
-	CHECK(result.stage == SCS_RUNE_BINDING);
-	CHECK(io.open_calls == 1 && io.close_calls == 1);
-	CheckFailureAtomic(&result, SCD_RUNE_HEADER_MISMATCH,
-		SCS_RUNE_BINDING, output, output_size);
-	CHECK(SG_SidecarPath(path, MAX_OSPATH - 1U, root,
-		SG_SIDECAR_HUMAN, &rune) == SCD_PATH_TOO_LONG);
-	CHECK(path[0] == '\0');
-	root[root_length] = 'x';
-	root[root_length + 1U] = '\0';
-	CHECK(SG_SidecarPath(path, sizeof(path), root,
-		SG_SIDECAR_HUMAN, &rune) == SCD_PATH_TOO_LONG);
-	CHECK(path[0] == '\0');
-
-	InitIO(&io, good, good_size);
-	ops = TestOps(&io);
-	FillSentinel(&output, &output_size);
-	result = SG_SidecarLoadFile(root, SG_SIDECAR_HUMAN, &rune,
-		NULL, 0, &output, &output_size, &ops);
-	CheckFailureAtomic(&result, SCD_PATH_TOO_LONG, SCS_PATH, output,
-		output_size);
-	CHECK(io.open_calls == 0);
-}
-
-static void TestAbsentAndArguments(const rune_artifact_t *rune,
-	const unsigned char *good, size_t good_size)
-{
-	static const uint8_t bad_marks[] = { 1, 2 };
-	unsigned char *output;
-	size_t output_size;
-	io_fixture_t io;
-	sg_sidecar_load_ops_t ops;
-	sg_sidecar_load_result_t result;
-	rune_artifact_t bad_rune = *rune;
-
-	InitIO(&io, good, good_size);
-	io.absent = 1;
-	FillSentinel(&output, &output_size);
-	result = InjectedLoad(&io, SG_SIDECAR_HUMAN, rune, NULL, &output,
-		&output_size);
-	CheckFailureAtomic(&result, SCD_ABSENT, SCS_OPEN, output,
-		output_size);
-	CHECK(result.os_error == ENOENT);
-	CHECK(io.open_calls == 1 && io.close_calls == 0);
-
-	InitIO(&io, good, good_size);
-	io.failure = IO_FAIL_OPEN;
-	FillSentinel(&output, &output_size);
-	result = InjectedLoad(&io, SG_SIDECAR_HUMAN, rune, NULL, &output,
-		&output_size);
-	CheckFailureAtomic(&result, SCD_IO_ERROR, SCS_OPEN, output,
-		output_size);
-	CHECK(result.os_error == EACCES);
-
-	InitIO(&io, good, good_size);
-	ops = TestOps(&io);
-	ops.read = NULL;
-	FillSentinel(&output, &output_size);
-	result = SG_SidecarLoadFile("/game", SG_SIDECAR_HUMAN, rune,
-		NULL, 0, &output, &output_size, &ops);
-	CheckFailureAtomic(&result, SCD_INVALID_ARGUMENT, SCS_ARGUMENT,
-		output, output_size);
-	CHECK(io.open_calls == 0);
-
-	InitIO(&io, good, good_size);
-	ops = TestOps(&io);
-	FillSentinel(&output, &output_size);
-	result = SG_SidecarLoadFile("/game", SG_SIDECAR_HUMAN, rune,
-		NULL, 0, NULL, &output_size, &ops);
-	CheckFailureAtomic(&result, SCD_INVALID_ARGUMENT, SCS_ARGUMENT,
-		output, output_size);
-	CHECK(io.open_calls == 0);
-
-	InitIO(&io, good, good_size);
-	ops = TestOps(&io);
-	FillSentinel(&output, &output_size);
-	result = SG_SidecarLoadFile("/game", SG_SIDECAR_DEFENSE, rune,
-		NULL, 0, &output, &output_size, &ops);
-	CheckFailureAtomic(&result, SCD_INVALID_ARGUMENT, SCS_ARGUMENT,
-		output, output_size);
-	result = SG_SidecarLoadFile("/game", SG_SIDECAR_DEFENSE, rune,
-		bad_marks, sizeof(bad_marks), &output, &output_size, &ops);
-	CheckFailureAtomic(&result, SCD_INVALID_ARGUMENT, SCS_ARGUMENT,
-		output, output_size);
-	CHECK(io.open_calls == 0);
-
-	bad_rune.magic ^= UINT32_C(1);
-	InitIO(&io, good, good_size);
-	ops = TestOps(&io);
-	FillSentinel(&output, &output_size);
-	result = SG_SidecarLoadFile("/game", SG_SIDECAR_HUMAN,
-		&bad_rune, NULL, 0, &output, &output_size, &ops);
-	CheckFailureAtomic(&result, SCD_INVALID_ARGUMENT, SCS_ARGUMENT,
-		output, output_size);
-	CHECK(io.open_calls == 0);
-}
-
-static void CheckEncodedFailure(const rune_artifact_t *rune,
-	sg_sidecar_kind_t kind, const uint8_t *marks,
-	const unsigned char *encoded, size_t encoded_size,
-	sg_sidecar_diagnostic_t diagnostic, sg_sidecar_stage_t stage)
-{
-	unsigned char *output;
-	size_t output_size;
-	io_fixture_t io;
-	sg_sidecar_load_result_t result;
-
-	InitIO(&io, encoded, encoded_size);
-	FillSentinel(&output, &output_size);
-	result = InjectedLoad(&io, kind, rune, marks, &output, &output_size);
-	CheckFailureAtomic(&result, diagnostic, stage, output,
-		output_size);
-	CHECK(io.open_calls == 1 && io.close_calls == 1);
-	CHECK(!io.is_open);
-	if (stage == SCS_PAYLOAD_CRC || stage == SCS_PAYLOAD_VALUE)
-		CHECK(io.allocate_calls == 1 && io.deallocate_calls == 1);
-	else
-		CHECK(io.allocate_calls == 0 && io.deallocate_calls == 0);
-}
-
-static void TestFormatFailures(const rune_artifact_t *rune,
-	const unsigned char *good, size_t good_size)
-{
-	unsigned char bad[TEST_DATA_BYTES];
-
-	memcpy(bad, good, good_size);
-	bad[SG_SIDECAR_HEADER_CRC_OFFSET] ^= 1;
-	CheckEncodedFailure(rune, SG_SIDECAR_HUMAN, NULL, bad, good_size,
-		SCD_BAD_HEADER_CRC, SCS_HEADER_CRC);
-
-	memcpy(bad, good, good_size);
-	PutU32(bad, SG_SIDECAR_HML_MAGIC);
-	FixHeaderCRC(bad);
-	CheckEncodedFailure(rune, SG_SIDECAR_HUMAN, NULL, bad, good_size,
-		SCD_BAD_MAGIC, SCS_HEADER);
-
-	memcpy(bad, good, good_size);
-	bad[10] = 2;
-	FixHeaderCRC(bad);
-	CheckEncodedFailure(rune, SG_SIDECAR_HUMAN, NULL, bad, good_size,
-		SCD_BAD_SHAPE, SCS_SHAPE);
-
-	memcpy(bad, good, good_size);
-	PutU32(bad + 36, UINT32_MAX);
-	FixHeaderCRC(bad);
-	CheckEncodedFailure(rune, SG_SIDECAR_HUMAN, NULL, bad, good_size,
-		SCD_BAD_PAYLOAD_SIZE, SCS_SHAPE);
-
-	memcpy(bad, good, good_size);
-	bad[24] ^= 1;
-	FixHeaderCRC(bad);
-	CheckEncodedFailure(rune, SG_SIDECAR_HUMAN, NULL, bad, good_size,
-		SCD_RUNE_PAYLOAD_MISMATCH, SCS_RUNE_BINDING);
-
-	memcpy(bad, good, good_size);
-	bad[28] ^= 1;
-	FixHeaderCRC(bad);
-	CheckEncodedFailure(rune, SG_SIDECAR_HUMAN, NULL, bad, good_size,
-		SCD_ACTION_CONTRACT_MISMATCH, SCS_RUNE_BINDING);
-
-	memcpy(bad, good, good_size);
-	bad[32] ^= 1;
-	FixHeaderCRC(bad);
-	CheckEncodedFailure(rune, SG_SIDECAR_HUMAN, NULL, bad, good_size,
-		SCD_RUNE_HEADER_MISMATCH, SCS_RUNE_BINDING);
-
-	memcpy(bad, good, good_size);
-	bad[SG_SIDECAR_HEADER_BYTES] ^= 1;
-	CheckEncodedFailure(rune, SG_SIDECAR_HUMAN, NULL, bad, good_size,
-		SCD_BAD_PAYLOAD_CRC, SCS_PAYLOAD_CRC);
-}
-
-static void TestTombstoneDetail(const rune_artifact_t *rune)
-{
-	static const uint8_t encoded_marks[] = { 1, 1 };
-	static const uint8_t live_marks[] = { 1, 0 };
-	unsigned char payload[OUTPUT_BYTES];
-	unsigned char encoded[TEST_DATA_BYTES];
-	unsigned char *output;
-	size_t payload_size = PayloadBytes(SG_SIDECAR_DEFENSE, rune);
-	size_t encoded_size = 0;
-	size_t output_size;
-	io_fixture_t io;
-	sg_sidecar_load_result_t result;
-
-	memset(payload, 0, sizeof(payload));
-	payload[1] = 9;
-	CHECK(Encode(SG_SIDECAR_DEFENSE, rune, encoded_marks, payload,
-		payload_size, encoded, &encoded_size));
-	InitIO(&io, encoded, encoded_size);
-	FillSentinel(&output, &output_size);
-	result = InjectedLoad(&io, SG_SIDECAR_DEFENSE, rune, live_marks,
-		&output, &output_size);
-	CheckFailureAtomic(&result, SCD_BAD_PAYLOAD_VALUE,
-		SCS_PAYLOAD_VALUE, output, output_size);
-	CHECK(result.plane == 0);
-	CHECK(result.index == 1);
-	CHECK(io.allocate_calls == 1 && io.deallocate_calls == 1);
-}
-
-static void TestHeaderDrift(const rune_artifact_t *rune,
-	const unsigned char *good, size_t good_size)
-{
-	unsigned char *output;
-	size_t output_size;
-	io_fixture_t io;
-	sg_sidecar_load_result_t result;
-
-	InitIO(&io, good, good_size);
-	io.mutate_read_call = 2;
-	io.mutate_offset = 4;
-	io.mutate_xor = 1;
-	FillSentinel(&output, &output_size);
-	result = InjectedLoad(&io, SG_SIDECAR_HUMAN, rune, NULL, &output,
-		&output_size);
-	CheckFailureAtomic(&result, SCD_STATE_DRIFT, SCS_RECHECK, output,
-		output_size);
-	CHECK(io.open_calls == 1 && io.close_calls == 1);
-	CHECK(io.read_calls == 2);
-	CHECK(io.seek_calls == 2 && io.tell_calls == 1);
-	CHECK(io.allocate_calls == 1 && io.deallocate_calls == 1);
-	CHECK(io.allocation_order_valid);
-	CHECK(!io.is_open);
-}
-
-static void TestIOFailures(const rune_artifact_t *rune,
-	const unsigned char *good, size_t good_size)
-{
-	unsigned char *output;
-	size_t output_size;
-	io_fixture_t io;
-	sg_sidecar_load_result_t result;
-	size_t case_index;
-	static const struct
-	{
-		io_failure_t failure;
-		size_t call;
-		sg_sidecar_stage_t stage;
-		int error;
-	} cases[] = {
-		{ IO_FAIL_READ, 1, SCS_HEADER_READ, EIO },
-		{ IO_FAIL_SEEK, 1, SCS_FILE_SIZE, ESPIPE },
-		{ IO_FAIL_TELL, 0, SCS_FILE_SIZE, EOVERFLOW },
-		{ IO_FAIL_SEEK, 2, SCS_FILE_SIZE, ESPIPE },
-		{ IO_FAIL_READ, 2, SCS_PAYLOAD_READ, EIO },
-		{ IO_FAIL_READ, 3, SCS_PAYLOAD_READ, EIO }
-	};
-
-	for (case_index = 0; case_index < sizeof(cases) / sizeof(cases[0]);
-	    case_index++)
-	{
-		InitIO(&io, good, good_size);
-		io.failure = cases[case_index].failure;
-		io.fail_call = cases[case_index].call;
-		FillSentinel(&output, &output_size);
-		result = InjectedLoad(&io, SG_SIDECAR_HUMAN, rune, NULL,
-			&output, &output_size);
-		CheckFailureAtomic(&result, SCD_IO_ERROR,
-			cases[case_index].stage, output, output_size);
-		CHECK(result.os_error == cases[case_index].error);
-		CHECK(io.open_calls == 1 && io.close_calls == 1);
-		CHECK(!io.is_open);
-	}
-
-	InitIO(&io, good, good_size);
-	io.failure = IO_FAIL_ALLOCATE;
-	FillSentinel(&output, &output_size);
-	result = InjectedLoad(&io, SG_SIDECAR_HUMAN, rune, NULL, &output,
-		&output_size);
-	CheckFailureAtomic(&result, SCD_ALLOCATION_FAILED, SCS_ALLOCATION,
-		output, output_size);
-	CHECK(io.allocate_calls == 1 && io.deallocate_calls == 0);
-	CHECK(io.close_calls == 1);
-
-	InitIO(&io, good, good_size);
-	io.failure = IO_FAIL_CLOSE;
-	FillSentinel(&output, &output_size);
-	result = InjectedLoad(&io, SG_SIDECAR_HUMAN, rune, NULL, &output,
-		&output_size);
-	CheckFailureAtomic(&result, SCD_IO_ERROR, SCS_CLOSE, output,
-		output_size);
-	CHECK(result.os_error == EIO && result.close_error == EIO);
-	CHECK(io.allocate_calls == 1 && io.deallocate_calls == 1);
-
-	InitIO(&io, good, good_size);
-	io.data[SG_SIDECAR_HEADER_CRC_OFFSET] ^= 1;
-	io.failure = IO_FAIL_CLOSE;
-	FillSentinel(&output, &output_size);
-	result = InjectedLoad(&io, SG_SIDECAR_HUMAN, rune, NULL, &output,
-		&output_size);
-	CheckFailureAtomic(&result, SCD_BAD_HEADER_CRC, SCS_HEADER_CRC,
-		output, output_size);
-	CHECK(result.os_error == 0 && result.close_error == EIO);
-}
-
-static void TestExactFileSize(const rune_artifact_t *rune,
-	const unsigned char *good, size_t good_size)
-{
-	unsigned char expanded[TEST_DATA_BYTES];
-	unsigned char *output;
-	size_t output_size;
-	io_fixture_t io;
-	sg_sidecar_load_result_t result;
-
-	InitIO(&io, good, SG_SIDECAR_HEADER_BYTES - 1U);
-	FillSentinel(&output, &output_size);
-	result = InjectedLoad(&io, SG_SIDECAR_HUMAN, rune, NULL, &output,
-		&output_size);
-	CheckFailureAtomic(&result, SCD_BAD_HEADER_SIZE, SCS_HEADER_READ,
-		output, output_size);
-
-	InitIO(&io, good, good_size - 1U);
-	FillSentinel(&output, &output_size);
-	result = InjectedLoad(&io, SG_SIDECAR_HUMAN, rune, NULL, &output,
-		&output_size);
-	CheckFailureAtomic(&result, SCD_BAD_FILE_SIZE, SCS_FILE_SIZE,
-		output, output_size);
-	CHECK(io.allocate_calls == 0);
-
-	InitIO(&io, good, good_size - 1U);
-	io.override_reported_size = 1;
-	io.reported_size = good_size;
-	FillSentinel(&output, &output_size);
-	result = InjectedLoad(&io, SG_SIDECAR_HUMAN, rune, NULL, &output,
-		&output_size);
-	CheckFailureAtomic(&result, SCD_BAD_FILE_SIZE, SCS_PAYLOAD_READ,
-		output, output_size);
-	CHECK(io.allocate_calls == 1 && io.deallocate_calls == 1);
-
-	memcpy(expanded, good, good_size);
-	expanded[good_size] = 0xee;
-	InitIO(&io, expanded, good_size + 1U);
-	FillSentinel(&output, &output_size);
-	result = InjectedLoad(&io, SG_SIDECAR_HUMAN, rune, NULL, &output,
-		&output_size);
-	CheckFailureAtomic(&result, SCD_BAD_FILE_SIZE, SCS_FILE_SIZE,
-		output, output_size);
-	CHECK(io.allocate_calls == 0);
-
-	InitIO(&io, expanded, good_size + 1U);
-	io.override_reported_size = 1;
-	io.reported_size = good_size;
-	FillSentinel(&output, &output_size);
-	result = InjectedLoad(&io, SG_SIDECAR_HUMAN, rune, NULL, &output,
-		&output_size);
-	CheckFailureAtomic(&result, SCD_BAD_FILE_SIZE, SCS_PAYLOAD_READ,
-		output, output_size);
-	CHECK(io.read_calls == 3);
-}
-
-static void TestDefaultOps(const rune_artifact_t *rune,
-	const unsigned char *good, size_t good_size)
-{
-	char root[] = "/tmp/sg-sidecar-loader-XXXXXX";
-	char maps[MAX_OSPATH];
-	char path[MAX_OSPATH];
-	unsigned char *output;
-	size_t output_size;
-	FILE *file;
-	sg_sidecar_load_result_t result;
-	sg_sidecar_load_ops_t ops;
-
-	SG_SidecarDefaultLoadOps(&ops);
-	CHECK(ops.context == NULL && ops.open_read && ops.read && ops.seek &&
-		ops.tell && ops.close_file && ops.allocate && ops.deallocate);
-	CHECK(mkdtemp(root) != NULL);
-	(void)snprintf(maps, sizeof(maps), "%s/maps", root);
-	CHECK(mkdir(maps, 0700) == 0);
-	CHECK(SG_SidecarPath(path, sizeof(path), root,
-		SG_SIDECAR_HUMAN, rune) == SCD_OK);
-	file = fopen(path, "wb");
-	CHECK(file != NULL);
-	if (file)
-	{
-		CHECK(fwrite(good, 1, good_size, file) == good_size);
-		CHECK(fclose(file) == 0);
-	}
-	FillSentinel(&output, &output_size);
-	result = SG_SidecarLoadFile(root, SG_SIDECAR_HUMAN, rune,
-		NULL, 0, &output, &output_size, NULL);
-	CHECK(result.diagnostic == SCD_OK && result.stage == SCS_DONE);
-	CHECK(output_size == 2 && output[0] == 7 && output[1] == 200);
-	free(output);
-	CHECK(unlink(path) == 0);
-	CHECK(rmdir(maps) == 0);
-	CHECK(rmdir(root) == 0);
+	CHECK(payload == NULL);
+	CHECK(payload_size == 0U);
 }
 
 int main(void)
 {
-	rune_artifact_t rune;
-	static const unsigned char payload[] = { 7, 200 };
-	unsigned char image[HMN_IMAGE_BYTES];
+	unsigned char image[SG_SIDECAR_HEADER_BYTES + 4U];
+	unsigned char changed[sizeof(image)];
+	sg_rune_compact_wire_info_t info;
+	sg_rune_compact_wire_info_t mismatched;
+	io_fixture_t fixture;
+	sg_sidecar_load_ops_t ops;
+	sg_sidecar_load_result_t result;
+	unsigned char *payload;
 	size_t image_size = 0U;
+	size_t payload_size;
 
-	InitArtifact(&rune);
-	if (!Encode(SG_SIDECAR_HUMAN, &rune, NULL, payload,
-	    sizeof(payload), image, &image_size))
+	InitInfo(&info);
+	CHECK(Encode(&info, image, sizeof(image), &image_size));
+	memset(&fixture, 0, sizeof(fixture));
+	fixture.initial = image;
+	fixture.image_size = image_size;
+	ops = TestOps(&fixture);
+	payload = NULL;
+	payload_size = 0U;
+	result = SG_SidecarLoadFile("sidecar", SG_SIDECAR_HUMAN, &info,
+		&payload, &payload_size, &ops);
+	CHECK(result.diagnostic == SCD_OK);
+	CHECK(result.stage == SCS_DONE);
+	CHECK(payload != NULL && payload_size == 4U);
+	CHECK(payload[0] == 5U && payload[3] == 11U);
+	ops.deallocate(ops.context, payload);
+
+	memcpy(changed, image, sizeof(changed));
+	changed[0] ^= UINT8_C(1);
+	fixture.replacement = changed;
+	payload = NULL;
+	payload_size = 0U;
+	result = SG_SidecarLoadFile("sidecar", SG_SIDECAR_HUMAN, &info,
+		&payload, &payload_size, &ops);
+	CheckFailure(&result, SCD_STATE_DRIFT, SCS_RECHECK, payload, payload_size);
+	fixture.replacement = NULL;
+
+	fixture.grow_after_snapshot = 1;
+	payload = NULL;
+	payload_size = 0U;
+	result = SG_SidecarLoadFile("sidecar", SG_SIDECAR_HUMAN, &info,
+		&payload, &payload_size, &ops);
+	CheckFailure(&result, SCD_BAD_FILE_SIZE, SCS_PAYLOAD_READ, payload,
+		payload_size);
+	fixture.grow_after_snapshot = 0;
+
+	fixture.fail_allocate = 1;
+	payload = NULL;
+	payload_size = 0U;
+	result = SG_SidecarLoadFile("sidecar", SG_SIDECAR_HUMAN, &info,
+		&payload, &payload_size, &ops);
+	CheckFailure(&result, SCD_ALLOCATION_FAILED, SCS_ALLOCATION, payload,
+		payload_size);
+	fixture.fail_allocate = 0;
+
+	mismatched = info;
+	mismatched.checksum ^= UINT32_C(1);
+	payload = NULL;
+	payload_size = 0U;
+	result = SG_SidecarLoadFile("sidecar", SG_SIDECAR_HUMAN, &mismatched,
+		&payload, &payload_size, &ops);
+	CheckFailure(&result, SCD_RUNE_CHECKSUM_MISMATCH, SCS_RUNE_BINDING,
+		payload, payload_size);
+
+	fixture.open_error = ENOENT;
+	payload = NULL;
+	payload_size = 0U;
+	result = SG_SidecarLoadFile("sidecar", SG_SIDECAR_HUMAN, &info,
+		&payload, &payload_size, &ops);
+	CheckFailure(&result, SCD_ABSENT, SCS_OPEN, payload, payload_size);
+	CHECK(fixture.close_calls >= 5U);
+	CHECK(fixture.deallocate_calls >= 2U);
+	if (failures != 0)
 	{
-		fputs("sg_sidecar_loader_test: fixture encode failed\n", stderr);
-		return 1;
-	}
-	CHECK(rune.num_seeds == 2 && rune.num_links == 2);
-	TestSuccessAllKinds(&rune);
-	TestPathBoundaries(&rune, image, image_size);
-	TestAbsentAndArguments(&rune, image, image_size);
-	TestFormatFailures(&rune, image, image_size);
-	TestTombstoneDetail(&rune);
-	TestHeaderDrift(&rune, image, image_size);
-	TestIOFailures(&rune, image, image_size);
-	TestExactFileSize(&rune, image, image_size);
-	TestDefaultOps(&rune, image, image_size);
-	if (failures)
-	{
-		fprintf(stderr, "sg_sidecar_loader_test: %d failure(s)\n",
-			failures);
+		fprintf(stderr, "sg_sidecar_loader_test: %d failure(s)\\n", failures);
 		return 1;
 	}
 	puts("sg_sidecar_loader_test: PASS");

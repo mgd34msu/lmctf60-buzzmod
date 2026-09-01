@@ -60,6 +60,7 @@ compile_host_law()
 		'slipgate/sg_configuration_semantics.c configuration-semantics' \
 		'slipgate/sg_configuration_lattice.c configuration-lattice' \
 		'slipgate/sg_configuration_space.c configuration-space' \
+		'slipgate/sg_rune_compact_spatial_index.c compact-spatial-index' \
 		'slipgate/sg_configuration_audit.c configuration-audit' \
 		'slipgate/sg_bsp_completeness_proof.c completeness-proof' \
 		'slipgate/sg_bsp_completeness_core.c completeness-core' \

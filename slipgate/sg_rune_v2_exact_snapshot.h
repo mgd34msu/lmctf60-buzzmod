@@ -7,10 +7,7 @@
 
 typedef enum sg_rune_v2_snapshot_kind_e
 {
-	SG_RUNE_V2_SNAPSHOT_ARTIFACT = 1,
-	SG_RUNE_V2_SNAPSHOT_PROOF,
-	SG_RUNE_V2_SNAPSHOT_SIDECAR,
-	SG_RUNE_V2_SNAPSHOT_MANIFEST
+	SG_RUNE_V2_SNAPSHOT_ARTIFACT = 1
 } sg_rune_v2_snapshot_kind_t;
 
 typedef struct sg_rune_v2_exact_snapshot_s sg_rune_v2_exact_snapshot_t;
@@ -27,7 +24,6 @@ typedef enum sg_rune_v2_snapshot_diagnostic_e
 {
 	SG_RUNE_V2_SNAPSHOT_OK = 0,
 	SG_RUNE_V2_SNAPSHOT_INVALID_ARGUMENT,
-	SG_RUNE_V2_SNAPSHOT_UNSUPPORTED_KIND,
 	SG_RUNE_V2_SNAPSHOT_OPEN_FAILED,
 	SG_RUNE_V2_SNAPSHOT_INSPECT_FAILED,
 	SG_RUNE_V2_SNAPSHOT_NOT_REGULAR,

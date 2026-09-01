@@ -794,6 +794,7 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 	{
 		extern int meansOfDeath;
 
+		SG_CancelCurrentBotTacticLife(self);
 		/* Railgun elimination is known at this first death edge. It has no
 		 * PutClientInServer successor, so close before any follower can WAIT. */
 		(void)POVLock_HandleRespawnTerminal(self);
@@ -1898,6 +1899,7 @@ a deathmatch.
 */
 void PutClientInServer (edict_t *ent)
 {
+	SG_CancelCurrentBotTacticLife(ent);
 	/* Reapply the team skin after the spawn has a final team assignment. */
 	if (ent->client &&
 	    (ent->client->ctf.teamnum == CTF_TEAM_RED ||
@@ -2685,6 +2687,7 @@ void ClientDisconnect (edict_t *ent)
 
 	if (!ent->client)
 		return;
+	SG_CancelCurrentBotTacticLife(ent);
 	POVLock_ClearTarget(ent);
 	/* The dropping viewer is no longer a usable network endpoint. */
 	POVLock_ViewerDisconnected(ent);

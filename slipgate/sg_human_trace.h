@@ -17,6 +17,8 @@ typedef struct sg_human_trace_completion_s
 	char mapname[SG_LEVEL_IDENTITY_MAPNAME_BYTES];
 	uint32_t bsp_checksum;
 	uint32_t entity_crc32;
+	uint64_t bsp_bytes;
+	uint8_t bsp_sha256[SG_LEVEL_BSP_SHA256_BYTES];
 	uint32_t host_physics_id;
 	uint32_t gravity_bits;
 	uint32_t airaccelerate_bits;
@@ -44,6 +46,30 @@ typedef enum sg_human_trace_v3_event_kind_e
 	SG_HUMAN_TRACE_V3_EVENT_KIND_COUNT
 } sg_human_trace_v3_event_kind_t;
 
+typedef uint8_t sg_human_trace_v3_step_evidence_t;
+enum
+{
+	SG_HUMAN_TRACE_V3_STEP_EVIDENCE_GROUNDED = UINT8_C(1) << 0,
+	SG_HUMAN_TRACE_V3_STEP_EVIDENCE_DRY = UINT8_C(1) << 1,
+	SG_HUMAN_TRACE_V3_STEP_EVIDENCE_ORDINARY_INPUT = UINT8_C(1) << 2,
+	SG_HUMAN_TRACE_V3_STEP_EVIDENCE_NO_HOOK = UINT8_C(1) << 3,
+	SG_HUMAN_TRACE_V3_STEP_EVIDENCE_WORLD_SUPPORT = UINT8_C(1) << 4,
+	SG_HUMAN_TRACE_V3_STEP_EVIDENCE_NO_EXTERNAL = UINT8_C(1) << 5,
+	SG_HUMAN_TRACE_V3_STEP_EVIDENCE_MOVED = UINT8_C(1) << 6
+};
+
+#define SG_HUMAN_TRACE_V3_STEP_EVIDENCE_ORDINARY_DRY_WALK \
+	(SG_HUMAN_TRACE_V3_STEP_EVIDENCE_GROUNDED | \
+	 SG_HUMAN_TRACE_V3_STEP_EVIDENCE_DRY | \
+	 SG_HUMAN_TRACE_V3_STEP_EVIDENCE_ORDINARY_INPUT | \
+	 SG_HUMAN_TRACE_V3_STEP_EVIDENCE_NO_HOOK | \
+	 SG_HUMAN_TRACE_V3_STEP_EVIDENCE_WORLD_SUPPORT | \
+	 SG_HUMAN_TRACE_V3_STEP_EVIDENCE_NO_EXTERNAL | \
+	 SG_HUMAN_TRACE_V3_STEP_EVIDENCE_MOVED)
+
+#define SG_HUMAN_TRACE_V3_STEP_EVIDENCE_FLAGS_KNOWN \
+	SG_HUMAN_TRACE_V3_STEP_EVIDENCE_ORDINARY_DRY_WALK
+
 typedef struct sg_human_trace_v3_event_s
 {
 	sg_human_trace_v3_event_kind_t kind;
@@ -62,7 +88,7 @@ typedef struct sg_human_trace_v3_event_s
 	uint32_t origin_bits[3];
 	uint32_t hook_origin_bits[3];
 	uint8_t grounded;
-	uint8_t reserved;
+	sg_human_trace_v3_step_evidence_t step_evidence;
 } sg_human_trace_v3_event_t;
 
 /* A completed recorder-owned spool is an immutable durable witness. */
@@ -102,6 +128,19 @@ typedef struct sg_human_trace_v3_segment_ref_s
 typedef struct sg_human_trace_v3_scope_acceptance_s
 	sg_human_trace_v3_scope_acceptance_t;
 
+/* Typed result for the recorder-owned accepted-collection visit.  The
+ * historical boolean entry point remains available below; consumers that
+ * need to distinguish allocation failure use the typed entry point. */
+typedef enum sg_human_trace_visit_status_e
+{
+	SG_HUMAN_TRACE_VISIT_OK = 0,
+	SG_HUMAN_TRACE_VISIT_INVALID_ARGUMENT,
+	SG_HUMAN_TRACE_VISIT_BUSY,
+	SG_HUMAN_TRACE_VISIT_ALLOCATION_FAILED,
+	SG_HUMAN_TRACE_VISIT_INVALID_COLLECTION,
+	SG_HUMAN_TRACE_VISIT_STATUS_COUNT
+} sg_human_trace_visit_status_t;
+
 typedef struct sg_human_trace_v3_collection_visitor_s
 {
 	int (*begin_root)(void *context,
@@ -124,6 +163,9 @@ void SG_HumanTraceMatchEnd(void);
  * operation and remains valid after process restart. */
 int SG_HumanTraceVisitAcceptedV3Collection(const sg_level_identity_t *identity,
 	const sg_human_trace_v3_collection_visitor_t *visitor, void *context);
+sg_human_trace_visit_status_t SG_HumanTraceVisitAcceptedV3CollectionStatus(
+	const sg_level_identity_t *identity,
+	const sg_human_trace_v3_collection_visitor_t *visitor, void *context);
 /* Opens an opaque scope only while its authenticated root is being visited.
  * Saved or caller-forged pointers are rejected, and no receipt is produced. */
 int SG_HumanTraceAcceptedV3ScopeView(
@@ -144,6 +186,9 @@ int SG_HumanTraceTestFormatJsonPath(const char *directory,
 	char path[SG_HUMAN_TRACE_SPOOL_PATH_BYTES]);
 int SG_HumanTraceTestJsonNameSegment(const char *name,
 	const sg_level_identity_t *identity, uint32_t *segment_out);
+int SG_HumanTraceTestJsonHeaderIdentity(const char *line,
+	sg_level_identity_t *identity_out);
+void SG_HumanTraceTestFailCollectionAllocation(int enabled);
 #endif
 
 #endif /* SG_HUMAN_TRACE_H */

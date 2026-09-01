@@ -12,11 +12,17 @@
 #include "slipgate/sg_host_law_publication_private.h"
 #include "slipgate/sg_rune_source_authority.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 struct sg_host_law_construction_s
+{
+	uint32_t marker;
+};
+
+struct sg_host_law_pmove_evaluator_s
 {
 	uint32_t marker;
 };
@@ -34,6 +40,32 @@ static int visibility_audit_calls;
 static sg_host_law_construction_view_t host_view;
 static int source_copy_calls;
 static int source_drift_on_visibility_audit;
+static int pmove_evaluator_acquire_calls;
+static int pmove_evaluator_run_calls;
+static int pmove_evaluator_destroy_calls;
+static sg_host_law_status_t pmove_evaluator_current_status =
+	SG_HOST_LAW_OK;
+#if !defined(SG_COMPACT_BUILDER_REAL_ENTITY_SEMANTICS)
+static int fake_invalid_mover_model;
+static sg_rune_mechanism_kind_t fake_mover_kind;
+static sg_mech_node_kind_t fake_mover_role;
+static sg_bsp_entity_angular_mover_kind_t fake_angular_mover_kind;
+static sg_bsp_entity_semantics_t *fake_last_entity_semantics;
+static uint32_t fake_mover_spawnflags;
+static float fake_mover_move_direction_x;
+static float fake_mover_origin_x;
+static float fake_mover_height;
+static int fake_train_graph;
+static int fake_train_graph_malformed;
+static int fake_door_team;
+static int fake_door_team_malformed;
+#endif
+static int fake_model_trace_allsolid;
+static float fake_model_trace_origin_x;
+static int fake_carried_support_enabled;
+static int fake_geometry_read_enabled;
+static int fake_identity_matches;
+static sg_rune_compact_geometry_view_t fake_geometry_view;
 
 static const char source_entity_text[] =
 	"{\n\"classname\" \"worldspawn\"\n\"message\" \"selected override\"\n}\n"
@@ -43,6 +75,10 @@ static const sg_rune_source_entity_record_t source_entity_records[] = {
 	{ 0U, 0 },
 	{ 2U, 0 }
 };
+#if !defined(SG_COMPACT_BUILDER_REAL_SOURCE_AUTHORITY)
+static sg_rune_source_entity_record_t fake_source_entity_records[5];
+static size_t fake_source_entity_record_count;
+#endif
 
 #if defined(SG_COMPACT_BUILDER_REAL_SOURCE_AUTHORITY)
 static cvar_t ctfflags_value;
@@ -80,7 +116,8 @@ typedef enum dependency_failure_e
 	FAILURE_ENTITY_BUILD,
 	FAILURE_ENTITY_AUDIT,
 	FAILURE_VISIBILITY_BUILD,
-	FAILURE_VISIBILITY_AUDIT
+	FAILURE_VISIBILITY_AUDIT,
+	FAILURE_PMOVE_EVALUATOR_ACQUIRE
 } dependency_failure_t;
 
 static dependency_failure_t dependency_failure;
@@ -90,7 +127,7 @@ const sg_rune_v2_content_id_t SG_BSP_ENTITY_SEMANTICS_SCHEMA_ID = {
 		0x53U, 0x47U, 0x2dU, 0x42U, 0x53U, 0x50U, 0x2dU, 0x45U,
 		0x4eU, 0x54U, 0x49U, 0x54U, 0x59U, 0x2dU, 0x53U, 0x45U,
 		0x4dU, 0x41U, 0x4eU, 0x54U, 0x49U, 0x43U, 0x53U, 0x2dU,
-		0x56U, 0x31U, 0U, 0U, 0U, 0U, 0U, 1U
+		0x56U, 0x32U, 0U, 0U, 0U, 0U, 0U, 2U
 	}
 };
 
@@ -164,8 +201,7 @@ sg_rune_source_status_t SG_RuneSourceAuthoritySizes(
 		!entity_record_count_out)
 		return SG_RUNE_SOURCE_INVALID_ARGUMENT;
 	*entity_text_bytes_out = sizeof(source_entity_text);
-	*entity_record_count_out = sizeof(source_entity_records) /
-		sizeof(source_entity_records[0]);
+	*entity_record_count_out = fake_source_entity_record_count;
 	return SG_RUNE_SOURCE_OK;
 }
 
@@ -176,8 +212,7 @@ sg_rune_source_status_t SG_RuneSourceAuthorityCopy(
 	sg_rune_source_entity_record_t *entity_records_out,
 	size_t entity_record_capacity)
 {
-	const size_t record_count = sizeof(source_entity_records) /
-		sizeof(source_entity_records[0]);
+	const size_t record_count = fake_source_entity_record_count;
 
 	if (authority != &source_authority_handle || !snapshot_out ||
 		!entity_text_out || !entity_records_out)
@@ -190,8 +225,8 @@ sg_rune_source_status_t SG_RuneSourceAuthorityCopy(
 		return source_final_status;
 	*snapshot_out = source_snapshot;
 	memcpy(entity_text_out, source_entity_text, sizeof(source_entity_text));
-	memcpy(entity_records_out, source_entity_records,
-		sizeof(source_entity_records));
+	memcpy(entity_records_out, fake_source_entity_records,
+		record_count * sizeof(*fake_source_entity_records));
 	if (source_copy_calls > 1 && source_mutate_second_copy)
 		entity_text_out[1] ^= 1;
 	if (source_copy_calls > 1 && source_mutate_second_weapon)
@@ -454,6 +489,78 @@ sg_host_law_result_t SG_HostLawConstructionOwnerCopyBsp(
 	return HostResult(SG_HOST_LAW_OK);
 }
 
+sg_host_law_result_t SG_HostLawConstructionOwnerPmoveEvaluatorAcquire(
+	const sg_host_law_construction_t *construction,
+	sg_host_law_pmove_evaluator_t **evaluator_out)
+{
+	sg_host_law_pmove_evaluator_t *evaluator;
+
+	if (!construction || !evaluator_out || *evaluator_out)
+		return HostResult(SG_HOST_LAW_INVALID_ARGUMENT);
+	pmove_evaluator_acquire_calls++;
+	if (dependency_failure == FAILURE_PMOVE_EVALUATOR_ACQUIRE)
+		return HostResult(SG_HOST_LAW_ALLOCATION_FAILED);
+	evaluator = calloc(1U, sizeof(*evaluator));
+	if (!evaluator)
+		return HostResult(SG_HOST_LAW_ALLOCATION_FAILED);
+	evaluator->marker = construction->marker;
+	*evaluator_out = evaluator;
+	return HostResult(SG_HOST_LAW_OK);
+}
+
+sg_host_law_result_t SG_HostLawPmoveEvaluatorCurrent(
+	const sg_host_law_pmove_evaluator_t *evaluator)
+{
+	if (!evaluator)
+		return HostResult(SG_HOST_LAW_INVALID_ARGUMENT);
+	return HostResult(pmove_evaluator_current_status);
+}
+
+sg_host_law_result_t SG_HostLawPmoveEvaluatorRun(
+	const sg_host_law_pmove_evaluator_t *evaluator,
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	sg_host_pmove_result_t *result_out,
+	sg_host_pmove_error_t *error_out)
+{
+	(void)scene;
+	if (!evaluator || !authority || !request || !result_out)
+		return HostResult(SG_HOST_LAW_INVALID_ARGUMENT);
+	pmove_evaluator_run_calls++;
+	memset(result_out, 0, sizeof(*result_out));
+	if (error_out)
+		*error_out = SG_HOST_PMOVE_ERROR_NONE;
+	return HostResult(SG_HOST_LAW_OK);
+}
+
+sg_host_law_result_t SG_HostLawPmoveEvaluatorReplayFrame(
+	const sg_host_law_pmove_evaluator_t *evaluator,
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	const sg_host_pmove_replay_workspace_t *workspace,
+	sg_host_pmove_replay_t *replay_out,
+	sg_host_pmove_error_t *error_out)
+{
+	(void)evaluator;
+	(void)authority;
+	(void)scene;
+	(void)request;
+	(void)workspace;
+	(void)replay_out;
+	(void)error_out;
+	return HostResult(SG_HOST_LAW_INVALID_ARGUMENT);
+}
+
+void SG_HostLawPmoveEvaluatorDestroy(
+	sg_host_law_pmove_evaluator_t *evaluator)
+{
+	if (evaluator)
+		pmove_evaluator_destroy_calls++;
+	free(evaluator);
+}
+
 #if !defined(SG_COMPACT_BUILDER_REAL_BSP)
 int SG_BspWorldLoadMemory(const void *data, size_t size,
 	sg_bsp_world_t **world_out, sg_bsp_error_t *error_out)
@@ -469,7 +576,21 @@ int SG_BspWorldLoadMemory(const void *data, size_t size,
 	if (!world)
 		return 0;
 	world->source_bytes = malloc(size);
-	if (!world->source_bytes) {
+	world->models = calloc(host_view.geometry.model_count,
+		sizeof(*world->models));
+	world->planes = calloc(host_view.geometry.plane_count,
+		sizeof(*world->planes));
+	world->brushes = calloc(host_view.geometry.brush_count,
+		sizeof(*world->brushes));
+	world->brush_sides = calloc(host_view.geometry.brush_side_count,
+		sizeof(*world->brush_sides));
+	if (!world->source_bytes || !world->models || !world->planes ||
+		!world->brushes || !world->brush_sides) {
+		free(world->brush_sides);
+		free(world->brushes);
+		free(world->planes);
+		free(world->models);
+		free(world->source_bytes);
 		free(world);
 		return 0;
 	}
@@ -486,6 +607,29 @@ int SG_BspWorldLoadMemory(const void *data, size_t size,
 	world->leaf_brush_count = host_view.geometry.leaf_brush_count;
 	world->brush_count = host_view.geometry.brush_count;
 	world->brush_side_count = host_view.geometry.brush_side_count;
+	world->planes[0].normal.value[2] = 1.0f;
+	world->planes[0].distance = 1.0f;
+	world->planes[1].normal.value[2] = -1.0f;
+	world->planes[1].distance = 10.0f;
+	world->planes[2].normal.value[2] = -1.0f;
+	world->planes[2].distance = -10.0f;
+	world->brushes[0].first_side = 0U;
+	world->brushes[0].side_count = 2U;
+	world->brushes[0].contents = SG_HOST_CONTENTS_SOLID;
+	world->brushes[1].first_side = 2U;
+	world->brushes[1].side_count = 1U;
+	world->brushes[1].contents = SG_HOST_CONTENTS_SOLID;
+	world->brush_sides[0].plane = 0U;
+	world->brush_sides[1].plane = 1U;
+	world->brush_sides[2].plane = 2U;
+	if (world->model_count > 1U) {
+		world->models[1].mins.value[0] = -8.0f;
+		world->models[1].mins.value[1] = -8.0f;
+		world->models[1].mins.value[2] = -8.0f;
+		world->models[1].maxs.value[0] = 8.0f;
+		world->models[1].maxs.value[1] = 8.0f;
+		world->models[1].maxs.value[2] = 8.0f;
+	}
 	*world_out = world;
 	return 1;
 }
@@ -499,6 +643,10 @@ void SG_BspWorldDestroy(sg_bsp_world_t *world)
 {
 	if (!world)
 		return;
+	free(world->brush_sides);
+	free(world->brushes);
+	free(world->planes);
+	free(world->models);
 	free(world->source_bytes);
 	free(world);
 }
@@ -513,6 +661,262 @@ int SG_HostCollisionInit(sg_host_collision_authority_t *authority,
 	authority->identity = *identity;
 	authority->content_identity = world->content_identity;
 	return 1;
+}
+
+/* The focused builder unit fixture owns no collision world.  Keep this link
+ * shim algebraically identical to the collision forward transform; the
+ * production collision implementation is separately differential-tested. */
+int SG_HostCollisionWorldTransform(
+	const sg_host_collision_transform_t *transform,
+	sg_host_collision_world_transform_t *world_transform_out)
+{
+	const double degrees_to_radians = 0.01745329251994329576923690768489;
+	float sy;
+	float cy;
+	float sp;
+	float cp;
+	float sr;
+	float cr;
+	uint32_t local_axis;
+	uint32_t world_axis;
+
+	if (!transform || !world_transform_out)
+		return 0;
+	for (world_axis = 0U; world_axis < 3U; world_axis++)
+		if (!isfinite(transform->origin[world_axis]) ||
+			!isfinite(transform->angles[world_axis]))
+			return 0;
+	sy = (float)sin((double)(float)((double)transform->angles[1] * degrees_to_radians));
+	cy = (float)cos((double)(float)((double)transform->angles[1] * degrees_to_radians));
+	sp = (float)sin((double)(float)((double)transform->angles[0] * degrees_to_radians));
+	cp = (float)cos((double)(float)((double)transform->angles[0] * degrees_to_radians));
+	sr = (float)sin((double)(float)((double)transform->angles[2] * degrees_to_radians));
+	cr = (float)cos((double)(float)((double)transform->angles[2] * degrees_to_radians));
+	world_transform_out->axis[0][0] = cp * cy;
+	world_transform_out->axis[0][1] = cp * sy;
+	world_transform_out->axis[0][2] = -sp;
+	world_transform_out->axis[1][0] = sr * sp * cy - cr * sy;
+	world_transform_out->axis[1][1] = sr * sp * sy + cr * cy;
+	world_transform_out->axis[1][2] = sr * cp;
+	world_transform_out->axis[2][0] = cr * sp * cy + sr * sy;
+	world_transform_out->axis[2][1] = cr * sp * sy - sr * cy;
+	world_transform_out->axis[2][2] = cr * cp;
+	for (world_axis = 0U; world_axis < 3U; world_axis++) {
+		world_transform_out->origin[world_axis] =
+			transform->origin[world_axis];
+		if (world_transform_out->origin[world_axis] == 0.0f)
+			world_transform_out->origin[world_axis] = 0.0f;
+		for (local_axis = 0U; local_axis < 3U; local_axis++)
+			if (world_transform_out->axis[local_axis][world_axis] == 0.0f)
+				world_transform_out->axis[local_axis][world_axis] = 0.0f;
+	}
+	return 1;
+}
+
+int SG_HostCollisionPusherCarry(
+	const sg_host_collision_transform_t *pusher_transform,
+	const float move[3], const float amove[3], const float rider_start[3],
+	float rider_end_out[3])
+{
+	const double degrees_to_radians = 0.01745329251994329576923690768489;
+	float inverse[3];
+	float axis[3][3];
+	float translated[3];
+	float relative[3];
+	float rotated[3];
+	float sy, cy, sp, cp, sr, cr;
+	uint32_t coordinate;
+
+	if (!pusher_transform || !move || !amove || !rider_start ||
+		!rider_end_out)
+		return 0;
+	for (coordinate = 0U; coordinate < 3U; coordinate++) {
+		if (!isfinite(pusher_transform->origin[coordinate]) ||
+			!isfinite(move[coordinate]) || !isfinite(amove[coordinate]) ||
+			!isfinite(rider_start[coordinate]))
+			return 0;
+		inverse[coordinate] = -amove[coordinate];
+		translated[coordinate] = rider_start[coordinate] + move[coordinate];
+		relative[coordinate] = translated[coordinate] -
+			(pusher_transform->origin[coordinate] + move[coordinate]);
+	}
+	sy = (float)sin((double)(float)((double)inverse[1] * degrees_to_radians));
+	cy = (float)cos((double)(float)((double)inverse[1] * degrees_to_radians));
+	sp = (float)sin((double)(float)((double)inverse[0] * degrees_to_radians));
+	cp = (float)cos((double)(float)((double)inverse[0] * degrees_to_radians));
+	sr = (float)sin((double)(float)((double)inverse[2] * degrees_to_radians));
+	cr = (float)cos((double)(float)((double)inverse[2] * degrees_to_radians));
+	axis[0][0] = cp * cy; axis[0][1] = cp * sy; axis[0][2] = -sp;
+	axis[1][0] = sr * sp * cy - cr * sy;
+	axis[1][1] = sr * sp * sy + cr * cy; axis[1][2] = sr * cp;
+	axis[2][0] = cr * sp * cy + sr * sy;
+	axis[2][1] = cr * sp * sy - sr * cy; axis[2][2] = cr * cp;
+	for (coordinate = 0U; coordinate < 3U; coordinate++) {
+		rotated[coordinate] = relative[0] * axis[coordinate][0] +
+			relative[1] * axis[coordinate][1] +
+			relative[2] * axis[coordinate][2];
+		rider_end_out[coordinate] = translated[coordinate] +
+			(rotated[coordinate] - relative[coordinate]);
+		if (!isfinite(rider_end_out[coordinate]))
+			return 0;
+		if (rider_end_out[coordinate] == 0.0f)
+			rider_end_out[coordinate] = 0.0f;
+	}
+	return 1;
+}
+
+int SG_HostCollisionModelToWorldPoint(
+	const sg_host_collision_authority_t *authority, uint32_t model_index,
+	const sg_host_collision_transform_t *transform, const float local[3],
+	float world_out[3])
+{
+	const double degrees_to_radians = 0.01745329251994329576923690768489;
+	float axis[3][3];
+	float source[3];
+	float sy;
+	float cy;
+	float sp;
+	float cp;
+	float sr;
+	float cr;
+	uint32_t coordinate;
+
+	if (!authority || !authority->world || !transform || !local ||
+		!world_out || model_index == 0U ||
+		model_index >= authority->world->model_count)
+		return 0;
+	for (coordinate = 0U; coordinate < 3U; coordinate++)
+		if (!isfinite(local[coordinate]) || !isfinite(transform->origin[coordinate]) ||
+			!isfinite(transform->angles[coordinate]))
+			return 0;
+	sy = (float)sin((double)(float)((double)transform->angles[1] * degrees_to_radians));
+	cy = (float)cos((double)(float)((double)transform->angles[1] * degrees_to_radians));
+	sp = (float)sin((double)(float)((double)transform->angles[0] * degrees_to_radians));
+	cp = (float)cos((double)(float)((double)transform->angles[0] * degrees_to_radians));
+	sr = (float)sin((double)(float)((double)transform->angles[2] * degrees_to_radians));
+	cr = (float)cos((double)(float)((double)transform->angles[2] * degrees_to_radians));
+	axis[0][0] = cp * cy;
+	axis[0][1] = cp * sy;
+	axis[0][2] = -sp;
+	axis[1][0] = sr * sp * cy - cr * sy;
+	axis[1][1] = sr * sp * sy + cr * cy;
+	axis[1][2] = sr * cp;
+	axis[2][0] = cr * sp * cy + sr * sy;
+	axis[2][1] = cr * sp * sy - sr * cy;
+	axis[2][2] = cr * cp;
+	memcpy(source, local, sizeof(source));
+	for (coordinate = 0U; coordinate < 3U; coordinate++)
+	{
+		world_out[coordinate] = source[0] * axis[0][coordinate] +
+			source[1] * axis[1][coordinate] +
+			source[2] * axis[2][coordinate] +
+			transform->origin[coordinate];
+		if (!isfinite(world_out[coordinate]))
+			return 0;
+		if (world_out[coordinate] == 0.0f)
+			world_out[coordinate] = 0.0f;
+	}
+	return 1;
+}
+
+int SG_HostCollisionClassifyPose(
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene, const float origin[3],
+	sg_rune_stance_t stance, sg_host_collision_pose_t *pose_out)
+{
+	if (!authority || !scene || scene->instance_count != 1U ||
+		!scene->instances || !origin || !pose_out ||
+		!fake_carried_support_enabled)
+		return 0;
+	memset(pose_out, 0, sizeof(*pose_out));
+	pose_out->valid = 1;
+	pose_out->stance = stance;
+	pose_out->supported = 1;
+	pose_out->support.instance_id = scene->instances[0].instance_id;
+	return 1;
+}
+
+int SG_HostCollisionModelPositiveAreaPolygonOverlap(
+	const sg_host_collision_authority_t *authority, uint32_t model_index,
+	const sg_host_collision_transform_t *transform,
+	const sg_rune_vec3_t *world_vertices, uint32_t world_vertex_count,
+	sg_host_collision_contents_t mask, int *overlap_out)
+{
+	const int blocked = fake_model_trace_allsolid && authority && transform &&
+		isfinite(fake_model_trace_origin_x) &&
+		transform->origin[0] == fake_model_trace_origin_x;
+
+	(void)model_index;
+	(void)world_vertices;
+	(void)world_vertex_count;
+	(void)mask;
+	if (overlap_out == NULL)
+		return 0;
+	*overlap_out = blocked;
+	return 1;
+}
+
+int SG_HostCollisionTraceModel(
+	const sg_host_collision_authority_t *authority, uint32_t model_index,
+	const sg_host_collision_transform_t *transform, const float start[3],
+	const float mins[3], const float maxs[3], const float end[3],
+	sg_host_collision_contents_t mask, sg_host_collision_trace_t *trace_out)
+{
+	const int blocked = fake_model_trace_allsolid && authority && transform &&
+		isfinite(fake_model_trace_origin_x) &&
+		transform->origin[0] == fake_model_trace_origin_x;
+
+	(void)model_index;
+	(void)start;
+	(void)mins;
+	(void)maxs;
+	(void)end;
+	(void)mask;
+	if (trace_out == NULL)
+		return 0;
+	memset(trace_out, 0, sizeof(*trace_out));
+	trace_out->fraction = blocked ? 0.0f : 1.0f;
+	trace_out->startsolid = blocked;
+	trace_out->allsolid = blocked;
+	return 1;
+}
+
+int SG_HostCollisionTransition(
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene, const float start[3],
+	const float end[3], sg_rune_stance_t stance,
+	sg_host_collision_transition_t *transition_out)
+{
+	(void)scene;
+	(void)start;
+	(void)end;
+	(void)stance;
+	if (!authority || !transition_out || !fake_carried_support_enabled)
+		return 0;
+	memset(transition_out, 0, sizeof(*transition_out));
+	transition_out->source_valid = 1;
+	transition_out->destination_valid = 1;
+	transition_out->clear = 1;
+	transition_out->sweep.fraction = 1.0f;
+	return 1;
+}
+
+int SG_RuneCompactGeometryRead(const sg_rune_compact_geometry_t *geometry,
+	sg_rune_compact_geometry_view_t *view_out)
+{
+	if (!geometry || !view_out || !fake_geometry_read_enabled)
+		return 0;
+	*view_out = fake_geometry_view;
+	return 1;
+}
+
+int SG_RuneCompactIdentityMatches(
+	const sg_rune_compact_identity_t *actual,
+	const sg_rune_compact_identity_t *expected)
+{
+	(void)actual;
+	(void)expected;
+	return fake_identity_matches;
 }
 
 void SG_ConfigurationDefaultLimits(sg_configuration_limits_t *limits_out)
@@ -656,12 +1060,165 @@ int SG_BspEntitySemanticsBuildEffective(const sg_bsp_world_t *world,
 	for (index = 0U; index < semantic_count; index++) {
 		(*semantics_out)->entities[index].source_set_identity =
 			source_set_identity;
+		(*semantics_out)->entities[index].source_entity_ordinal =
+			survivors[index + 1U].source_ordinal;
+		(*semantics_out)->entities[index].canonical_ordinal = (uint32_t)index;
 		(*semantics_out)->entities[index].bsp_model =
-			SG_BSP_ENTITY_MODEL_NONE;
+			fake_invalid_mover_model ? 2U : 1U;
+		(*semantics_out)->entities[index].flags =
+			SG_BSP_ENTITY_HAS_BRUSH_MODEL |
+			(fake_mover_kind == SG_RUNE_MECHANISM_LIFT ?
+				SG_BSP_ENTITY_HEIGHT_DEFINED : 0U);
+		(*semantics_out)->entities[index].mechanism_kind = fake_mover_kind;
+		(*semantics_out)->entities[index].mechanism_role = fake_mover_role;
+		(*semantics_out)->entities[index].spawnflags = fake_mover_spawnflags;
+		(*semantics_out)->entities[index].height = fake_mover_height;
+		(*semantics_out)->entities[index].origin.value[0] = fake_mover_origin_x;
+		(*semantics_out)->entities[index].origin.value[1] = 50.0f;
+		(*semantics_out)->entities[index].origin.value[2] = 5.0f;
+		(*semantics_out)->entities[index].angles.value[1] = 90.0f;
+		(*semantics_out)->entities[index].move_direction.value[0] =
+			fake_mover_move_direction_x;
+	}
+	if (fake_angular_mover_kind != SG_BSP_ENTITY_ANGULAR_MOVER_NONE) {
+		sg_bsp_entity_semantic_t *mover = &(*semantics_out)->entities[0];
+
+		mover->mechanism_kind = SG_RUNE_MECHANISM_ROTATOR;
+		mover->mechanism_role = SG_MECH_NODE_DOOR_MASTER;
+		mover->angular_mover.kind = fake_angular_mover_kind;
+		if (fake_angular_mover_kind ==
+			SG_BSP_ENTITY_ANGULAR_MOVER_FINITE_DOOR) {
+			mover->angular_mover.flags =
+				SG_BSP_ENTITY_ANGULAR_MOVER_START_OPEN;
+			mover->angular_mover.schedule.finite_door.inactive_angles.value[1] =
+				-90.0f;
+			mover->angular_mover.schedule.finite_door.active_angles.value[1] =
+				0.0f;
+			mover->angular_mover.schedule.finite_door.axis.value[1] = 1.0f;
+			mover->angular_mover.schedule.finite_door.angular_displacement.value[1] =
+				90.0f;
+			mover->angular_mover.schedule.finite_door.speed = 100.0f;
+			mover->angular_mover.schedule.finite_door.acceleration = 100.0f;
+			mover->angular_mover.schedule.finite_door.deceleration = 100.0f;
+			mover->angular_mover.schedule.finite_door.frame_ms = 100U;
+		}
+		else {
+			mover->angular_mover.schedule.continuous_rotator.initial_angles.value[1] =
+				90.0f;
+			mover->angular_mover.schedule.continuous_rotator.axis.value[1] =
+				1.0f;
+			mover->angular_mover.schedule.continuous_rotator.angular_velocity.value[1] =
+				100.0f;
+			mover->angular_mover.schedule.continuous_rotator.frame_angular_delta.value[1] =
+				10.0f;
+			mover->angular_mover.schedule.continuous_rotator.speed = 100.0f;
+			mover->angular_mover.schedule.continuous_rotator.frame_ms = 100U;
+		}
+	}
+	if (fake_train_graph) {
+		if (semantic_count != 4U) {
+			free((*semantics_out)->strings);
+			free((*semantics_out)->entities);
+			free(*semantics_out);
+			*semantics_out = NULL;
+			error_out->code = SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_ARGUMENT;
+			return 0;
+		}
+		/* Keep two distinct ordinal branches from the same source/destination:
+		 * the builder boundary must bind the selected fanout, not merely the
+		 * endpoint pair. */
+		(*semantics_out)->edges = calloc(5U,
+			sizeof(*(*semantics_out)->edges));
+		if ((*semantics_out)->edges == NULL) {
+			free((*semantics_out)->strings);
+			free((*semantics_out)->entities);
+			free(*semantics_out);
+			*semantics_out = NULL;
+			error_out->code = SG_BSP_ENTITY_SEMANTICS_ERROR_OUT_OF_MEMORY;
+			return 0;
+		}
+		(*semantics_out)->entities[0].mechanism_kind =
+			SG_RUNE_MECHANISM_TRAIN;
+		(*semantics_out)->entities[0].mechanism_role = SG_MECH_NODE_TRAIN;
+		for (index = 1U; index < semantic_count; index++) {
+			(*semantics_out)->entities[index].flags = 0U;
+			(*semantics_out)->entities[index].bsp_model =
+				SG_BSP_ENTITY_MODEL_NONE;
+			(*semantics_out)->entities[index].mechanism_kind =
+				SG_RUNE_MECHANISM_TRAIN;
+			(*semantics_out)->entities[index].mechanism_role =
+				SG_MECH_NODE_PATH_CORNER;
+		}
+		(*semantics_out)->edges[0].source = 0U;
+		(*semantics_out)->edges[0].destination = 1U;
+		(*semantics_out)->edges[0].kind = SG_MECH_EDGE_TARGET;
+		(*semantics_out)->edges[1].source = 1U;
+		(*semantics_out)->edges[1].destination = 2U;
+		(*semantics_out)->edges[1].kind = SG_MECH_EDGE_TARGET;
+		(*semantics_out)->edges[1].fanout_ordinal = 3U;
+		(*semantics_out)->edges[2].source = 2U;
+		(*semantics_out)->edges[2].destination = 3U;
+		(*semantics_out)->edges[2].kind = SG_MECH_EDGE_TARGET;
+		(*semantics_out)->edges[2].fanout_ordinal = 5U;
+		(*semantics_out)->edges[3].source = 3U;
+		(*semantics_out)->edges[3].destination = 1U;
+		(*semantics_out)->edges[3].kind = SG_MECH_EDGE_TARGET;
+		(*semantics_out)->edges[3].fanout_ordinal = 7U;
+		(*semantics_out)->edges[4].source = 3U;
+		(*semantics_out)->edges[4].destination = 1U;
+		(*semantics_out)->edges[4].kind = SG_MECH_EDGE_TARGET;
+		(*semantics_out)->edges[4].fanout_ordinal = 8U;
+		if (fake_train_graph_malformed)
+			(*semantics_out)->edges[1].destination = 0U;
+		(*semantics_out)->edge_count = 5U;
+	}
+	if (fake_door_team) {
+		if (semantic_count != 2U) {
+			free((*semantics_out)->strings);
+			free((*semantics_out)->entities);
+			free(*semantics_out);
+			*semantics_out = NULL;
+			error_out->code = SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_ARGUMENT;
+			return 0;
+		}
+		(*semantics_out)->edges = calloc(1U, sizeof(*(*semantics_out)->edges));
+		if ((*semantics_out)->edges == NULL) {
+			free((*semantics_out)->strings);
+			free((*semantics_out)->entities);
+			free(*semantics_out);
+			*semantics_out = NULL;
+			error_out->code = SG_BSP_ENTITY_SEMANTICS_ERROR_OUT_OF_MEMORY;
+			return 0;
+		}
+		(*semantics_out)->entities[0].mechanism_kind = SG_RUNE_MECHANISM_DOOR;
+		(*semantics_out)->entities[0].mechanism_role = SG_MECH_NODE_DOOR_MASTER;
+		(*semantics_out)->entities[1].mechanism_kind = SG_RUNE_MECHANISM_DOOR;
+		(*semantics_out)->entities[1].mechanism_role = SG_MECH_NODE_DOOR_MASTER;
+		(*semantics_out)->entities[1].origin.value[0] = 70.0f;
+		(*semantics_out)->edges[0].source = fake_door_team_malformed ? 0U : 1U;
+		(*semantics_out)->edges[0].destination = 0U;
+		(*semantics_out)->edges[0].kind = SG_MECH_EDGE_TEAM;
+		(*semantics_out)->edge_count = 1U;
 	}
 	(*semantics_out)->entity_count = (uint32_t)semantic_count;
 	(*semantics_out)->string_bytes = 1U;
+	fake_last_entity_semantics = *semantics_out;
 	return 1;
+}
+
+const sg_bsp_entity_angular_mover_t *SG_BspEntitySemanticsAngularMover(
+	const sg_bsp_entity_semantics_t *semantics, uint32_t canonical_ordinal)
+{
+	const sg_bsp_entity_semantic_t *entity;
+
+	if (!semantics || canonical_ordinal >= semantics->entity_count)
+		return NULL;
+	entity = &semantics->entities[canonical_ordinal];
+	if (entity->canonical_ordinal != canonical_ordinal ||
+		entity->angular_mover.kind == SG_BSP_ENTITY_ANGULAR_MOVER_NONE ||
+		entity->angular_mover.kind >= SG_BSP_ENTITY_ANGULAR_MOVER_KIND_COUNT)
+		return NULL;
+	return &entity->angular_mover;
 }
 #endif
 
@@ -726,6 +1283,8 @@ void SG_BspEntitySemanticsDestroy(sg_bsp_entity_semantics_t *semantics)
 {
 	if (!semantics)
 		return;
+	if (fake_last_entity_semantics == semantics)
+		fake_last_entity_semantics = NULL;
 	free(semantics->strings);
 	free(semantics->edges);
 	free(semantics->entities);
@@ -909,6 +1468,25 @@ static sg_rune_compact_builder_input_t Input(
 static void SetHost(void)
 {
 	memset(&host_view, 0, sizeof(host_view));
+#if !defined(SG_COMPACT_BUILDER_REAL_ENTITY_SEMANTICS)
+	fake_invalid_mover_model = 0;
+	fake_mover_kind = SG_RUNE_MECHANISM_DOOR;
+	fake_mover_role = SG_MECH_NODE_DOOR_MASTER;
+	fake_angular_mover_kind = SG_BSP_ENTITY_ANGULAR_MOVER_NONE;
+	fake_mover_spawnflags = 0U;
+	fake_mover_move_direction_x = 0.0f;
+	fake_mover_origin_x = 50.0f;
+	fake_mover_height = 0.0f;
+	fake_train_graph = 0;
+	fake_train_graph_malformed = 0;
+	fake_door_team = 0;
+	fake_door_team_malformed = 0;
+#endif
+	fake_model_trace_allsolid = 0;
+	fake_model_trace_origin_x = INFINITY;
+	fake_carried_support_enabled = 0;
+	fake_geometry_read_enabled = 0;
+	fake_identity_matches = 0;
 	host_view.version = SG_HOST_LAW_PUBLICATION_VERSION;
 	host_view.current = 1U;
 	host_view.level_generation = 7U;
@@ -964,15 +1542,20 @@ static void SetHost(void)
 	host_view.geometry.plane_count = 1U;
 #else
 	host_view.geometry.entity_bytes = 2U;
-	host_view.geometry.model_count = 1U;
+	host_view.geometry.model_count = 2U;
 	host_view.geometry.leaf_count = 2U;
 	host_view.geometry.plane_count = 3U;
 #endif
 	host_view.geometry.node_count = 1U;
 	host_view.geometry.texinfo_count = 1U;
 	host_view.geometry.leaf_brush_count = 1U;
+#if defined(SG_COMPACT_BUILDER_REAL_BSP)
 	host_view.geometry.brush_count = 1U;
 	host_view.geometry.brush_side_count = 1U;
+#else
+	host_view.geometry.brush_count = 2U;
+	host_view.geometry.brush_side_count = 3U;
+#endif
 	host_view.laws.collision_law_id = UINT64_C(0x3333);
 	host_view.laws.pmove_law_id = UINT64_C(0x4444);
 	host_view.laws.gravity_law_id = UINT64_C(0x5555);
@@ -1030,6 +1613,10 @@ static void SetSourceAuthority(void)
 	if (SG_RuneSourceAuthorityPublish("command") != SG_RUNE_SOURCE_OK)
 		abort();
 #else
+	fake_source_entity_record_count = sizeof(source_entity_records) /
+		sizeof(source_entity_records[0]);
+	memcpy(fake_source_entity_records, source_entity_records,
+		sizeof(source_entity_records));
 	memset(&source_snapshot, 0, sizeof(source_snapshot));
 	source_snapshot.version = SG_RUNE_SOURCE_AUTHORITY_VERSION;
 	source_snapshot.publication_generation = UINT64_C(23);
@@ -1058,8 +1645,7 @@ static void SetSourceAuthority(void)
 		(uint8_t)SG_WEAPON_BALANCE_COMPILED;
 	source_snapshot.weapon_law.deathmatch_active = 1U;
 	source_snapshot.entity_text_bytes = (uint32_t)sizeof(source_entity_text);
-	source_snapshot.entity_record_count = (uint32_t)
-		(sizeof(source_entity_records) / sizeof(source_entity_records[0]));
+	source_snapshot.entity_record_count = (uint32_t)fake_source_entity_record_count;
 	source_final_status = SG_RUNE_SOURCE_OK;
 	source_mutate_second_copy = 0;
 	source_mutate_second_weapon = 0;
@@ -1074,6 +1660,10 @@ static void TestDefaultsBuildFromOverrideWithInhibition(void)
 	sg_rune_compact_builder_error_t error;
 	sg_rune_compact_builder_view_t view;
 	sg_rune_compact_builder_owner_view_t owner_view;
+	sg_host_pmove_request_t pmove_request;
+	sg_host_pmove_result_t pmove_result;
+	sg_host_pmove_error_t pmove_error;
+	sg_host_law_result_t pmove_law_result;
 
 	SetHost();
 	SetSourceAuthority();
@@ -1086,6 +1676,9 @@ static void TestDefaultsBuildFromOverrideWithInhibition(void)
 	semantics_audit_calls = 0;
 	entity_audit_calls = 0;
 	visibility_audit_calls = 0;
+	pmove_evaluator_acquire_calls = 0;
+	pmove_evaluator_run_calls = 0;
+	pmove_evaluator_destroy_calls = 0;
 	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
 	CHECK(builder != NULL);
 	CHECK(error.code == SG_RUNE_COMPACT_BUILDER_ERROR_NONE);
@@ -1124,6 +1717,13 @@ static void TestDefaultsBuildFromOverrideWithInhibition(void)
 	CHECK(memcmp(owner_view.weapon_law, &source_snapshot.weapon_law,
 		sizeof(*owner_view.weapon_law)) == 0);
 #endif
+	memset(&pmove_request, 0, sizeof(pmove_request));
+	memset(&pmove_result, 0, sizeof(pmove_result));
+	pmove_law_result = SG_RuneCompactBuilderOwnerPmove(builder, NULL,
+		&pmove_request, &pmove_result, &pmove_error);
+	CHECK(pmove_law_result.status == SG_HOST_LAW_OK);
+	CHECK(pmove_evaluator_acquire_calls == 1);
+	CHECK(pmove_evaluator_run_calls == 1);
 #if defined(SG_COMPACT_BUILDER_REAL_SOURCE_AUTHORITY)
 	{
 		uint32_t bsp_entity_crc = 0U;
@@ -1133,10 +1733,1090 @@ static void TestDefaultsBuildFromOverrideWithInhibition(void)
 	}
 #endif
 	SG_RuneCompactBuilderDestroy(builder);
+	CHECK(pmove_evaluator_destroy_calls == 1);
 #if defined(SG_COMPACT_BUILDER_REAL_SOURCE_AUTHORITY)
 	SG_RuneSourceAuthorityReset();
 #endif
 }
+
+static void TestOwnerReadFailsAfterAuthorityRevocation(void)
+{
+	struct sg_host_law_construction_s construction = { 1U };
+	sg_rune_compact_builder_input_t input = Input(&construction);
+	sg_rune_compact_builder_t *builder = NULL;
+	sg_rune_compact_builder_error_t error;
+	sg_rune_compact_builder_owner_view_t view;
+	sg_rune_compact_builder_owner_view_t unchanged;
+
+	SetHost();
+	SetSourceAuthority();
+	pmove_evaluator_current_status = SG_HOST_LAW_OK;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL);
+	memset(&view, 0xa5, sizeof(view));
+	unchanged = view;
+	pmove_evaluator_current_status = SG_HOST_LAW_PRODUCTION_DRIFT;
+	CHECK(!SG_RuneCompactBuilderOwnerRead(builder, &view));
+	CHECK(memcmp(&view, &unchanged, sizeof(view)) == 0);
+	pmove_evaluator_current_status = SG_HOST_LAW_OK;
+	memset(&view, 0xa5, sizeof(view));
+	unchanged = view;
+#if defined(SG_COMPACT_BUILDER_REAL_SOURCE_AUTHORITY)
+	source_host_current = 0;
+#else
+	source_final_status = SG_RUNE_SOURCE_GENERATION_DRIFT;
+#endif
+	CHECK(!SG_RuneCompactBuilderOwnerRead(builder, &view));
+	CHECK(memcmp(&view, &unchanged, sizeof(view)) == 0);
+	SG_RuneCompactBuilderDestroy(builder);
+	pmove_evaluator_current_status = SG_HOST_LAW_OK;
+#if defined(SG_COMPACT_BUILDER_REAL_SOURCE_AUTHORITY)
+	source_host_current = 1;
+	SG_RuneSourceAuthorityReset();
+#else
+	source_final_status = SG_RUNE_SOURCE_OK;
+#endif
+}
+
+#if !defined(SG_COMPACT_BUILDER_REAL_ENTITY_SEMANTICS)
+static void TestOwnerModelLocalQ8Transform(void)
+{
+	struct sg_host_law_construction_s construction = { 1U };
+	sg_rune_compact_builder_input_t input = Input(&construction);
+	sg_rune_compact_builder_t *builder = NULL;
+	sg_rune_compact_builder_error_t error;
+	sg_rune_q8_vec3_t local[2];
+	sg_rune_vec3_t world[2];
+	sg_rune_bounds_t bounds;
+	sg_rune_vec3_t unchanged[2];
+	sg_rune_bounds_t unchanged_bounds;
+	sg_host_law_result_t result;
+
+	SetHost();
+	SetSourceAuthority();
+	pmove_evaluator_current_status = SG_HOST_LAW_OK;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL);
+	memset(local, 0, sizeof(local));
+	local[0].value[0] = 32;
+	local[0].value[1] = -16;
+	local[1].value[1] = 64;
+	memset(world, 0xa5, sizeof(world));
+	memset(&bounds, 0xa5, sizeof(bounds));
+	result = SG_RuneCompactBuilderOwnerTransformModelLocalQ8(builder, 0U,
+		local, 2U, world, &bounds);
+	CHECK(result.status == SG_HOST_LAW_OK);
+	CHECK(world[0].value[0] == 52.0f && world[0].value[1] == 54.0f &&
+		world[0].value[2] == 5.0f);
+	CHECK(world[1].value[0] == 42.0f && world[1].value[1] == 50.0f &&
+		world[1].value[2] == 5.0f);
+	CHECK(bounds.mins.value[0] == 42.0f && bounds.mins.value[1] == 50.0f &&
+		bounds.mins.value[2] == 5.0f);
+	CHECK(bounds.maxs.value[0] == 52.0f && bounds.maxs.value[1] == 54.0f &&
+		bounds.maxs.value[2] == 5.0f);
+
+	memset(unchanged, 0x5a, sizeof(unchanged));
+	memset(&unchanged_bounds, 0x5a, sizeof(unchanged_bounds));
+	memcpy(world, unchanged, sizeof(world));
+	bounds = unchanged_bounds;
+	pmove_evaluator_current_status = SG_HOST_LAW_PRODUCTION_DRIFT;
+	result = SG_RuneCompactBuilderOwnerTransformModelLocalQ8(builder, 0U,
+		local, 2U, world, &bounds);
+	CHECK(result.status == SG_HOST_LAW_PRODUCTION_DRIFT);
+	CHECK(memcmp(world, unchanged, sizeof(world)) == 0);
+	CHECK(memcmp(&bounds, &unchanged_bounds, sizeof(bounds)) == 0);
+	pmove_evaluator_current_status = SG_HOST_LAW_OK;
+	result = SG_RuneCompactBuilderOwnerTransformModelLocalQ8(builder, 1U,
+		local, 2U, world, &bounds);
+	CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED);
+
+	SG_RuneCompactBuilderDestroy(builder);
+	builder = NULL;
+	fake_invalid_mover_model = 1;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL);
+	result = SG_RuneCompactBuilderOwnerTransformModelLocalQ8(builder, 0U,
+		local, 2U, world, &bounds);
+	CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED);
+	SG_RuneCompactBuilderDestroy(builder);
+	fake_invalid_mover_model = 0;
+}
+
+static void TestOwnerTransformUsesSpawnResolvedAngularPose(void)
+{
+	struct sg_host_law_construction_s construction = { 1U };
+	sg_rune_compact_builder_input_t input = Input(&construction);
+	sg_rune_compact_builder_t *builder = NULL;
+	sg_rune_compact_builder_error_t error;
+	sg_rune_q8_vec3_t local;
+	sg_rune_vec3_t world;
+	sg_rune_bounds_t bounds;
+	sg_host_law_result_t result;
+
+	SetHost();
+	SG_HostMechanismLawDefault(&host_view.laws.mechanism);
+	SetSourceAuthority();
+	/* Raw entity angles remain +90 in the fixture.  The finite START_OPEN
+	 * schedule publishes -90 as the authenticated initial pose. */
+	fake_angular_mover_kind = SG_BSP_ENTITY_ANGULAR_MOVER_FINITE_DOOR;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL);
+	memset(&local, 0, sizeof(local));
+	local.value[0] = 8;
+	result = SG_RuneCompactBuilderOwnerTransformModelLocalQ8(builder, 0U,
+		&local, 1U, &world, &bounds);
+	CHECK(result.status == SG_HOST_LAW_OK);
+	CHECK(world.value[0] == 50.0f && world.value[1] == 49.0f &&
+		world.value[2] == 5.0f);
+	SG_RuneCompactBuilderDestroy(builder);
+	builder = NULL;
+
+	/* A continuous func_rotating schedule has no finite endpoint, so the
+	 * opaque local-Q8 endpoint query must fail closed. */
+	SetHost();
+	SetSourceAuthority();
+	SG_HostMechanismLawDefault(&host_view.laws.mechanism);
+	fake_angular_mover_kind =
+		SG_BSP_ENTITY_ANGULAR_MOVER_CONTINUOUS_ROTATOR;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL);
+	result = SG_RuneCompactBuilderOwnerTransformModelLocalQ8(builder, 0U,
+		&local, 1U, &world, &bounds);
+	CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED);
+	SG_RuneCompactBuilderDestroy(builder);
+	builder = NULL;
+
+	/* A secret door's stock path has two legs.  It must not leak its raw map
+	 * origin through the generic transform path before an exact schedule exists. */
+	SetHost();
+	SetSourceAuthority();
+	SG_HostMechanismLawDefault(&host_view.laws.mechanism);
+	fake_angular_mover_kind = SG_BSP_ENTITY_ANGULAR_MOVER_NONE;
+	fake_mover_role = SG_MECH_NODE_SECRET_DOOR;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL);
+	result = SG_RuneCompactBuilderOwnerTransformModelLocalQ8(builder, 0U,
+		&local, 1U, &world, &bounds);
+	CHECK(result.status == SG_HOST_LAW_EVALUATION_FAILED);
+	SG_RuneCompactBuilderDestroy(builder);
+	fake_mover_role = SG_MECH_NODE_DOOR_MASTER;
+	fake_angular_mover_kind = SG_BSP_ENTITY_ANGULAR_MOVER_NONE;
+}
+
+static void TestAngularMoverIdentityRejectsDirtyInactiveBytes(void)
+{
+	struct sg_host_law_construction_s construction = { 1U };
+	sg_rune_compact_builder_input_t input = Input(&construction);
+	sg_rune_compact_builder_t *builder = NULL;
+	sg_rune_compact_builder_error_t error;
+	sg_rune_compact_builder_owner_view_t view;
+	sg_rune_compact_builder_owner_view_t unchanged;
+	sg_bsp_entity_angular_mover_t saved;
+	unsigned char *schedule;
+	size_t schedule_bytes;
+
+	/* NONE owns no union arm.  A dirty byte must change the builder's
+	 * currentness identity even though publication rejects the record first. */
+	SetHost();
+	SetSourceAuthority();
+	SG_HostMechanismLawDefault(&host_view.laws.mechanism);
+	fake_angular_mover_kind = SG_BSP_ENTITY_ANGULAR_MOVER_NONE;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL && fake_last_entity_semantics != NULL);
+	if (builder != NULL && fake_last_entity_semantics != NULL)
+	{
+		saved = fake_last_entity_semantics->entities[0].angular_mover;
+		schedule = (unsigned char *)&fake_last_entity_semantics->entities[0]
+			.angular_mover.schedule;
+		schedule_bytes = sizeof(saved.schedule);
+		schedule[schedule_bytes - 1U] = 1U;
+		memset(&view, 0xa5, sizeof(view));
+		unchanged = view;
+		CHECK(!SG_RuneCompactBuilderOwnerRead(builder, &view));
+		CHECK(memcmp(&view, &unchanged, sizeof(view)) == 0);
+		fake_last_entity_semantics->entities[0].angular_mover = saved;
+		CHECK(SG_RuneCompactBuilderOwnerRead(builder, &view));
+	}
+	SG_RuneCompactBuilderDestroy(builder);
+	builder = NULL;
+
+	/* Inactive union bytes are part of the identity witness and cannot collide. */
+	SetHost();
+	SetSourceAuthority();
+	SG_HostMechanismLawDefault(&host_view.laws.mechanism);
+	fake_angular_mover_kind =
+		SG_BSP_ENTITY_ANGULAR_MOVER_CONTINUOUS_ROTATOR;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL && fake_last_entity_semantics != NULL);
+	if (builder != NULL && fake_last_entity_semantics != NULL)
+	{
+		saved = fake_last_entity_semantics->entities[0].angular_mover;
+		schedule = (unsigned char *)&fake_last_entity_semantics->entities[0]
+			.angular_mover.schedule;
+		schedule_bytes = sizeof(saved.schedule);
+		CHECK(schedule_bytes > sizeof(saved.schedule.continuous_rotator));
+		if (schedule_bytes > sizeof(saved.schedule.continuous_rotator))
+		{
+			schedule[schedule_bytes - 1U] = 1U;
+			memset(&view, 0xa5, sizeof(view));
+			unchanged = view;
+			CHECK(!SG_RuneCompactBuilderOwnerRead(builder, &view));
+			CHECK(memcmp(&view, &unchanged, sizeof(view)) == 0);
+			fake_last_entity_semantics->entities[0].angular_mover = saved;
+			CHECK(SG_RuneCompactBuilderOwnerRead(builder, &view));
+		}
+	}
+	SG_RuneCompactBuilderDestroy(builder);
+	fake_angular_mover_kind = SG_BSP_ENTITY_ANGULAR_MOVER_NONE;
+}
+
+static void TestOwnerMoverTransportCandidateStates(void)
+{
+	struct sg_host_law_construction_s construction = { 1U };
+	sg_rune_compact_builder_input_t input = Input(&construction);
+	sg_rune_compact_builder_t *builder = NULL;
+	sg_rune_compact_builder_error_t error;
+	sg_rune_compact_source_surface_t surface;
+	sg_rune_q8_vec3_t vertices[4];
+	sg_rune_compact_builder_mover_request_t request;
+	sg_rune_compact_builder_mover_result_t result;
+	sg_rune_compact_builder_mover_result_t unchanged;
+	const sg_rune_compact_geometry_t *geometry =
+		(const sg_rune_compact_geometry_t *)(const void *)&surface;
+	sg_host_law_result_t host_result;
+
+	SetHost();
+	SetSourceAuthority();
+	SG_HostMechanismLawDefault(&host_view.laws.mechanism);
+	fake_mover_kind = SG_RUNE_MECHANISM_LIFT;
+	pmove_evaluator_current_status = SG_HOST_LAW_OK;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL);
+	memset(&surface, 0, sizeof(surface));
+	memset(vertices, 0, sizeof(vertices));
+	vertices[0].value[0] = -32;
+	vertices[0].value[1] = -32;
+	vertices[1].value[0] = 32;
+	vertices[1].value[1] = -32;
+	vertices[2].value[0] = 32;
+	vertices[2].value[1] = 32;
+	vertices[3].value[0] = -32;
+	vertices[3].value[1] = 32;
+	surface.frame = SG_RUNE_COMPACT_SOURCE_SURFACE_MODEL_LOCAL;
+	surface.source.model = 0U;
+	surface.vertices.count = 4U;
+	memset(&fake_geometry_view, 0, sizeof(fake_geometry_view));
+	fake_geometry_view.source_surfaces = &surface;
+	fake_geometry_view.source_surface_count = 1U;
+	fake_geometry_view.source_surface_vertices = vertices;
+	fake_geometry_view.source_surface_vertex_count = 4U;
+	fake_geometry_read_enabled = 1;
+	fake_identity_matches = 1;
+	memset(&request, 0, sizeof(request));
+	request.mode = SG_RUNE_COMPACT_BUILDER_MOVER_MODE_CARRIED_SUPPORT;
+	request.source_state = SG_RUNE_COMPACT_MECHANISM_AUTHORITY_STATE_INACTIVE;
+	request.destination_state = SG_RUNE_COMPACT_MECHANISM_AUTHORITY_STATE_ACTIVE;
+	request.source_surface_ordinal = 0U;
+	request.portal_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.entry_cell.value = SG_RUNE_COMPACT_INDEX_NONE;
+	request.exit_cell.value = SG_RUNE_COMPACT_INDEX_NONE;
+	request.source_endpoint_entity_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.destination_endpoint_entity_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.route_fanout_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.support_pose_mode =
+		SG_RUNE_COMPACT_BUILDER_SUPPORT_POSE_CANONICAL;
+	request.stance = SG_RUNE_STANCE_STANDING;
+	memset(&result, 0xa5, sizeof(result));
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && !result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NONE);
+	surface.source.model = 1U;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NO_LANDING &&
+		!result.start_supported && !result.end_supported &&
+		!result.swept_static_clear);
+	memset(&unchanged, 0x5a, sizeof(unchanged));
+	result = unchanged;
+	pmove_evaluator_current_status = SG_HOST_LAW_PRODUCTION_DRIFT;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_PRODUCTION_DRIFT &&
+		memcmp(&result, &unchanged, sizeof(result)) == 0);
+	pmove_evaluator_current_status = SG_HOST_LAW_OK;
+	SG_RuneCompactBuilderDestroy(builder);
+	fake_geometry_read_enabled = 0;
+	fake_identity_matches = 0;
+	fake_mover_kind = SG_RUNE_MECHANISM_DOOR;
+}
+
+static int CollisionWorldTransformFiniteCanonical(
+	const sg_host_collision_world_transform_t *transform)
+{
+	uint32_t local_axis;
+	uint32_t world_axis;
+
+	if (!transform)
+		return 0;
+	for (world_axis = 0U; world_axis < 3U; world_axis++) {
+		if (!isfinite(transform->origin[world_axis]) ||
+			(transform->origin[world_axis] == 0.0f &&
+				signbit(transform->origin[world_axis])))
+			return 0;
+		for (local_axis = 0U; local_axis < 3U; local_axis++)
+			if (!isfinite(transform->axis[local_axis][world_axis]) ||
+				(transform->axis[local_axis][world_axis] == 0.0f &&
+					signbit(transform->axis[local_axis][world_axis])))
+				return 0;
+	}
+	return 1;
+}
+
+static void TestOwnerMoverTransportTransformProvenance(void)
+{
+	struct sg_host_law_construction_s construction = { 1U };
+	sg_rune_compact_builder_input_t input = Input(&construction);
+	sg_rune_compact_builder_t *builder = NULL;
+	sg_rune_compact_builder_error_t error;
+	sg_rune_compact_source_surface_t surface;
+	sg_rune_q8_vec3_t vertices[4];
+	sg_rune_compact_cell_t cell;
+	sg_rune_compact_facet_t facet;
+	sg_rune_compact_incidence_t incidence;
+	sg_rune_compact_incidence_index_t cell_incidence;
+	sg_rune_compact_builder_mover_request_t request;
+	sg_rune_compact_builder_mover_result_t result;
+	sg_rune_vec3_t replayed_world;
+	sg_rune_vec3_t unchanged_world;
+	sg_host_collision_world_transform_t noncanonical_transform;
+	const sg_rune_compact_geometry_t *geometry =
+		(const sg_rune_compact_geometry_t *)(const void *)&surface;
+	sg_host_law_result_t host_result;
+
+	SetHost();
+	SG_HostMechanismLawDefault(&host_view.laws.mechanism);
+	SetSourceAuthority();
+	/* At 2^24, one binary32 ULP is two world units.  The selected local
+	 * support pose contributes exactly that step through the host AngleAxis
+	 * operation order, while the lift's terminal carry transform changes Z. */
+	fake_mover_kind = SG_RUNE_MECHANISM_LIFT;
+	fake_mover_origin_x = 16777216.0f;
+	fake_mover_height = 100.0f;
+	fake_carried_support_enabled = 1;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL);
+	memset(&surface, 0, sizeof(surface));
+	memset(vertices, 0, sizeof(vertices));
+	memset(&cell, 0, sizeof(cell));
+	memset(&facet, 0, sizeof(facet));
+	memset(&incidence, 0, sizeof(incidence));
+	memset(&cell_incidence, 0, sizeof(cell_incidence));
+	/* The horizontal centroid is local (0, -2, 0).  With the authenticated
+	 * yaw of 90 degrees it becomes world X = origin + 2, exactly one ULP. */
+	vertices[0] = (sg_rune_q8_vec3_t){ { -32, -24, 0 } };
+	vertices[1] = (sg_rune_q8_vec3_t){ { 32, -24, 0 } };
+	vertices[2] = (sg_rune_q8_vec3_t){ { 32, -8, 0 } };
+	vertices[3] = (sg_rune_q8_vec3_t){ { -32, -8, 0 } };
+	surface.frame = SG_RUNE_COMPACT_SOURCE_SURFACE_MODEL_LOCAL;
+	surface.source.model = 1U;
+	surface.vertices.count = 4U;
+	/* A single compact cell owns both exact-Q8 endpoint poses.  Its one
+	 * constraint is x >= 0, so the localizer exercises its halfspace rule,
+	 * not an AABB-only shortcut. */
+	cell.bounds.mins = (sg_rune_q8_vec3_t){ { 134217600, 0, -1024 } };
+	cell.bounds.maxs = (sg_rune_q8_vec3_t){ { 134217856, 800, 512 } };
+	cell.incidences.first = 0U;
+	cell.incidences.count = 1U;
+	cell.valid_stances = SG_RUNE_STANCE_VALID_STANDING;
+	facet.plane.normal_bits[0] = UINT32_C(0x3f800000);
+	facet.kind = SG_RUNE_COMPACT_FACET_CONSTRAINT_ONLY;
+	incidence.cell.value = 0U;
+	incidence.facet.value = 0U;
+	incidence.side = SG_RUNE_FACET_POSITIVE_SIDE;
+	incidence.boundary = SG_RUNE_BOUNDARY_CLOSED;
+	cell_incidence.value = 0U;
+	memset(&fake_geometry_view, 0, sizeof(fake_geometry_view));
+	fake_geometry_view.cells = &cell;
+	fake_geometry_view.cell_count = 1U;
+	fake_geometry_view.facets = &facet;
+	fake_geometry_view.facet_count = 1U;
+	fake_geometry_view.incidences = &incidence;
+	fake_geometry_view.incidence_count = 1U;
+	fake_geometry_view.cell_incidences = &cell_incidence;
+	fake_geometry_view.cell_incidence_count = 1U;
+	fake_geometry_view.source_surfaces = &surface;
+	fake_geometry_view.source_surface_count = 1U;
+	fake_geometry_view.source_surface_vertices = vertices;
+	fake_geometry_view.source_surface_vertex_count = 4U;
+	fake_geometry_read_enabled = 1;
+	fake_identity_matches = 1;
+	memset(&request, 0, sizeof(request));
+	request.mode = SG_RUNE_COMPACT_BUILDER_MOVER_MODE_CARRIED_SUPPORT;
+	request.source_state = SG_RUNE_COMPACT_MECHANISM_AUTHORITY_STATE_INACTIVE;
+	request.destination_state = SG_RUNE_COMPACT_MECHANISM_AUTHORITY_STATE_ACTIVE;
+	request.source_surface_ordinal = 0U;
+	request.portal_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.entry_cell.value = SG_RUNE_COMPACT_INDEX_NONE;
+	request.exit_cell.value = SG_RUNE_COMPACT_INDEX_NONE;
+	request.source_endpoint_entity_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.destination_endpoint_entity_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.route_fanout_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.support_pose_mode =
+		SG_RUNE_COMPACT_BUILDER_SUPPORT_POSE_CANONICAL;
+	request.stance = SG_RUNE_STANCE_STANDING;
+	memset(&result, 0xa5, sizeof(result));
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NONE &&
+		result.start_supported && result.end_supported &&
+		result.swept_static_clear);
+	CHECK(CollisionWorldTransformFiniteCanonical(&result.source_mover_transform) &&
+		CollisionWorldTransformFiniteCanonical(&result.destination_mover_transform));
+	CHECK(result.source_mover_transform.origin[0] == 16777216.0f &&
+		result.destination_mover_transform.origin[0] == 16777216.0f &&
+		result.source_mover_transform.origin[2] == -95.0f &&
+		result.destination_mover_transform.origin[2] == 5.0f);
+	CHECK(result.source_mover_transform.axis[0][1] > 0.0f &&
+		result.source_mover_transform.axis[1][0] < 0.0f &&
+		result.destination_mover_transform.axis[0][1] > 0.0f &&
+		result.destination_mover_transform.axis[1][0] < 0.0f);
+	CHECK(result.source_support_local.value[2] == 0);
+	CHECK(result.source_player_local.value[2] == 193);
+	CHECK(result.source_player_world.value[0] ==
+		nextafterf(fake_mover_origin_x, INFINITY) &&
+		result.destination_player_world.value[0] ==
+		nextafterf(fake_mover_origin_x, INFINITY));
+	host_result = SG_RuneCompactBuilderOwnerReplayLocalQ8Pose(builder, 0U,
+		&result.source_mover_transform, &result.source_player_local,
+		&replayed_world);
+	CHECK(host_result.status == SG_HOST_LAW_OK &&
+		!memcmp(&replayed_world, &result.source_player_world,
+			sizeof(replayed_world)));
+	host_result = SG_RuneCompactBuilderOwnerReplayLocalQ8Pose(builder, 0U,
+		&result.destination_mover_transform, &result.destination_player_local,
+		&replayed_world);
+	CHECK(host_result.status == SG_HOST_LAW_OK &&
+		!memcmp(&replayed_world, &result.destination_player_world,
+			sizeof(replayed_world)));
+	/* Result transforms carry a single finite representation.  The owner
+	 * refuses a forged negative-zero bit rather than silently normalizing the
+	 * replay input, leaving the caller's world witness untouched. */
+	noncanonical_transform = result.source_mover_transform;
+	noncanonical_transform.axis[0][2] = -0.0f;
+	memset(&replayed_world, 0xa5, sizeof(replayed_world));
+	unchanged_world = replayed_world;
+	host_result = SG_RuneCompactBuilderOwnerReplayLocalQ8Pose(builder, 0U,
+		&noncanonical_transform, &result.source_player_local,
+		&replayed_world);
+	CHECK(host_result.status == SG_HOST_LAW_EVALUATION_FAILED &&
+		!memcmp(&replayed_world, &unchanged_world, sizeof(replayed_world)));
+	request.support_pose_mode = SG_RUNE_COMPACT_BUILDER_SUPPORT_POSE_EXPLICIT;
+	request.support_local_pose = result.source_support_local;
+	request.player_local_pose = result.source_player_local;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NONE);
+	request.player_local_pose.value[2]--;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NO_LANDING);
+	SG_RuneCompactBuilderDestroy(builder);
+	fake_carried_support_enabled = 0;
+	fake_geometry_read_enabled = 0;
+	fake_identity_matches = 0;
+	fake_mover_kind = SG_RUNE_MECHANISM_DOOR;
+}
+
+#if !defined(SG_COMPACT_BUILDER_REAL_SOURCE_AUTHORITY)
+/* Exercise the concrete builder-owned train graph rather than the transition
+ * layer's host stub.  The graph is train -> 1 -> 2 -> 3 -> 1, and has two
+ * distinct 3 -> 1 TARGET fanouts. */
+static void TestOwnerTrainRouteCertification(void)
+{
+	struct sg_host_law_construction_s construction = { 1U };
+	sg_rune_compact_builder_input_t input = Input(&construction);
+	sg_rune_compact_builder_t *builder = NULL;
+	sg_rune_compact_builder_error_t error;
+	sg_rune_compact_source_surface_t surface;
+	sg_rune_q8_vec3_t vertices[4];
+	sg_rune_compact_builder_mover_request_t request;
+	sg_rune_compact_builder_mover_result_t result;
+	sg_rune_compact_builder_mover_result_t unchanged;
+	const sg_rune_compact_geometry_t *geometry =
+		(const sg_rune_compact_geometry_t *)(const void *)&surface;
+	sg_host_law_result_t host_result;
+	size_t index;
+
+	SetHost();
+	SetSourceAuthority();
+	/* The fake semantics adapter gives every survivor after worldspawn one
+	 * canonical entity ordinal.  Supply train plus three path-corners. */
+	fake_source_entity_record_count = 5U;
+	for (index = 0U; index < fake_source_entity_record_count; index++) {
+		fake_source_entity_records[index].source_ordinal = (uint32_t)index;
+		fake_source_entity_records[index].effective_spawnflags = 0U;
+	}
+	source_snapshot.entity_record_count =
+		(uint32_t)fake_source_entity_record_count;
+	SG_HostMechanismLawDefault(&host_view.laws.mechanism);
+	fake_train_graph = 1;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL);
+	memset(&surface, 0, sizeof(surface));
+	memset(vertices, 0, sizeof(vertices));
+	vertices[0].value[0] = -32;
+	vertices[0].value[1] = -32;
+	vertices[1].value[0] = 32;
+	vertices[1].value[1] = -32;
+	vertices[2].value[0] = 32;
+	vertices[2].value[1] = 32;
+	vertices[3].value[0] = -32;
+	vertices[3].value[1] = 32;
+	surface.frame = SG_RUNE_COMPACT_SOURCE_SURFACE_MODEL_LOCAL;
+	surface.source.model = 1U;
+	surface.vertices.count = 4U;
+	memset(&fake_geometry_view, 0, sizeof(fake_geometry_view));
+	fake_geometry_view.source_surfaces = &surface;
+	fake_geometry_view.source_surface_count = 1U;
+	fake_geometry_view.source_surface_vertices = vertices;
+	fake_geometry_view.source_surface_vertex_count = 4U;
+	fake_geometry_read_enabled = 1;
+	fake_identity_matches = 1;
+	memset(&request, 0, sizeof(request));
+	request.mode = SG_RUNE_COMPACT_BUILDER_MOVER_MODE_CARRIED_SUPPORT;
+	request.source_state = SG_RUNE_COMPACT_MECHANISM_AUTHORITY_STATE_ACTIVE;
+	request.destination_state =
+		SG_RUNE_COMPACT_MECHANISM_AUTHORITY_STATE_ACTIVE;
+	request.source_surface_ordinal = 0U;
+	request.portal_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.entry_cell.value = SG_RUNE_COMPACT_INDEX_NONE;
+	request.exit_cell.value = SG_RUNE_COMPACT_INDEX_NONE;
+	request.source_endpoint_entity_ordinal = 3U;
+	request.destination_endpoint_entity_ordinal = 1U;
+	request.route_fanout_ordinal = 7U;
+	request.support_pose_mode =
+		SG_RUNE_COMPACT_BUILDER_SUPPORT_POSE_CANONICAL;
+	request.stance = SG_RUNE_STANCE_STANDING;
+	/* The source corner is reached only through the three-corner walk.  The
+	 * closing edge's specific fanout is echoed even though static collision
+	 * intentionally rejects the fake rider's landing. */
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NO_LANDING &&
+		result.source_endpoint_entity_ordinal == 3U &&
+		result.destination_endpoint_entity_ordinal == 1U &&
+		result.route_fanout_ordinal == 7U);
+	/* The duplicate endpoint has a separate valid occurrence. */
+	request.route_fanout_ordinal = 8U;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && result.applicable &&
+		result.route_fanout_ordinal == 8U);
+	/* A guessed fanout cannot reuse either endpoint certificate. */
+	request.route_fanout_ordinal = 6U;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && !result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NONE);
+#if defined(SG_COMPACT_BUILDER_TEST_HOOKS)
+	/* Traversal allocation failure is a typed host error and must not become
+	 * the ordinary candidate miss used for an unreachable route. */
+	request.route_fanout_ordinal = 7U;
+	memset(&unchanged, 0x5a, sizeof(unchanged));
+	result = unchanged;
+	SG_RuneCompactBuilderTestFailNextTrainRouteAllocation();
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_ALLOCATION_FAILED &&
+		memcmp(&result, &unchanged, sizeof(result)) == 0);
+#endif
+	SG_RuneCompactBuilderDestroy(builder);
+	builder = NULL;
+
+	SetHost();
+	SetSourceAuthority();
+	fake_source_entity_record_count = 5U;
+	for (index = 0U; index < fake_source_entity_record_count; index++) {
+		fake_source_entity_records[index].source_ordinal = (uint32_t)index;
+		fake_source_entity_records[index].effective_spawnflags = 0U;
+	}
+	source_snapshot.entity_record_count =
+		(uint32_t)fake_source_entity_record_count;
+	SG_HostMechanismLawDefault(&host_view.laws.mechanism);
+	fake_train_graph = 1;
+	fake_train_graph_malformed = 1;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL);
+	/* Reinstall geometry after SetHost's test-state reset. */
+	fake_geometry_view.source_surfaces = &surface;
+	fake_geometry_view.source_surface_count = 1U;
+	fake_geometry_view.source_surface_vertices = vertices;
+	fake_geometry_view.source_surface_vertex_count = 4U;
+	fake_geometry_read_enabled = 1;
+	fake_identity_matches = 1;
+	request.route_fanout_ordinal = 7U;
+	memset(&result, 0, sizeof(result));
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_EVALUATION_FAILED &&
+		!result.applicable);
+	SG_RuneCompactBuilderDestroy(builder);
+	fake_geometry_read_enabled = 0;
+	fake_identity_matches = 0;
+	fake_train_graph = 0;
+	fake_train_graph_malformed = 0;
+}
+#endif
+
+static void TestOwnerPortalPolygonCertification(void)
+{
+	struct sg_host_law_construction_s construction = { 1U };
+	sg_rune_compact_builder_input_t input = Input(&construction);
+	sg_rune_compact_builder_t *builder = NULL;
+	sg_rune_compact_builder_error_t error;
+	sg_rune_compact_source_surface_t surface;
+	sg_rune_compact_source_surface_t mover_surfaces[4];
+	sg_rune_q8_vec3_t source_vertices[3];
+	sg_rune_q8_vec3_t mover_vertices[12];
+	sg_rune_q8_vec3_t portal_vertices[3];
+	sg_rune_compact_facet_t facet;
+	sg_rune_compact_portal_t portal;
+	sg_rune_compact_incidence_t incidences[2];
+	sg_rune_compact_cell_t cells[2];
+	sg_rune_compact_builder_mover_request_t request;
+	sg_rune_compact_builder_mover_result_t result;
+	sg_rune_vec3_t source_world[3];
+	sg_rune_vec3_t destination_world[3];
+	const sg_rune_compact_geometry_t *geometry =
+		(const sg_rune_compact_geometry_t *)(const void *)&surface;
+	sg_host_law_result_t host_result;
+
+	SetHost();
+	SetSourceAuthority();
+	SG_HostMechanismLawDefault(&host_view.laws.mechanism);
+	fake_mover_kind = SG_RUNE_MECHANISM_DOOR;
+	fake_mover_spawnflags = 1U;
+	fake_mover_move_direction_x = 1.0f;
+	pmove_evaluator_current_status = SG_HOST_LAW_OK;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL);
+	memset(&surface, 0, sizeof(surface));
+	memset(source_vertices, 0, sizeof(source_vertices));
+	memset(portal_vertices, 0, sizeof(portal_vertices));
+	memset(&facet, 0, sizeof(facet));
+	memset(&portal, 0, sizeof(portal));
+	memset(incidences, 0, sizeof(incidences));
+	memset(cells, 0, sizeof(cells));
+	/* This catalog root is deliberately one unit above the portal plane.  It
+	 * describes a thick door face, so face coplanarity must not decide closure;
+	 * the authenticated model-volume trace below does. */
+	source_vertices[0].value[2] = 8;
+	source_vertices[1].value[2] = 8;
+	source_vertices[2].value[2] = 8;
+	source_vertices[1].value[1] = -16;
+	source_vertices[2].value[0] = 16;
+	surface.frame = SG_RUNE_COMPACT_SOURCE_SURFACE_MODEL_LOCAL;
+	surface.source.model = 1U;
+	surface.vertices.count = 3U;
+	facet.kind = SG_RUNE_COMPACT_FACET_POLYGON;
+	facet.vertices.count = 3U;
+	portal.facet.value = 0U;
+	portal.negative_incidence.value = 0U;
+	portal.positive_incidence.value = 1U;
+	incidences[0].cell.value = 0U;
+	incidences[1].cell.value = 1U;
+	memset(&fake_geometry_view, 0, sizeof(fake_geometry_view));
+	fake_geometry_view.cells = cells;
+	fake_geometry_view.cell_count = 2U;
+	fake_geometry_view.facets = &facet;
+	fake_geometry_view.facet_count = 1U;
+	fake_geometry_view.incidences = incidences;
+	fake_geometry_view.incidence_count = 2U;
+	fake_geometry_view.vertices = portal_vertices;
+	fake_geometry_view.vertex_count = 3U;
+	fake_geometry_view.portals = &portal;
+	fake_geometry_view.portal_count = 1U;
+	fake_geometry_view.source_surfaces = &surface;
+	fake_geometry_view.source_surface_count = 1U;
+	fake_geometry_view.source_surface_vertices = source_vertices;
+	fake_geometry_view.source_surface_vertex_count = 3U;
+	fake_geometry_read_enabled = 1;
+	fake_identity_matches = 1;
+	memset(&request, 0, sizeof(request));
+	request.mode = SG_RUNE_COMPACT_BUILDER_MOVER_MODE_PORTAL_STATE;
+	request.source_state = SG_RUNE_COMPACT_MECHANISM_AUTHORITY_STATE_INACTIVE;
+	request.destination_state = SG_RUNE_COMPACT_MECHANISM_AUTHORITY_STATE_ACTIVE;
+	request.source_surface_ordinal = 0U;
+	request.portal_ordinal = 0U;
+	request.entry_cell.value = 0U;
+	request.exit_cell.value = 1U;
+	request.source_endpoint_entity_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.destination_endpoint_entity_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.route_fanout_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.source_world_vertices_out = source_world;
+	request.destination_world_vertices_out = destination_world;
+	request.world_vertex_capacity = 3U;
+	/* The portal lies at z=5 while the selected face is at z=6.  Only the
+	 * destination bmodel volume blocks its strict interior probe. */
+	portal_vertices[0].value[0] = 402;
+	portal_vertices[0].value[1] = 402;
+	portal_vertices[0].value[2] = 40;
+	portal_vertices[1].value[0] = 410;
+	portal_vertices[1].value[1] = 402;
+	portal_vertices[1].value[2] = 40;
+	portal_vertices[2].value[0] = 402;
+	portal_vertices[2].value[1] = 410;
+	portal_vertices[2].value[2] = 40;
+	fake_model_trace_allsolid = 1;
+	fake_model_trace_origin_x = 50.0f;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NONE &&
+		!result.source_portal_blocked && result.destination_portal_blocked);
+	CHECK(source_world[0].value[0] == 58.0f &&
+		destination_world[0].value[0] == 50.0f);
+	CHECK(source_world[0].value[2] == 6.0f &&
+		destination_world[0].value[2] == 6.0f);
+	/* A mover may expose several model-local roots.  Whole-model collision at
+	 * the portal must not let the first, unrelated root claim provenance for
+	 * another root that actually covers the blocked patch. */
+	mover_surfaces[0] = surface;
+	mover_surfaces[1] = surface;
+	mover_surfaces[2] = surface;
+	mover_surfaces[3] = surface;
+	mover_surfaces[0].vertices.first = 0U;
+	mover_surfaces[1].vertices.first = 3U;
+	mover_surfaces[2].vertices.first = 6U;
+	mover_surfaces[2].source.brush_side = 1U;
+	mover_surfaces[2].source.plane = 1U;
+	mover_surfaces[3].vertices.first = 9U;
+	mover_surfaces[3].source.brush = 1U;
+	mover_surfaces[3].source.brush_side = 2U;
+	mover_surfaces[3].source.plane = 2U;
+	memcpy(mover_vertices, source_vertices, sizeof(source_vertices));
+	memcpy(mover_vertices + 3U, source_vertices, sizeof(source_vertices));
+	memcpy(mover_vertices + 6U, source_vertices, sizeof(source_vertices));
+	memcpy(mover_vertices + 9U, source_vertices, sizeof(source_vertices));
+	mover_vertices[0].value[1] += 160;
+	mover_vertices[1].value[1] += 160;
+	mover_vertices[2].value[1] += 160;
+	mover_vertices[6].value[2] = -80;
+	mover_vertices[7].value[2] = -80;
+	mover_vertices[8].value[2] = -80;
+	mover_vertices[9].value[2] = 80;
+	mover_vertices[10].value[2] = 80;
+	mover_vertices[11].value[2] = 80;
+	fake_geometry_view.source_surfaces = mover_surfaces;
+	fake_geometry_view.source_surface_count = 4U;
+	fake_geometry_view.source_surface_vertices = mover_vertices;
+	fake_geometry_view.source_surface_vertex_count = 12U;
+	request.source_surface_ordinal = 0U;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && !result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NONE);
+	request.source_surface_ordinal = 1U;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && result.applicable &&
+		!result.source_portal_blocked && result.destination_portal_blocked);
+	/* This opposite face belongs to the blocking brush and has the same
+	 * projected footprint, but it is not the nearest brush-side boundary along
+	 * the occupied portal patch's normal. */
+	request.source_surface_ordinal = 2U;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && !result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NONE);
+	/* A parallel face from a separate brush cannot borrow the first brush's
+	 * model-wide collision result either. */
+	request.source_surface_ordinal = 3U;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && !result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NONE);
+	fake_geometry_view.source_surfaces = &surface;
+	fake_geometry_view.source_surface_count = 1U;
+	fake_geometry_view.source_surface_vertices = source_vertices;
+	fake_geometry_view.source_surface_vertex_count = 3U;
+	request.source_surface_ordinal = 0U;
+	/* Candidate AABBs alone cannot certify a closure when collision finds no
+	 * solid volume behind the portal's strict interior. */
+	fake_model_trace_allsolid = 0;
+	fake_model_trace_origin_x = INFINITY;
+	portal_vertices[0].value[0] = 416;
+	portal_vertices[0].value[1] = 416;
+	portal_vertices[0].value[2] = 40;
+	portal_vertices[1].value[0] = 400;
+	portal_vertices[1].value[1] = 416;
+	portal_vertices[1].value[2] = 40;
+	portal_vertices[2].value[0] = 416;
+	portal_vertices[2].value[1] = 400;
+	portal_vertices[2].value[2] = 40;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && !result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NONE);
+	/* Broad bounds can also meet at one vertex without a blocked portal patch. */
+	portal_vertices[0].value[0] = 400;
+	portal_vertices[0].value[1] = 416;
+	portal_vertices[0].value[2] = 40;
+	portal_vertices[1].value[0] = 384;
+	portal_vertices[1].value[1] = 416;
+	portal_vertices[1].value[2] = 40;
+	portal_vertices[2].value[0] = 400;
+	portal_vertices[2].value[1] = 432;
+	portal_vertices[2].value[2] = 40;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && !result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NONE);
+	/* A noncoplanar world facet is still only a candidate until collision's
+	 * bmodel-volume proof succeeds. */
+	portal_vertices[0].value[0] = 400;
+	portal_vertices[0].value[1] = 400;
+	portal_vertices[0].value[2] = 40;
+	portal_vertices[1].value[0] = 416;
+	portal_vertices[1].value[1] = 400;
+	portal_vertices[1].value[2] = 56;
+	portal_vertices[2].value[0] = 400;
+	portal_vertices[2].value[1] = 400;
+	portal_vertices[2].value[2] = 56;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && !result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NONE);
+	SG_RuneCompactBuilderDestroy(builder);
+	builder = NULL;
+
+	/* A func_door_secret's stock sideways-then-forward path cannot be reduced
+	 * to this endpoint pair.  It remains a normal non-applicable root even if
+	 * its final bmodel volume would block the portal. */
+	SetHost();
+	SetSourceAuthority();
+	SG_HostMechanismLawDefault(&host_view.laws.mechanism);
+	fake_mover_kind = SG_RUNE_MECHANISM_DOOR;
+	fake_mover_role = SG_MECH_NODE_SECRET_DOOR;
+	fake_mover_spawnflags = 1U;
+	fake_mover_move_direction_x = 1.0f;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL);
+	portal_vertices[0].value[0] = 402;
+	portal_vertices[0].value[1] = 402;
+	portal_vertices[0].value[2] = 40;
+	portal_vertices[1].value[0] = 410;
+	portal_vertices[1].value[1] = 402;
+	portal_vertices[1].value[2] = 40;
+	portal_vertices[2].value[0] = 402;
+	portal_vertices[2].value[1] = 410;
+	portal_vertices[2].value[2] = 40;
+	memset(&fake_geometry_view, 0, sizeof(fake_geometry_view));
+	fake_geometry_view.cells = cells;
+	fake_geometry_view.cell_count = 2U;
+	fake_geometry_view.facets = &facet;
+	fake_geometry_view.facet_count = 1U;
+	fake_geometry_view.incidences = incidences;
+	fake_geometry_view.incidence_count = 2U;
+	fake_geometry_view.vertices = portal_vertices;
+	fake_geometry_view.vertex_count = 3U;
+	fake_geometry_view.portals = &portal;
+	fake_geometry_view.portal_count = 1U;
+	fake_geometry_view.source_surfaces = &surface;
+	fake_geometry_view.source_surface_count = 1U;
+	fake_geometry_view.source_surface_vertices = source_vertices;
+	fake_geometry_view.source_surface_vertex_count = 3U;
+	fake_geometry_read_enabled = 1;
+	fake_identity_matches = 1;
+	fake_model_trace_allsolid = 1;
+	fake_model_trace_origin_x = 50.0f;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && !result.applicable &&
+		result.failure == SG_RUNE_COMPACT_BUILDER_MOVER_FAILURE_NONE);
+	SG_RuneCompactBuilderDestroy(builder);
+	fake_geometry_read_enabled = 0;
+	fake_identity_matches = 0;
+	fake_model_trace_allsolid = 0;
+	fake_model_trace_origin_x = INFINITY;
+}
+
+/* The selected catalog root covers the portal, while only the authenticated
+ * TEAM master collision instance closes it at the source state.  A successful
+ * certificate therefore requires both exact surface provenance and host-side
+ * group aggregation. */
+static void TestOwnerTeamPortalCertification(void)
+{
+	struct sg_host_law_construction_s construction = { 1U };
+	sg_rune_compact_builder_input_t input = Input(&construction);
+	sg_rune_compact_builder_t *builder = NULL;
+	sg_rune_compact_builder_error_t error;
+	sg_rune_compact_source_surface_t surface;
+	sg_rune_q8_vec3_t source_vertices[3];
+	sg_rune_q8_vec3_t portal_vertices[3];
+	sg_rune_compact_facet_t facet;
+	sg_rune_compact_portal_t portal;
+	sg_rune_compact_incidence_t incidences[2];
+	sg_rune_compact_cell_t cells[2];
+	sg_rune_compact_builder_mover_request_t request;
+	sg_rune_compact_builder_mover_result_t result;
+	sg_rune_vec3_t source_world[3];
+	sg_rune_vec3_t destination_world[3];
+	const sg_rune_compact_geometry_t *geometry =
+		(const sg_rune_compact_geometry_t *)(const void *)&surface;
+	sg_host_law_result_t host_result;
+	size_t index;
+
+	SetHost();
+	SetSourceAuthority();
+	fake_source_entity_record_count = 3U;
+	for (index = 0U; index < fake_source_entity_record_count; index++) {
+		fake_source_entity_records[index].source_ordinal = (uint32_t)index;
+		fake_source_entity_records[index].effective_spawnflags = 0U;
+	}
+	source_snapshot.entity_record_count =
+		(uint32_t)fake_source_entity_record_count;
+	SG_HostMechanismLawDefault(&host_view.laws.mechanism);
+	fake_mover_kind = SG_RUNE_MECHANISM_DOOR;
+	fake_mover_move_direction_x = 1.0f;
+	fake_door_team = 1;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL);
+	memset(&surface, 0, sizeof(surface));
+	memset(source_vertices, 0, sizeof(source_vertices));
+	memset(portal_vertices, 0, sizeof(portal_vertices));
+	memset(&facet, 0, sizeof(facet));
+	memset(&portal, 0, sizeof(portal));
+	memset(incidences, 0, sizeof(incidences));
+	memset(cells, 0, sizeof(cells));
+	source_vertices[0].value[2] = 8;
+	source_vertices[1].value[2] = 8;
+	source_vertices[2].value[2] = 8;
+	source_vertices[1].value[1] = 8;
+	source_vertices[2].value[0] = 8;
+	source_vertices[0].value[1] += 152;
+	source_vertices[1].value[1] += 152;
+	source_vertices[2].value[1] += 152;
+	surface.frame = SG_RUNE_COMPACT_SOURCE_SURFACE_MODEL_LOCAL;
+	surface.source.model = 1U;
+	surface.vertices.count = 3U;
+	facet.kind = SG_RUNE_COMPACT_FACET_POLYGON;
+	facet.vertices.count = 3U;
+	portal.facet.value = 0U;
+	portal.negative_incidence.value = 0U;
+	portal.positive_incidence.value = 1U;
+	incidences[0].cell.value = 0U;
+	incidences[1].cell.value = 1U;
+	portal_vertices[0].value[0] = 400;
+	portal_vertices[0].value[1] = 400;
+	portal_vertices[0].value[2] = 40;
+	portal_vertices[1].value[0] = 416;
+	portal_vertices[1].value[1] = 400;
+	portal_vertices[1].value[2] = 40;
+	portal_vertices[2].value[0] = 400;
+	portal_vertices[2].value[1] = 416;
+	portal_vertices[2].value[2] = 40;
+	memset(&fake_geometry_view, 0, sizeof(fake_geometry_view));
+	fake_geometry_view.cells = cells;
+	fake_geometry_view.cell_count = 2U;
+	fake_geometry_view.facets = &facet;
+	fake_geometry_view.facet_count = 1U;
+	fake_geometry_view.incidences = incidences;
+	fake_geometry_view.incidence_count = 2U;
+	fake_geometry_view.vertices = portal_vertices;
+	fake_geometry_view.vertex_count = 3U;
+	fake_geometry_view.portals = &portal;
+	fake_geometry_view.portal_count = 1U;
+	fake_geometry_view.source_surfaces = &surface;
+	fake_geometry_view.source_surface_count = 1U;
+	fake_geometry_view.source_surface_vertices = source_vertices;
+	fake_geometry_view.source_surface_vertex_count = 3U;
+	fake_geometry_read_enabled = 1;
+	fake_identity_matches = 1;
+	memset(&request, 0, sizeof(request));
+	request.mode = SG_RUNE_COMPACT_BUILDER_MOVER_MODE_PORTAL_STATE;
+	request.team_portal = 1;
+	request.team_master_entity_ordinal = 0U;
+	request.mover_entity_ordinal = 1U;
+	request.source_state = SG_RUNE_COMPACT_MECHANISM_AUTHORITY_STATE_INACTIVE;
+	request.destination_state = SG_RUNE_COMPACT_MECHANISM_AUTHORITY_STATE_ACTIVE;
+	request.source_surface_ordinal = 0U;
+	request.portal_ordinal = 0U;
+	request.entry_cell.value = 0U;
+	request.exit_cell.value = 1U;
+	request.source_endpoint_entity_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.destination_endpoint_entity_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.route_fanout_ordinal = SG_RUNE_COMPACT_INDEX_NONE;
+	request.source_world_vertices_out = source_world;
+	request.destination_world_vertices_out = destination_world;
+	request.world_vertex_capacity = 3U;
+	fake_model_trace_allsolid = 1;
+	fake_model_trace_origin_x = 50.0f;
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_OK && result.applicable &&
+		result.team_portal && result.team_master_entity_ordinal == 0U &&
+		result.mover_model == 1U && result.source_surface_ordinal == 0U &&
+		result.source_portal_blocked && !result.destination_portal_blocked &&
+		result.elapsed_ms == 200U);
+	CHECK(source_world[0].value[0] == 51.0f &&
+		destination_world[0].value[0] == 59.0f);
+	SG_RuneCompactBuilderDestroy(builder);
+	builder = NULL;
+
+	/* A self-referential TEAM edge is malformed host topology, not an ordinary
+	 * no-overlap candidate miss. */
+	SetHost();
+	SetSourceAuthority();
+	fake_source_entity_record_count = 3U;
+	for (index = 0U; index < fake_source_entity_record_count; index++) {
+		fake_source_entity_records[index].source_ordinal = (uint32_t)index;
+		fake_source_entity_records[index].effective_spawnflags = 0U;
+	}
+	source_snapshot.entity_record_count =
+		(uint32_t)fake_source_entity_record_count;
+	SG_HostMechanismLawDefault(&host_view.laws.mechanism);
+	fake_mover_kind = SG_RUNE_MECHANISM_DOOR;
+	fake_mover_move_direction_x = 1.0f;
+	fake_door_team = 1;
+	fake_door_team_malformed = 1;
+	CHECK(SG_RuneCompactBuilderBuild(&input, &builder, &error));
+	CHECK(builder != NULL);
+	fake_geometry_view.cells = cells;
+	fake_geometry_view.cell_count = 2U;
+	fake_geometry_view.facets = &facet;
+	fake_geometry_view.facet_count = 1U;
+	fake_geometry_view.incidences = incidences;
+	fake_geometry_view.incidence_count = 2U;
+	fake_geometry_view.vertices = portal_vertices;
+	fake_geometry_view.vertex_count = 3U;
+	fake_geometry_view.portals = &portal;
+	fake_geometry_view.portal_count = 1U;
+	fake_geometry_view.source_surfaces = &surface;
+	fake_geometry_view.source_surface_count = 1U;
+	fake_geometry_view.source_surface_vertices = source_vertices;
+	fake_geometry_view.source_surface_vertex_count = 3U;
+	fake_geometry_read_enabled = 1;
+	fake_identity_matches = 1;
+	memset(&result, 0, sizeof(result));
+	host_result = SG_RuneCompactBuilderOwnerMoverTransport(builder, geometry,
+		&request, &result);
+	CHECK(host_result.status == SG_HOST_LAW_EVALUATION_FAILED);
+	SG_RuneCompactBuilderDestroy(builder);
+	fake_door_team = 0;
+	fake_door_team_malformed = 0;
+	fake_geometry_read_enabled = 0;
+	fake_identity_matches = 0;
+	fake_model_trace_allsolid = 0;
+	fake_model_trace_origin_x = INFINITY;
+}
+#endif
 
 static void TestDevelopmentAuditPathIsExplicit(void)
 {
@@ -1260,7 +2940,8 @@ static void TestDependencyAllocationFailuresRemainOom(void)
 		FAILURE_ENTITY_BUILD,
 		FAILURE_ENTITY_AUDIT,
 		FAILURE_VISIBILITY_BUILD,
-		FAILURE_VISIBILITY_AUDIT
+		FAILURE_VISIBILITY_AUDIT,
+		FAILURE_PMOVE_EVALUATOR_ACQUIRE
 	};
 	size_t index;
 
@@ -1287,6 +2968,19 @@ static void TestDependencyAllocationFailuresRemainOom(void)
 int main(void)
 {
 	TestDefaultsBuildFromOverrideWithInhibition();
+	TestOwnerReadFailsAfterAuthorityRevocation();
+#if !defined(SG_COMPACT_BUILDER_REAL_ENTITY_SEMANTICS)
+	TestOwnerModelLocalQ8Transform();
+	TestOwnerTransformUsesSpawnResolvedAngularPose();
+	TestAngularMoverIdentityRejectsDirtyInactiveBytes();
+	TestOwnerMoverTransportCandidateStates();
+	TestOwnerMoverTransportTransformProvenance();
+#if !defined(SG_COMPACT_BUILDER_REAL_SOURCE_AUTHORITY)
+	TestOwnerTrainRouteCertification();
+#endif
+	TestOwnerPortalPolygonCertification();
+	TestOwnerTeamPortalCertification();
+#endif
 	TestDevelopmentAuditPathIsExplicit();
 	TestInvalidArgumentsDoNotReadHost();
 	TestIdentityMismatchFailsClosed();

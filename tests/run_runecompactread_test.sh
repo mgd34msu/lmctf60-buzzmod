@@ -3,375 +3,72 @@ set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp_dir=$(mktemp -d)
-reader_dir=$tmp_dir/reader
 trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 
-python3 - "$tmp_dir" <<'PY'
-import base64
-import binascii
-from pathlib import Path
-import struct
-import sys
-
-out = Path(sys.argv[1])
-count = 28
-header = 720
-descriptor = 24
-sizes = (252, 80, 60, 20, 4, 12, 44, 24, 20, 8, 20, 4, 20, 4,
-         4, 12, 4, 12, 4, 12, 16, 16, 100, 16, 60, 4, 8, 15)
-magic = b"SGRCW001"
-production_fixture_b85 = b"""\
-Q%6!mS1>R!0szng8~^|S=nDV<00000oy2^3000000ssI2Qcgon0RR910000000000`~Uy|0RR9100000
-&;kGe000000RR91Pyhe`0ssI200000&;tMf000000ssI2JOBUy0RR9100000a0CDV000000{{R36aWAK
-0ssI200000umk`A000001ONa41ONa40ssI200000*aQFo000001poj53;+NC1ONa400000-
-~<2w000001^@s6EC2ui0RR91000005Cs4L000002LJ#77ytkO0ssI200000Km`B*000002mk;86aWAK0
-ssI200000a0LJW000002><{92mk;83;+NC00000m<0d;000003IG5A6aWAK8UO$Q00000_yqs}000003
-jhEB1ONa4asU7T0000000;m8000003;+NC6aWAK2LJ#700000$O!-
-d000004FCWD1ONa40000000000SPB3D000004gdfE1ONa42LJ#700000SPB3D000004*&oF3;+NC0000
-000000cnSaj000005C8xG1ONa40000000000cnSaj000005dZ)H3;+NC0000000000cnSaj000005&!@
-I1ONa40000000000cnSaj000006951J3;+NC0000000000cnSaj000006aWAK5C8xG0000000000cnSa
-j000006#xJL5C8xG0000000000cnSaj00000761SMWB>pF0ssI200000cnSaj000007XSbN5C8xG0RR9
-100000Knnl>000007ytkOJOBUy0ssI200000PzwM60000082|tP1ONa40ssI200000$O`}f000008UO$
-Q2mk;80RR9100000&<g+n000008vp<R4*&oF0RR9100000*b4vv00000S^xk50000000000000000000
-000000000000000000aO4000000RaF20s#O30s;U4000000|Nj600000F)#oC00000GB5xD00000GcW)
-E00000G%x@F000001Oos7000001p@#8000001_J;9000001Oxy800000Qbj{mL{Cys0RR910{{R31ONa
-41poj50RR910RR91AOHXWfdBvhfdBvhK>z>$fB*mhfB*mh00961fdBvhfdBvhK>z>$fB*mhfB*mhfB*m
-h0078B001CC004kL004kM004SK005Rm0000#002lt2mk;80RR9100000000000RR910ssI20{{R30000
-0000000000000000KmY&$KmY&$KmY&$000000RR91000000RR91000000RR9100000000000{{R30000
-00ssI20ssI20{{R300000KmY&$0000000000fB*mhKmY&$KmY&$0RR910RR910RR910RR910RR910RR9
-100000000000{{R30RR91000000RR911ONa400000004kL00000000000000%000001ONa4000000ssI
-2000000000000000000000000000000000000RR910RR9100000000000RR9100000000000RR91KmY&
-$0000000000KmY&$KmY&$00000KmY&$KmY&$KmY&$KmY&$00000KmY&$0{{R30000000000000000000
-000000000000RR91AOHXW000000{{R30000000000000000{{R30{{R3000000{{R30RR91|NsC00{{R
-30{{R30{{R30{{R300000000000RR91000004FCWD0RR910RR910RR914FCWD4FCWD0RR910RR910ssI
-20ssI20{{R31ONa41ONa42mk;81poj55C8xG1^@s6U;qFB2LJ#7KmY&$2mk;8fB*mh2><{9009613IG5
-A00IC23jhEB00aO43;+NC00;m80000000000000001^@s61ONa4000000RR910RR913IG5A1ONa40000
-00ssI20ssI24gdfE1ONa4000000{{R30{{R35&!@I1ONa4000001ONa41ONa4761SM1ONa4000001poj
-51poj58UO$Q1ONa4000001poj51^@s69smFU1ONa4000001^@s61^@s6A^-
-pY1ONa4000002LJ#72LJ#7CIA2c1poj5000002mk;82mk;8D*ylh1poj5000002><{92><{9FaQ7m1ON
-a4000003IG5A3IG5AGynhq1ONa4000003jhEB3jhEBH~;_u1ONa40RR910000000000JOBUy1ONa40RR
-910RR910RR91KmY&$1ONa40RR910ssI20ssI2L;wH)1ONa40RR910{{R30{{R3NB{r;1ONa40RR911ON
-a41ONa4OaK4?1ONa40RR911poj51poj5Pyhe`1ONa40RR911poj51^@s6Q~&?~1ONa40RR911^@s61^@
-s6SO5S31ONa40RR912LJ#72LJ#7TmS$71poj50RR912mk;82mk;8VE_OC1poj50RR912><{92><{9W&i
-*H1ONa40RR913IG5A3IG5AY5)KL1ONa40RR913jhEB3jhEBZU6uP1ONa4000000RR911poj5000000RR
-911poj50RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{
-R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{
-R31ONa40RR910ssI20{{R31ONa41^@s60RR910ssI20{{R31ONa41^@s60RR910ssI20{{R31ONa40RR
-910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR
-910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR
-910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa41^@s60RR910ssI20{{R31ON
-a41^@s60RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40RR910ssI20{{R31ONa40000000000000
-00000000000000000000000RR910RR910000000000000000ssI23jhEB0000000000000000{{R33;+
-NC0000000000000001ONa45C8xG0000000000000001poj55&!@I0000000000000001^@s66951J000
-0000000004kL0000$002Nh004kM005vs006*1007`X000002LJ#72LJ#7000000RR91000005C8xG5C8
-xG00000AOHXWAOHXWFaQ7m000000RR9100000`Tzg`=mP)%00000&<6kj000001ONa4000000ssI2000
-000RR91000003jhEB3jhEB0000000000000005C8xG5C8xG00000AOHXWAOHXWFaQ7m0RR9100000000
-00000000000000000000000RR910ssI2000000ssI20000000000000003jhEB2LJ#7000001ONa43jh
-EB000000RR910RR917ytkO7ytkO2mk;85C8xG5C8xG00000AOHXWAOHXW5C8xG2LJ#7000006951J0RR
-910RR91|NsC0U;qFB7ytkO2mk;8SO5S35C8xG00000XaE2JAOHXW5C8xG0RR910RR91000000RR91000
-000RRI400000000000000000000
-"""
-
-def align(value):
-    return (value + 7) & ~7
-
-def p32(data, offset, value):
-    struct.pack_into("<I", data, offset, value)
-
-def p64(data, offset, value):
-    struct.pack_into("<Q", data, offset, value)
-
-def u64(data, offset):
-    return struct.unpack_from("<Q", data, offset)[0]
-
-def checksum(data):
-    p32(data, 24, 0)
-    p32(data, 24, binascii.crc32(data) & 0xffffffff)
-
-def build(counts):
-    cursor = header
-    offsets = []
-    for record_bytes, records in zip(sizes, counts):
-        cursor = align(cursor)
-        offsets.append(cursor)
-        cursor += record_bytes * records
-    image = bytearray(align(cursor))
-    image[:8] = magic
-    struct.pack_into("<HHI", image, 8, 2, header, count)
-    p64(image, 16, len(image))
-    struct.pack_into("<H", image, 32, 2)
-    p32(image, 36, 0x4d434e52)
-    struct.pack_into("<H", image, 40, 1)
-    for section, (record_bytes, records, offset) in enumerate(
-            zip(sizes, counts, offsets)):
-        struct.pack_into("<IIIIQ", image, 48 + section * descriptor,
-                         section, record_bytes, records, 0, offset)
-    identity = offsets[0]
-    image[identity:identity + 32] = bytes(range(1, 33))
-    p64(image, identity + 32, 1)
-    p32(image, identity + 40, 1)
-    p32(image, identity + 44, 1)
-    for index in range(11):
-        p64(image, identity + 48 + index * 8, index + 1)
-    struct.pack_into("<7I", image, identity + 136, 1, 1, 1, 1, 0, 0, 1)
-    struct.pack_into("<12i", image, identity + 164,
-                     0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1)
-    for index in range(8):
-        p32(image, identity + 212 + index * 4, 0x3f800000)
-    p32(image, identity + 244, 1)
-    p32(image, identity + 248, 1)
-    checksum(image)
-    return image, offsets
-
-def emit(name, image):
-    (out / name).write_bytes(image)
-
-production = base64.b85decode(b"".join(production_fixture_b85.split()))
-if (len(production) != 3048
-        or struct.unpack_from("<H", production, 8)[0] != 2
-        or struct.unpack_from("<H", production, 32)[0] != 2
-        or struct.unpack_from("<I", production, 24)[0] != 0x797cc49d):
-    raise SystemExit("invalid embedded production fixture")
-emit("production.rune", production)
-
-def mutation(name, image, edit, refresh=True):
-    result = bytearray(image)
-    edit(result)
-    if refresh:
-        checksum(result)
-    emit(name, result)
-
-minimal_counts = [0] * count
-minimal_counts[0] = 1
-minimal, minimal_offsets = build(minimal_counts)
-emit("minimal.rune", minimal)
-
-weapon_counts = [0] * count
-weapon_counts[0] = 1
-weapon_counts[1] = 1
-weapon_counts[8] = 1
-weapon_counts[9] = 1
-weapon_counts[10] = 1
-weapon, weapon_offsets = build(weapon_counts)
-cell = weapon_offsets[1]
-for offset in (32, 36, 40):
-    p32(weapon, cell + offset, 1)
-p32(weapon, cell + 64, 1)
-region = weapon_offsets[8]
-p32(weapon, region + 16, 1)
-profile = weapon_offsets[9]
-p32(weapon, profile, 1)
-p32(weapon, profile + 4, 3)
-kernel = weapon_offsets[10]
-p32(weapon, kernel + 8, 1)
-checksum(weapon)
-emit("valid.rune", weapon)
-(out / "valid.identity").write_bytes(weapon[weapon_offsets[0]:weapon_offsets[0] + 252])
-bad_identity = bytearray((out / "valid.identity").read_bytes())
-bad_identity[128] ^= 1
-emit("bad.identity", bad_identity)
-
-source_counts = [0] * count
-source_counts[0] = 1
-source_counts[2] = 1
-source_counts[5] = 3
-source, source_offsets = build(source_counts)
-facet = source_offsets[2]
-p32(source, facet + 20, 0x3f800000)
-p32(source, facet + 40, 3)
-p32(source, facet + 52, 0xffffffff)
-p32(source, facet + 56, 0)
-checksum(source)
-emit("source.rune", source)
-
-constraint_counts = [0] * count
-constraint_counts[0] = 1
-constraint_counts[1] = 1
-constraint_counts[2] = 1
-constraint_counts[3] = 1
-constraint_counts[5] = 1
-constraint_counts[6] = 1
-constraint, constraint_offsets = build(constraint_counts)
-constraint_facet = constraint_offsets[2]
-p32(constraint, constraint_facet + 48, 1)
-p32(constraint, constraint_facet + 52, 0xffffffff)
-p32(constraint, constraint_facet + 56, 1)
-checksum(constraint)
-emit("constraint.rune", constraint)
-
-analytic_counts = [0] * count
-analytic_counts[0] = 1
-analytic_counts[12] = 1
-analytic_counts[14] = 1
-analytic, analytic_offsets = build(analytic_counts)
-checksum(analytic)
-emit("analytic.rune", analytic)
-
-dimension_counts = [0] * count
-dimension_counts[0] = 1
-dimension_counts[12] = 1
-dimension_counts[13] = 1
-dimension_counts[14] = 1
-dimension, dimension_offsets = build(dimension_counts)
-dimension_function = dimension_offsets[12]
-dimension_input = dimension_offsets[13]
-p32(dimension, dimension_function + 4, 1)
-p32(dimension, dimension_input, 15)
-checksum(dimension)
-emit("dimension.rune", dimension)
-
-ballistic_counts = [0] * count
-ballistic_counts[0] = 1
-ballistic_counts[12] = 1
-ballistic_counts[13] = 1
-ballistic_counts[19] = 1
-ballistic, ballistic_offsets = build(ballistic_counts)
-ballistic_function = ballistic_offsets[12]
-p32(ballistic, ballistic_function + 4, 1)
-p32(ballistic, ballistic_function + 16, 3)
-p32(ballistic, ballistic_offsets[13], 9)
-checksum(ballistic)
-emit("ballistic.rune", ballistic)
-
-movement_counts = [0] * count
-movement_counts[0] = 1
-movement_counts[1] = 1
-movement_counts[7] = 2
-movement, movement_offsets = build(movement_counts)
-movement_cell = movement_offsets[1]
-p32(movement, movement_cell + 52, 0)
-p32(movement, movement_cell + 56, 2)
-for index, stances in enumerate((1, 2)):
-    field = movement_offsets[7] + index * sizes[7]
-    p32(movement, field, 0)
-    p32(movement, field + 4, 0xffffffff)
-    movement[field + 12] = stances
-checksum(movement)
-emit("movement-pair.rune", movement)
-
-mechanism_counts = [0] * count
-mechanism_counts[0] = 1
-mechanism_counts[1] = 1
-mechanism_counts[22] = 2
-mechanism, mechanism_offsets = build(mechanism_counts)
-for index, controller in enumerate((1, 2)):
-    record = mechanism_offsets[22] + index * sizes[22]
-    p32(mechanism, record, 7)
-    p32(mechanism, record + 4, controller)
-    p32(mechanism, record + 8, 0)
-    p32(mechanism, record + 12, 0)
-    p32(mechanism, record + 16, 0xffffffff)
-checksum(mechanism)
-emit("mechanism-pair.rune", mechanism)
-
-mutation("bad-section-count.rune", minimal,
-         lambda data: p32(data, 12, 29))
-mutation("bad-offset.rune", minimal,
-         lambda data: p64(data, 48 + descriptor + 16,
-                           u64(data, 48 + descriptor + 16) + 8))
-mutation("bad-overflow.rune", minimal,
-         lambda data: p32(data, 48 + 27 * descriptor + 8, 1))
-mutation("bad-crc.rune", weapon,
-         lambda data: data.__setitem__(header, data[header] ^ 1), False)
-mutation("bad-kernel-size.rune", weapon,
-         lambda data: p32(data, 48 + 10 * descriptor + 4, 16))
-mutation("bad-profile-mask.rune", weapon,
-         lambda data: p32(data, profile + 4, 0x1000))
-mutation("bad-kernel-family.rune", weapon,
-         lambda data: p32(data, kernel + 8, 12))
-mutation("bad-profile-family-link.rune", weapon,
-         lambda data: p32(data, kernel + 8, 2))
-mutation("bad-kernel-span.rune", weapon,
-         lambda data: (p32(data, kernel + 12, 1), p32(data, kernel + 16, 1)))
-mutation("bad-kernel-profile.rune", weapon,
-         lambda data: p32(data, kernel + 4, 1))
-mutation("bad-cell-enum.rune", weapon,
-         lambda data: data.__setitem__(cell + 76, 4))
-mutation("bad-source-union.rune", source,
-         lambda data: data.__setitem__(facet + 12, 1))
-mutation("bad-facet-kind.rune", source,
-         lambda data: p32(data, facet + 56, 2))
-mutation("bad-facet-polygon-vertices.rune", source,
-         lambda data: p32(data, facet + 40, 2))
-mutation("bad-facet-constraint-vertices.rune", constraint,
-         lambda data: p32(data, constraint_facet + 40, 1))
-mutation("bad-facet-constraint-incidences.rune", constraint,
-         lambda data: p32(data, constraint_facet + 48, 0))
-mutation("bad-facet-constraint-portal.rune", constraint,
-         lambda data: p32(data, constraint_facet + 52, 0))
-mutation("bad-analytic-target.rune", analytic,
-         lambda data: p32(data, analytic_offsets[12] + 8, 1))
-mutation("bad-input-dimension.rune", dimension,
-         lambda data: p32(data, dimension_input, 16))
-mutation("bad-analytic-output.rune", dimension,
-         lambda data: p32(data, dimension_function + 12, 20))
-emit("truncated.rune", weapon[:-1])
-with (out / "too-large.rune").open("wb") as oversized:
-    oversized.truncate(4294967297)
-PY
-
 strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align'
+production_sources='slipgate/sg_rune_compact_wire.c slipgate/sg_rune_compact_model.c slipgate/sg_rune_compact_source_surface_catalog.c slipgate/sg_rune_compact_weapon_catalog.c slipgate/sg_rune_compact_analytic.c slipgate/sg_rune_compact_static.c'
+emitter_sources="tests/sg_rune_compact_wire_test.c $production_sources"
+reader_sources="tools/runecompactread.c $production_sources slipgate/sg_weapon_effect_profile.c slipgate/sg_rune_model.c"
+
+cd "$repo_dir"
+gcc $strict -I. $emitter_sources -Wl,--wrap=calloc -lm \
+	-o "$tmp_dir/emit-rune"
+gcc $strict -I. tests/runecompactread_fixture.c \
+	-o "$tmp_dir/runecompactread-fixture"
+"$tmp_dir/emit-rune" --emit "$tmp_dir/production.rune"
+"$tmp_dir/emit-rune" --emit-invalid-provenance \
+	"$tmp_dir/invalid-provenance.rune"
+"$tmp_dir/runecompactread-fixture" "$tmp_dir/production.rune" \
+	"$tmp_dir/truncated.rune" "$tmp_dir/trailing.rune" \
+	"$tmp_dir/noncanonical.rune"
+
+expected='{"identity":{"bsp_sha256":"5a00000000000000000000000000000000000000000000000000000000000000","bsp_bytes":1024,"bsp_checksum":257,"entity_crc32":258,"entity_semantics_id":514,"physics_abi_id":771,"collision_law_id":12337,"pmove_law_id":12338,"gravity_law_id":12339,"hook_law_id":12340,"mechanism_law_id":772,"weapon_law_id":773,"construction_id":774,"schema_id":1028,"producer_identity":5787775626031351122,"weapon_profile_catalog_id":13132152608774997061,"source_counts":{"model_count":2,"leaf_count":3,"area_count":4,"plane_count":5,"brush_count":2,"brush_side_count":2,"entity_count":32},"standing_hull":{"mins":[-128,-128,-192],"maxs":[128,128,256]},"crouching_hull":{"mins":[-128,-128,-192],"maxs":[128,128,128]},"physics":{"gravity_bits":1120403456,"ground_acceleration_bits":1092616192,"air_acceleration_bits":1065353216,"water_acceleration_bits":1082130432,"hook_acceleration_bits":1148846080,"external_acceleration_bits":1150681088,"water_drag_bits":1056964608,"max_velocity_bits":1145569280,"frame_ms":8,"substep_ms":1}},"counts":{"identity":1,"cells":2,"facets":2,"incidences":3,"cell_incidences":3,"vertices":4,"portals":1,"movement_capabilities":2,"movement_states":2,"movement_fibers":2,"movement_hook_targets":1,"movement_fiber_function_refs":24,"movement_angular_schedules":0,"movement_runtime":1,"response_fragments":2,"response_halfspaces":0,"response_patches":2,"response_target_vertices":6,"response_splits":2,"response_facts":2,"response_candidate_groups":1,"response_source_endpoint_groups":1,"response_source_endpoint_members":2,"response_target_endpoint_groups":1,"response_target_endpoint_members":2,"response_seal":1,"static_occluders":1,"weapon_profiles":14,"weapon_kernels":28,"weapon_function_refs":553,"weapon_attachments":1,"weapon_relation_spans":1,"weapon_relation_refs":1,"analytic_functions":8,"analytic_input_dimensions":0,"analytic_constants":8,"analytic_affines":0,"analytic_affine_slopes":0,"analytic_polynomials":0,"analytic_polynomial_coefficients":0,"analytic_ballistics":0,"analytic_piecewise":0,"analytic_piecewise_clauses":0,"mechanisms":2,"mechanism_controllers":2,"mechanism_edges":2,"transitions":1,"landmarks":2,"landmark_cells":2,"facet_annotations":1,"portal_mechanisms":1,"source_surfaces":3,"source_surface_vertices":12,"mechanism_authorities":1,"mechanism_authority_controllers":1,"mechanism_authority_topology_edges":1,"mechanism_authority_transitions":1}}'
+
+expected="${expected%??},\"mechanism_authority_transition_static_indices\":1,\"static_transition_authority_indices\":1}}"
 
 reject() {
-    if "$1" "$tmp_dir/$2" >/dev/null 2>&1
-    then
-        printf '%s\n' "accepted hostile image: $2" >&2
-        return 1
-    fi
+	reader=$1
+	image=$2
+	diagnostic=$3
+	if "$reader" "$image" > "$tmp_dir/reject.out" \
+		2> "$tmp_dir/reject.err"
+	then
+		printf '%s\n' "reader accepted invalid artifact: $image" >&2
+		return 1
+	fi
+	if test -s "$tmp_dir/reject.out" ||
+		! grep -F "$diagnostic" "$tmp_dir/reject.err" > /dev/null
+	then
+		printf '%s\n' "reader did not report artifact rejection: $image" >&2
+		return 1
+	fi
 }
 
 exercise() {
-    reader=$1
-    "$reader" "$tmp_dir/production.rune" > "$tmp_dir/production.json"
-    grep -q '"model_version":2' "$tmp_dir/production.json"
-    grep -q '"wire_version":2' "$tmp_dir/production.json"
-    grep -q '"analytic_function_refs":114' "$tmp_dir/production.json"
-    grep -q '"movement_fields":2' "$tmp_dir/production.json"
-    grep -q '"weapon_kernels":26' "$tmp_dir/production.json"
-    "$reader" "$tmp_dir/minimal.rune" > /dev/null
-    "$reader" "$tmp_dir/source.rune" > /dev/null
-    "$reader" "$tmp_dir/constraint.rune" > /dev/null
-    "$reader" "$tmp_dir/analytic.rune" > /dev/null
-    "$reader" "$tmp_dir/dimension.rune" > /dev/null
-    "$reader" "$tmp_dir/ballistic.rune" > /dev/null
-    "$reader" "$tmp_dir/movement-pair.rune" > /dev/null
-    "$reader" "$tmp_dir/mechanism-pair.rune" > /dev/null
-    "$reader" "$tmp_dir/valid.rune" > "$tmp_dir/valid.json"
-    grep -q '"weapon_kernels":1' "$tmp_dir/valid.json"
-    "$reader" --expected-identity-file "$tmp_dir/valid.identity" \
-        "$tmp_dir/valid.rune" > /dev/null
-    if "$reader" --expected-identity-file "$tmp_dir/bad.identity" \
-        "$tmp_dir/valid.rune" >/dev/null 2>&1
-    then
-        printf '%s\n' 'accepted mismatched identity' >&2
-        return 1
-    fi
-    for image in \
-        truncated.rune too-large.rune bad-section-count.rune bad-offset.rune \
-        bad-overflow.rune bad-crc.rune bad-kernel-size.rune \
-        bad-profile-mask.rune bad-kernel-family.rune \
-        bad-profile-family-link.rune bad-kernel-span.rune \
-        bad-kernel-profile.rune bad-cell-enum.rune bad-source-union.rune \
-        bad-facet-kind.rune bad-facet-polygon-vertices.rune \
-        bad-facet-constraint-vertices.rune bad-facet-constraint-incidences.rune \
-        bad-facet-constraint-portal.rune \
-        bad-analytic-target.rune bad-input-dimension.rune \
-        bad-analytic-output.rune; do
-        reject "$reader" "$image"
-    done
+	reader=$1
+	actual=$("$reader" "$tmp_dir/production.rune")
+	if test "$actual" != "$expected"
+	then
+		printf '%s\n' 'reader JSON summary changed' >&2
+		return 1
+	fi
+	reject "$reader" "$tmp_dir/truncated.rune" 'truncated image'
+	reject "$reader" "$tmp_dir/trailing.rune" 'invalid wire format'
+	reject "$reader" "$tmp_dir/noncanonical.rune" 'nonzero reserved byte'
+	reject "$reader" "$tmp_dir/invalid-provenance.rune" \
+		'invalid compact model'
+	if "$reader" > /dev/null 2> "$tmp_dir/usage.err" ||
+		! test -s "$tmp_dir/usage.err"
+	then
+		printf '%s\n' 'reader accepted a missing artifact path' >&2
+		return 1
+	fi
 }
 
-cd "$repo_dir"
-mkdir -p "$reader_dir"
-cp tools/runecompactread.c tools/runecompactread.h "$reader_dir"
-for cc in gcc clang; do
-    $cc $strict "$reader_dir/runecompactread.c" \
-        -o "$tmp_dir/runecompactread-$cc"
-    exercise "$tmp_dir/runecompactread-$cc"
+for cc in gcc clang
+do
+	$cc $strict -I. $reader_sources -lm -o "$tmp_dir/runecompactread-$cc"
+	exercise "$tmp_dir/runecompactread-$cc"
 done
 
-clang $strict -fno-omit-frame-pointer -fsanitize=address,undefined \
-    "$reader_dir/runecompactread.c" -o "$tmp_dir/runecompactread-sanitize"
-ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-    exercise "$tmp_dir/runecompactread-sanitize"
+printf '%s\n' 'run_runecompactread_test: ok'

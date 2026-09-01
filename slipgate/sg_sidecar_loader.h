@@ -1,4 +1,4 @@
-/* sg_sidecar_loader.h -- one-open authenticated sidecar snapshots. */
+/* sg_sidecar_loader.h -- one-open compact sidecar snapshots. */
 #ifndef SG_SIDECAR_LOADER_H
 #define SG_SIDECAR_LOADER_H
 
@@ -13,9 +13,8 @@ typedef enum sg_sidecar_seek_origin_e
 	SG_SIDECAR_SEEK_END
 } sg_sidecar_seek_origin_t;
 
-/* All callbacks report an operating-system error explicitly.  A zero error on
- * a short read means clean EOF; a failed scalar operation with zero error is
- * normalized to EIO by the loader.  close_file always consumes the handle. */
+/* A failed scalar callback with zero OS error is normalized to EIO.  A close
+ * always consumes its handle. */
 typedef struct sg_sidecar_load_ops_s
 {
 	void *context;
@@ -38,26 +37,20 @@ typedef struct sg_sidecar_load_result_s
 	sg_sidecar_diagnostic_t diagnostic;
 	sg_sidecar_stage_t stage;
 	int os_error;
-	/* A close error is secondary when an earlier failure already owns the
-	 * diagnostic and stage. */
 	int close_error;
-	uint32_t plane;
-	uint32_t index;
 	size_t expected_file_size;
 	size_t observed_file_size;
 	size_t bytes_read;
 } sg_sidecar_load_result_t;
 
-/* Production artifact-bound surface. */
 void SG_SidecarDefaultLoadOps(sg_sidecar_load_ops_t *ops_out);
-sg_sidecar_diagnostic_t SG_SidecarPath(char *output, size_t output_size,
-	const char *game_directory, sg_sidecar_kind_t kind,
-	const rune_artifact_t *artifact);
+
+/* path names one retained sidecar file.  The caller must obtain info by
+ * inspecting the exact compact artifact that is active for this load.  A
+ * rejected sidecar leaves both outputs clear. */
 sg_sidecar_load_result_t SG_SidecarLoadFile(
-	const char *game_directory, sg_sidecar_kind_t kind,
-	const rune_artifact_t *artifact,
-	const uint8_t *live_seed_marks, size_t live_seed_capacity,
-	unsigned char **payload_out, size_t *payload_size_out,
-	const sg_sidecar_load_ops_t *ops);
+	const char *path, sg_sidecar_kind_t kind,
+	const sg_rune_compact_wire_info_t *info, unsigned char **payload_out,
+	size_t *payload_size_out, const sg_sidecar_load_ops_t *ops);
 
 #endif /* SG_SIDECAR_LOADER_H */

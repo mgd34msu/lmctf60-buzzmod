@@ -7,6 +7,7 @@
 /* Owner-only seam for focused construction tests and later private stages. */
 int SG_RuneCompactGeometryOwnerMaterialize(
 	const sg_configuration_space_t *configuration,
+	const sg_configuration_semantics_t *semantics,
 	const sg_bsp_world_t *world,
 	const sg_rune_compact_identity_t *identity,
 	const sg_rune_compact_geometry_allocator_t *allocator,

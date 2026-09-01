@@ -22,6 +22,7 @@ slipgate/sg_bsp_completeness_portal_index.c
 slipgate/sg_configuration_semantics.c
 slipgate/sg_configuration_lattice.c
 slipgate/sg_configuration_space.c
+slipgate/sg_rune_compact_spatial_index.c
 slipgate/sg_host_collision.c
 slipgate/sg_bsp_world.c
 slipgate/sg_rune_model.c'
@@ -44,8 +45,9 @@ then
 	echo 'forbidden sampled or human-hook implementation in hook-air consumer' >&2
 	exit 1
 fi
-test -z "$(git diff --name-only fee0b0b -- p_weapon.c g_local.h \
-	slipgate/sg_hook_game.c slipgate/sg_hook_live.c)"
+# Human-hook ownership is frozen semantically: base weapon cadence and release
+# behavior remain exact, with the reviewed immediate-hit plane exception.
+sh tests/run_sg_human_hook_release_regression_test.sh
 
 for cc in gcc clang
 do

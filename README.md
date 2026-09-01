@@ -58,7 +58,7 @@ SLIPGATE is administered through the game DLL's `sv` command surface:
 
 | Command | Effect |
 |-|-|
-| `sv rune` | generate and atomically install `<gamedir>/maps/<map>.rune` for the currently loaded map |
+| `sv rune` | offline corpus-generator module only: generate and atomically install `<gamedir>/maps/<map>.rune` for the currently loaded map |
 | `sv sg add` | add one bot and let the team balancer place it |
 | `sv sg add red` / `sv sg add blue` | add one bot to an explicit team |
 | `sv sg list` | print the active bot roster |
@@ -68,7 +68,9 @@ SLIPGATE is administered through the game DLL's `sv` command surface:
 | `sv sg weights` | print the active weight source and values |
 | `sv sg weights reload` | reload weights, then print them |
 
-`sv rune` writes a RUNE to the active game directory when generation succeeds.
+`sv rune` writes a RUNE to the active game directory when run through the
+offline corpus-generator module. Shipped Linux and Windows modules consume
+accepted RUNEs and refuse generation.
 
 ### Current development status
 

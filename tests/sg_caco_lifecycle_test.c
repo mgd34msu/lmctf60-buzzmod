@@ -5,6 +5,8 @@
 #include "g_ctffunc.h"
 #include "slipgate/sg_hooks.h"
 #include "slipgate/sg_combat_alert_policy.h"
+#include "slipgate/sg_belief_runtime.h"
+#include "slipgate/sg_cvars.h"
 #include "slipgate/sg_local.h"
 
 qboolean Caco_EnemyObservationValid(const rune_t *r, int team_index,
@@ -14,6 +16,8 @@ void Caco_EnemyPlace(rune_t *r, int team_index, int client, int seed,
 
 static edict_t test_edicts[4];
 static gclient_t test_clients[3];
+static sg_rune_compact_model_t compact_model;
+static sg_rune_compact_cell_t compact_cell;
 
 qboolean SG_OwnsBot(edict_t *entity)
 {
@@ -36,6 +40,94 @@ static int failures;
 		failures++; \
 	} \
 } while (0)
+
+static int CompactBeliefCurrent(void *context,
+	const sg_rune_compact_model_t *model,
+	const sg_rune_compact_identity_t *identity, uint64_t rune_identity,
+	uint64_t topology_revision, uint64_t generation)
+{
+	(void)context;
+	return model == &compact_model && identity == &compact_model.identity &&
+		rune_identity == 41U && topology_revision == 7U && generation == 1U;
+}
+
+static int CompactBeliefLocate(void *context,
+	const sg_rune_compact_model_t *model, const float position[3],
+	sg_belief_runtime_cell_state_t *cell_out)
+{
+	(void)context;
+	if (model != &compact_model || !position || !cell_out)
+		return 0;
+	memset(cell_out, 0, sizeof(*cell_out));
+	cell_out->location.cell.value = 0U;
+	cell_out->location.valid_stances = SG_RUNE_STANCE_VALID_STANDING;
+	return 1;
+}
+
+static void CheckUnseenHitscanCompactBearing(void)
+{
+	sg_belief_runtime_provider_t provider;
+	const sg_belief_runtime_view_t *view;
+	vec3_t direction = { -1.0f, 0.0f, 0.0f };
+	cvar_t railrhythm;
+	cvar_t *saved_railrhythm = sg_cv.railrhythm;
+	size_t index;
+
+	memset(&compact_model, 0, sizeof(compact_model));
+	memset(&compact_cell, 0, sizeof(compact_cell));
+	compact_cell.valid_stances = SG_RUNE_STANCE_VALID_STANDING;
+	compact_model.version = SG_RUNE_COMPACT_MODEL_VERSION;
+	compact_model.schema_tag = SG_RUNE_COMPACT_MODEL_SCHEMA_TAG;
+	compact_model.cells = &compact_cell;
+	compact_model.cell_count = 1U;
+	compact_model.identity.physics.frame_ms = 100U;
+	memset(&railrhythm, 0, sizeof(railrhythm));
+	sg_cv.railrhythm = &railrhythm;
+	memset(&provider, 0, sizeof(provider));
+	provider.model = &compact_model;
+	provider.identity = &compact_model.identity;
+	provider.rune_identity = 41U;
+	provider.topology_revision = 7U;
+	provider.generation = 1U;
+	provider.policy.confidence_decay_ms = 1000U;
+	provider.locate = CompactBeliefLocate;
+	provider.current = CompactBeliefCurrent;
+	CHECK(SG_CacoCompactBeliefProviderSet(&provider));
+
+	game.maxclients = 2;
+	level.framenum = 0;
+	test_edicts[1].inuse = true;
+	test_edicts[1].health = 100;
+	test_edicts[1].deadflag = DEAD_NO;
+	test_edicts[1].client->ctf.teamnum = CTF_TEAM_BLUE;
+	test_edicts[1].client->ctf.ctfid = 20U;
+	test_edicts[1].s.origin[0] = 1000.0f;
+	test_edicts[2].inuse = true;
+	test_edicts[2].flags = FL_BOT;
+	test_edicts[2].health = 100;
+	test_edicts[2].deadflag = DEAD_NO;
+	test_edicts[2].client->ctf.teamnum = CTF_TEAM_RED;
+	test_edicts[2].client->ctf.ctfid = 10U;
+	test_edicts[2].s.origin[0] = 0.0f;
+	sg_host.in_pvs = NeverInPvs;
+	SG_NoteDamage(&test_edicts[2], &test_edicts[1], 20U, 30,
+		MOD_RAILGUN, direction);
+	view = SG_CacoCompactBeliefViewForClient(CTF_TEAM_RED, 0U);
+	CHECK(view != NULL);
+	if (view)
+	{
+		CHECK(view->exact_sight == 0U);
+		CHECK(view->particle_count != 0U);
+		for (index = 0U; index < view->particle_count; index++)
+		{
+			CHECK(view->particles[index].spread_radius > 0.0f);
+			CHECK(view->particles[index].position[0] !=
+				test_edicts[1].s.origin[0]);
+		}
+	}
+	CHECK(SG_CacoCompactBeliefProviderSet(NULL));
+	sg_cv.railrhythm = saved_railrhythm;
+}
 
 static void ArmHit(int victim, int slot, int attacker, float time,
 	const vec3_t from)
@@ -358,6 +450,7 @@ int SG_CacoLifecycleTest(void)
 	CHECK(SG_RecentUnseenHit(&test_edicts[2], 2.0f, from));
 	CHECK(from[0] == 0.0f && from[1] == 1.0f);
 	CheckProjectileGenerationRetirement();
+	CheckUnseenHitscanCompactBearing();
 
 	g_edicts = saved_edicts;
 	game.clients = saved_clients;

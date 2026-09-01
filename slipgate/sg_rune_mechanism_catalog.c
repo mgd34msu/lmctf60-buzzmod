@@ -77,6 +77,8 @@ typedef struct sg_mech_source_s
 	const char *original_classname;
 	edict_t *synthetic_parent;
 	sg_mech_synthetic_kind_t synthetic_kind;
+	uint8_t declared;
+	uint8_t reserved[3];
 } sg_mech_source_t;
 
 typedef struct sg_mech_button_motion_s
@@ -84,6 +86,18 @@ typedef struct sg_mech_button_motion_s
 	sg_mech_button_endpoints_t endpoints;
 	uint8_t valid;
 } sg_mech_button_motion_t;
+
+/* All linear mover endpoint facts are captured at seal time.  The live
+ * source-ordinal resolver rechecks these exact Q8 values before publishing a
+ * fractional analytic phase, so a mutable moveinfo field cannot fabricate a
+ * midpoint observation. */
+typedef struct sg_mech_mover_motion_s
+{
+	int16_t start_q8[3];
+	int16_t end_q8[3];
+	uint8_t valid;
+	uint8_t reserved[3];
+} sg_mech_mover_motion_t;
 
 typedef struct sg_mech_catalog_s
 {
@@ -95,6 +109,7 @@ typedef struct sg_mech_catalog_s
 	uint32_t *live_generations;
 	uint32_t *sealed_generations;
 	sg_mech_button_motion_t *button_motion;
+	sg_mech_mover_motion_t *mover_motion;
 	rune_mechanism_node_t *nodes;
 	uint32_t num_nodes;
 	rune_mechanism_edge_t *edges;
@@ -161,8 +176,11 @@ void SG_MechCatalogBegin(void)
 		sizeof(*catalog.sealed_generations));
 	catalog.button_motion = Catalog_Alloc((size_t)catalog.source_capacity *
 		sizeof(*catalog.button_motion));
+	catalog.mover_motion = Catalog_Alloc((size_t)catalog.source_capacity *
+		sizeof(*catalog.mover_motion));
 	if (!catalog.sources || !catalog.live_generations ||
-	    !catalog.sealed_generations || !catalog.button_motion)
+	    !catalog.sealed_generations || !catalog.button_motion ||
+	    !catalog.mover_motion)
 	{
 		catalog.status = SG_MECH_CATALOG_FAILED;
 		catalog.reason = "source incarnation allocation";
@@ -175,6 +193,8 @@ void SG_MechCatalogBegin(void)
 		(size_t)catalog.source_capacity * sizeof(*catalog.sealed_generations));
 	memset(catalog.button_motion, 0,
 		(size_t)catalog.source_capacity * sizeof(*catalog.button_motion));
+	memset(catalog.mover_motion, 0,
+		(size_t)catalog.source_capacity * sizeof(*catalog.mover_motion));
 	catalog.next_generation = 1U;
 }
 
@@ -209,6 +229,7 @@ void SG_MechCatalogDeclared(edict_t *entity, uint32_t source_ordinal,
 	catalog.sources[index].original_classname = original_classname;
 	catalog.sources[index].synthetic_parent = NULL;
 	catalog.sources[index].synthetic_kind = SG_MECH_SYNTHETIC_NONE;
+	catalog.sources[index].declared = 1U;
 }
 
 void SG_MechCatalogSynthetic(edict_t *entity, edict_t *parent,
@@ -1253,6 +1274,18 @@ sg_mech_catalog_status_t SG_MechCatalogSeal(void)
 			node->decel_q8 = Catalog_MoverQ8(entity->moveinfo.decel,
 				entity->decel);
 		}
+		if (catalog.mover_motion &&
+			(node->flags & (SG_MECH_NODEF_INVENTORY_ONLY |
+				SG_MECH_NODEF_MOVER)) == SG_MECH_NODEF_MOVER)
+		{
+			sg_mech_mover_motion_t *motion = &catalog.mover_motion[index];
+
+			motion->valid = Catalog_VectorQ8Exact(
+				entity->moveinfo.start_origin, motion->start_q8) &&
+				Catalog_VectorQ8Exact(entity->moveinfo.end_origin,
+					motion->end_q8) && memcmp(motion->start_q8,
+					motion->end_q8, sizeof(motion->start_q8)) != 0;
+		}
 		if (node->delay_ms == INT32_MAX || node->delay_ms == INT32_MIN ||
 		    node->wait_ms == INT32_MAX || node->wait_ms == INT32_MIN ||
 		    node->speed_q8 == UINT32_MAX || node->accel_q8 == UINT32_MAX ||
@@ -2232,6 +2265,145 @@ int SG_MechCatalogEntityGeneration(const edict_t *entity,
 		return 0;
 	*key_out = key;
 	*generation_out = generation;
+	return 1;
+}
+
+static int Catalog_MoverPhase(uint32_t key, const edict_t *entity,
+	sg_mech_motion_state_t motion_state, float *phase_out)
+{
+	const sg_mech_mover_motion_t *motion;
+	int16_t live_q8[3];
+	int16_t start_q8[3];
+	int16_t end_q8[3];
+	int64_t numerator = 0;
+	int64_t denominator = 0;
+	int axis;
+
+	if (phase_out != NULL)
+		*phase_out = 0.0f;
+	if (phase_out == NULL || entity == NULL || !catalog.mover_motion ||
+		key == 0U || key >= catalog.source_capacity)
+		return 0;
+	motion = &catalog.mover_motion[key];
+	if (motion->valid != 1U || !Catalog_VectorQ8Exact(entity->s.origin,
+		live_q8) || !Catalog_VectorQ8Exact(entity->moveinfo.start_origin,
+		start_q8) || !Catalog_VectorQ8Exact(entity->moveinfo.end_origin,
+		end_q8) || memcmp(start_q8, motion->start_q8,
+		sizeof(start_q8)) != 0 || memcmp(end_q8, motion->end_q8,
+		sizeof(end_q8)) != 0)
+		return 0;
+	for (axis = 0; axis < 3; axis++)
+	{
+		const int64_t delta = (int64_t)motion->end_q8[axis] -
+			(int64_t)motion->start_q8[axis];
+		const int64_t offset = (int64_t)live_q8[axis] -
+			(int64_t)motion->start_q8[axis];
+
+		numerator += offset * delta;
+		denominator += delta * delta;
+	}
+	if (denominator <= 0 || numerator < 0 || numerator > denominator)
+		return 0;
+	/* An exact Q8 point must lie on the sealed endpoint line.  This avoids
+	 * accepting an off-axis origin merely because its scalar projection falls
+	 * in range. */
+	for (axis = 0; axis < 3; axis++)
+	{
+		const int64_t delta = (int64_t)motion->end_q8[axis] -
+			(int64_t)motion->start_q8[axis];
+		const int64_t offset = (int64_t)live_q8[axis] -
+			(int64_t)motion->start_q8[axis];
+
+		if (offset * denominator != delta * numerator)
+			return 0;
+	}
+	switch (motion_state) {
+	case SG_MECH_MOTION_AT_ORIGIN:
+		if (numerator != 0)
+			return 0;
+		break;
+	case SG_MECH_MOTION_AT_DESTINATION:
+		if (numerator != denominator)
+			return 0;
+		break;
+	case SG_MECH_MOTION_TO_DESTINATION:
+	case SG_MECH_MOTION_TO_ORIGIN:
+		if (numerator == 0 || numerator == denominator)
+			return 0;
+		break;
+	default:
+		return 0;
+	}
+	*phase_out = (float)((double)numerator / (double)denominator);
+	return isfinite(*phase_out);
+}
+
+int SG_MechCatalogResolveSourceOrdinal(uint32_t source_ordinal,
+	sg_mech_catalog_source_resolution_t *resolution_out)
+{
+	const rune_mechanism_node_t *node;
+	edict_t *entity;
+	uint32_t found = 0U;
+	uint32_t key;
+	uint32_t generation;
+
+	if (resolution_out)
+		memset(resolution_out, 0, sizeof(*resolution_out));
+	if (!resolution_out || catalog.status != SG_MECH_CATALOG_READY ||
+		!catalog.sources || !catalog.live_generations ||
+		!catalog.sealed_generations || !g_edicts || globals.num_edicts <= 0)
+		return 0;
+	/* `source_ordinal` is semantic provenance, not a process-local key.  Scan
+	 * declared records so an effective semantic ordinal can never address
+	 * g_edicts directly.  Ambiguity is a closed failure. */
+	for (key = 1U; key < catalog.source_capacity; key++)
+	{
+		const sg_mech_source_t *source = &catalog.sources[key];
+
+		if (source->declared != 1U ||
+			source->synthetic_kind != SG_MECH_SYNTHETIC_NONE ||
+			source->ordinal != source_ordinal)
+			continue;
+		if (found != 0U)
+			return 0;
+		found = key;
+	}
+	if (found == 0U || found >= (uint32_t)globals.num_edicts ||
+		!(node = Catalog_SealedNode(found)) ||
+		(node->flags & SG_MECH_NODEF_MOVER) == 0U ||
+		!SG_MechCatalogEntityMatches(found, node) ||
+		!SG_MechCatalogEntityTopologyMatches(found, node))
+		return 0;
+	entity = &g_edicts[found];
+	if (!SG_MechCatalogEntityGeneration(entity, &key, &generation) ||
+		key != found || generation == 0U ||
+		catalog.sealed_generations[found] != generation)
+		return 0;
+	resolution_out->source_ordinal = source_ordinal;
+	resolution_out->key = key;
+	resolution_out->generation = generation;
+	resolution_out->node_kind = (sg_mech_node_kind_t)node->kind;
+	switch (entity->moveinfo.state)
+	{
+	case SG_PLAT_STATE_TOP:
+		resolution_out->motion_state = SG_MECH_MOTION_AT_DESTINATION;
+		break;
+	case SG_PLAT_STATE_BOTTOM:
+		resolution_out->motion_state = SG_MECH_MOTION_AT_ORIGIN;
+		break;
+	case SG_PLAT_STATE_UP:
+		resolution_out->motion_state = SG_MECH_MOTION_TO_DESTINATION;
+		break;
+	case SG_PLAT_STATE_DOWN:
+		resolution_out->motion_state = SG_MECH_MOTION_TO_ORIGIN;
+		break;
+	default:
+		memset(resolution_out, 0, sizeof(*resolution_out));
+		return 0;
+	}
+	if (Catalog_MoverPhase(found, entity, resolution_out->motion_state,
+		&resolution_out->phase))
+		resolution_out->phase_known = 1U;
 	return 1;
 }
 

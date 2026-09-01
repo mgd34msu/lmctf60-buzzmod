@@ -128,6 +128,10 @@ struct sg_rune_compact_geometry_s
 	uint32_t vertex_count;
 	sg_rune_compact_portal_t *portals;
 	uint32_t portal_count;
+	sg_rune_compact_source_surface_t *source_surfaces;
+	uint32_t source_surface_count;
+	sg_rune_q8_vec3_t *source_surface_vertices;
+	uint32_t source_surface_vertex_count;
 	sg_rune_compact_geometry_cell_span_t *compact_cells_for_configuration_cell;
 	uint32_t compact_cells_for_configuration_cell_count;
 	sg_rune_compact_cell_index_t *configuration_cell_compact_cells;
@@ -207,6 +211,9 @@ static int CellOrderLess(const sg_configuration_space_t *configuration,
 static int SourceFromFace(const sg_configuration_face_t *face,
 	const sg_configuration_cell_t *cell, const sg_bsp_world_t *world,
 	sg_rune_compact_source_t *source_out);
+static int BuildSourceSurfaceCatalog(const geometry_context_t *context,
+	const sg_configuration_semantics_t *semantics,
+	const sg_bsp_world_t *world, sg_rune_compact_geometry_t *geometry);
 static void SetPartitionError(const geometry_context_t *context,
 	const sg_rune_compact_partition_error_t *partition_error,
 	sg_rune_compact_geometry_record_domain_t domain, uint32_t record);
@@ -2262,6 +2269,210 @@ static int WorldReferencesValid(const sg_bsp_world_t *world)
 	return 1;
 }
 
+static int ConfigurationIdentityEqual(const sg_rune_model_identity_t *left,
+	const sg_rune_model_identity_t *right)
+{
+	return left->bsp_content_id == right->bsp_content_id &&
+		left->entity_semantics_id == right->entity_semantics_id &&
+		left->physics_abi_id == right->physics_abi_id &&
+		left->source_set_identity == right->source_set_identity &&
+		left->schema_id == right->schema_id &&
+		left->producer_identity == right->producer_identity &&
+		memcmp(&left->standing_hull, &right->standing_hull,
+			sizeof(left->standing_hull)) == 0 &&
+		memcmp(&left->crouching_hull, &right->crouching_hull,
+			sizeof(left->crouching_hull)) == 0 &&
+		memcmp(&left->physics, &right->physics, sizeof(left->physics)) == 0;
+}
+
+static int SourceSurfaceInputValid(
+	const sg_configuration_semantics_t *semantics,
+	const sg_bsp_world_t *world, uint32_t index)
+{
+	const sg_configuration_hook_surface_t *surface =
+		&semantics->hook_surfaces[index];
+	const sg_bsp_brush_t *brush;
+	const sg_bsp_brush_side_t *side;
+	const sg_bsp_plane_t *plane;
+	uint32_t axis;
+
+	if (surface->id != (uint64_t)index || surface->model >= world->model_count ||
+		surface->brush >= world->brush_count ||
+		surface->brush_side >= world->brush_side_count ||
+		surface->vertex_count < 3U ||
+		!RangeWithin(surface->first_vertex, surface->vertex_count,
+			semantics->hook_vertex_count) || !FiniteVector(surface->normal) ||
+		!isfinite(surface->distance))
+		return 0;
+	brush = &world->brushes[surface->brush];
+	if (!RangeWithin(brush->first_side, brush->side_count,
+		world->brush_side_count) || surface->brush_side < brush->first_side ||
+		surface->brush_side >= brush->first_side + brush->side_count)
+		return 0;
+	side = &world->brush_sides[surface->brush_side];
+	if (side->plane >= world->plane_count)
+		return 0;
+	plane = &world->planes[side->plane];
+	for (axis = 0U; axis < 3U; axis++)
+		if (FloatBits(surface->normal[axis]) !=
+			FloatBits(plane->normal.value[axis]))
+			return 0;
+	return FloatBits(surface->distance) == FloatBits(plane->distance);
+}
+
+static int SourceSurfaceCompare(const sg_rune_compact_source_surface_t *left,
+	const sg_rune_compact_source_surface_t *right)
+{
+	if (left->source.model != right->source.model)
+		return left->source.model < right->source.model ? -1 : 1;
+	if (left->source.brush != right->source.brush)
+		return left->source.brush < right->source.brush ? -1 : 1;
+	if (left->source.brush_side != right->source.brush_side)
+		return left->source.brush_side < right->source.brush_side ? -1 : 1;
+	if (left->source.plane != right->source.plane)
+		return left->source.plane < right->source.plane ? -1 : 1;
+	return 0;
+}
+
+static int SourceSurfaceCompareQsort(const void *left_value,
+	const void *right_value)
+{
+	return SourceSurfaceCompare(
+		(const sg_rune_compact_source_surface_t *)left_value,
+		(const sg_rune_compact_source_surface_t *)right_value);
+}
+
+static int BuildSourceSurfaceCatalog(const geometry_context_t *context,
+	const sg_configuration_semantics_t *semantics,
+	const sg_bsp_world_t *world, sg_rune_compact_geometry_t *geometry)
+{
+	uint32_t input_vertex_count = 0U;
+	uint32_t vertex_cursor = 0U;
+	uint32_t index;
+
+	if (semantics->hook_surface_count == 0U)
+		return 1;
+	if (semantics->hook_surface_count > SG_RUNE_COMPACT_MAX_SOURCE_SURFACES ||
+		semantics->hook_vertex_count >
+			SG_RUNE_COMPACT_MAX_SOURCE_SURFACE_VERTICES)
+	{
+		SetError(context->error, SG_RUNE_COMPACT_GEOMETRY_ERROR_OVERFLOW,
+			SG_RUNE_COMPACT_GEOMETRY_RECORD_SOURCE_SURFACE,
+			GEOMETRY_INDEX_NONE);
+		return 0;
+	}
+	for (index = 0U; index < semantics->hook_surface_count; index++)
+	{
+		const sg_configuration_hook_surface_t *surface =
+			&semantics->hook_surfaces[index];
+
+		if (!SourceSurfaceInputValid(semantics, world, index) ||
+			!AddU32(input_vertex_count, surface->vertex_count,
+				&input_vertex_count) ||
+			input_vertex_count >
+				SG_RUNE_COMPACT_MAX_SOURCE_SURFACE_VERTICES)
+		{
+			SetError(context->error,
+				SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_CONFIGURATION,
+				SG_RUNE_COMPACT_GEOMETRY_RECORD_SOURCE_SURFACE, index);
+			return 0;
+		}
+	}
+	if (!AllocateArray(context, semantics->hook_surface_count,
+			sizeof(*geometry->source_surfaces),
+			(void **)&geometry->source_surfaces,
+			SG_RUNE_COMPACT_GEOMETRY_RECORD_SOURCE_SURFACE) ||
+		!AllocateArray(context, input_vertex_count,
+			sizeof(*geometry->source_surface_vertices),
+			(void **)&geometry->source_surface_vertices,
+			SG_RUNE_COMPACT_GEOMETRY_RECORD_SOURCE_SURFACE))
+		return 0;
+	for (index = 0U; index < semantics->hook_surface_count; index++)
+	{
+		const sg_configuration_hook_surface_t *surface =
+			&semantics->hook_surfaces[index];
+		sg_rune_compact_source_surface_t *destination =
+			&geometry->source_surfaces[index];
+		sg_rune_compact_partition_polygon_t input;
+		geometry_polygon_t polygon;
+		uint32_t vertex;
+
+		memset(destination, 0, sizeof(*destination));
+		destination->source.model = surface->model;
+		destination->source.brush = surface->brush;
+		destination->source.brush_side = surface->brush_side;
+		destination->source.plane =
+			world->brush_sides[surface->brush_side].plane;
+		destination->frame = surface->model == 0U ?
+			SG_RUNE_COMPACT_SOURCE_SURFACE_WORLD :
+			SG_RUNE_COMPACT_SOURCE_SURFACE_MODEL_LOCAL;
+		destination->cell.value = SG_RUNE_COMPACT_INDEX_NONE;
+		destination->parent_surface = SG_RUNE_COMPACT_INDEX_NONE;
+		destination->split_ordinal = 0U;
+		memset(&input, 0, sizeof(input));
+		memcpy(input.plane.normal, surface->normal,
+			sizeof(input.plane.normal));
+		input.plane.distance = surface->distance;
+		input.vertices = &semantics->hook_vertices[surface->first_vertex];
+		input.vertex_count = surface->vertex_count;
+		ConfigurationPlaneToCompact(&input.plane, &destination->plane);
+		if (!ConvertPartitionPolygon(context, &input, &destination->plane,
+			&polygon))
+		{
+			if (context->error == NULL || context->error->code ==
+				SG_RUNE_COMPACT_GEOMETRY_ERROR_NONE)
+				SetError(context->error,
+					SG_RUNE_COMPACT_GEOMETRY_ERROR_Q8_CONVERSION,
+					SG_RUNE_COMPACT_GEOMETRY_RECORD_SOURCE_SURFACE, index);
+			return 0;
+		}
+		destination->vertices.first = vertex_cursor;
+		destination->vertices.count = polygon.count;
+		for (vertex = 0U; vertex < polygon.count; vertex++)
+			geometry->source_surface_vertices[vertex_cursor + vertex] =
+				polygon.vertices[vertex];
+		vertex_cursor += polygon.count;
+		PolygonRelease(context, &polygon);
+	}
+	qsort(geometry->source_surfaces, semantics->hook_surface_count,
+		sizeof(*geometry->source_surfaces), SourceSurfaceCompareQsort);
+	for (index = 1U; index < semantics->hook_surface_count; index++)
+		if (SourceSurfaceCompare(&geometry->source_surfaces[index - 1U],
+			&geometry->source_surfaces[index]) >= 0)
+		{
+			SetError(context->error,
+				SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_CONFIGURATION,
+				SG_RUNE_COMPACT_GEOMETRY_RECORD_SOURCE_SURFACE, index);
+			return 0;
+		}
+	{
+		sg_rune_q8_vec3_t *sorted_vertices = NULL;
+
+		if (!AllocateArray(context, input_vertex_count,
+			sizeof(*sorted_vertices), (void **)&sorted_vertices,
+			SG_RUNE_COMPACT_GEOMETRY_RECORD_SOURCE_SURFACE))
+			return 0;
+		vertex_cursor = 0U;
+		for (index = 0U; index < semantics->hook_surface_count; index++)
+		{
+			sg_rune_compact_source_surface_t *surface =
+				&geometry->source_surfaces[index];
+
+			memcpy(&sorted_vertices[vertex_cursor],
+				&geometry->source_surface_vertices[surface->vertices.first],
+				surface->vertices.count * sizeof(*sorted_vertices));
+			surface->vertices.first = vertex_cursor;
+			vertex_cursor += surface->vertices.count;
+		}
+		context->allocator.release(context->allocator.context,
+			geometry->source_surface_vertices);
+		geometry->source_surface_vertices = sorted_vertices;
+	}
+	geometry->source_surface_count = semantics->hook_surface_count;
+	geometry->source_surface_vertex_count = vertex_cursor;
+	return 1;
+}
+
 static int SourceFromFace(const sg_configuration_face_t *face,
 	const sg_configuration_cell_t *cell, const sg_bsp_world_t *world,
 	sg_rune_compact_source_t *source_out)
@@ -2315,6 +2526,7 @@ static int SourceFromFace(const sg_configuration_face_t *face,
 }
 
 static int ConfigurationValid(const sg_configuration_space_t *configuration,
+	const sg_configuration_semantics_t *semantics,
 	const sg_bsp_world_t *world,
 	const sg_rune_compact_identity_t *identity,
 	sg_rune_compact_geometry_error_t *error)
@@ -2323,7 +2535,8 @@ static int ConfigurationValid(const sg_configuration_space_t *configuration,
 	uint32_t face_index;
 	uint32_t portal_index;
 
-	if (configuration == NULL || world == NULL || identity == NULL)
+	if (configuration == NULL || semantics == NULL || world == NULL ||
+		identity == NULL)
 	{
 		SetError(error, SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_ARGUMENT,
 			SG_RUNE_COMPACT_GEOMETRY_RECORD_RESULT, GEOMETRY_INDEX_NONE);
@@ -2333,6 +2546,18 @@ static int ConfigurationValid(const sg_configuration_space_t *configuration,
 	{
 		SetError(error, SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_WORLD,
 			SG_RUNE_COMPACT_GEOMETRY_RECORD_WORLD, GEOMETRY_INDEX_NONE);
+		return 0;
+	}
+	if (!ConfigurationIdentityEqual(&configuration->identity,
+		&semantics->identity) ||
+		(semantics->hook_surface_count != 0U &&
+			semantics->hook_surfaces == NULL) ||
+		(semantics->hook_vertex_count != 0U &&
+			semantics->hook_vertices == NULL))
+	{
+		SetError(error, SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_CONFIGURATION,
+			SG_RUNE_COMPACT_GEOMETRY_RECORD_SOURCE_SURFACE,
+			GEOMETRY_INDEX_NONE);
 		return 0;
 	}
 	if (identity->source_counts.model_count != world->model_count ||
@@ -3483,6 +3708,10 @@ static void ReleaseGeometryArrays(sg_rune_compact_geometry_t *geometry)
 		allocator.release(allocator.context, geometry->vertices);
 	if (geometry->portals != NULL)
 		allocator.release(allocator.context, geometry->portals);
+	if (geometry->source_surfaces != NULL)
+		allocator.release(allocator.context, geometry->source_surfaces);
+	if (geometry->source_surface_vertices != NULL)
+		allocator.release(allocator.context, geometry->source_surface_vertices);
 	if (geometry->compact_cells_for_configuration_cell != NULL)
 		allocator.release(allocator.context,
 			geometry->compact_cells_for_configuration_cell);
@@ -3495,12 +3724,15 @@ static void ReleaseGeometryArrays(sg_rune_compact_geometry_t *geometry)
 	geometry->cell_incidences = NULL;
 	geometry->vertices = NULL;
 	geometry->portals = NULL;
+	geometry->source_surfaces = NULL;
+	geometry->source_surface_vertices = NULL;
 	geometry->compact_cells_for_configuration_cell = NULL;
 	geometry->configuration_cell_compact_cells = NULL;
 }
 
 int SG_RuneCompactGeometryOwnerMaterialize(
 	const sg_configuration_space_t *configuration,
+	const sg_configuration_semantics_t *semantics,
 	const sg_bsp_world_t *world,
 	const sg_rune_compact_identity_t *identity,
 	const sg_rune_compact_geometry_allocator_t *allocator,
@@ -3536,7 +3768,7 @@ int SG_RuneCompactGeometryOwnerMaterialize(
 	}
 	context.allocator = configured_allocator;
 	context.error = error_out;
-	if (!ConfigurationValid(configuration, world, identity, error_out))
+	if (!ConfigurationValid(configuration, semantics, world, identity, error_out))
 		return 0;
 	geometry = (sg_rune_compact_geometry_t *)Allocate(&context, sizeof(*geometry));
 	if (geometry == NULL)
@@ -3582,7 +3814,8 @@ int SG_RuneCompactGeometryOwnerMaterialize(
 	Release(&context, temporary);
 	temporary = NULL;
 	if (!BuildFinalArrays(&context, &portals,
-		&entries, geometry))
+		&entries, geometry) ||
+		!BuildSourceSurfaceCatalog(&context, semantics, world, geometry))
 		goto failure;
 	RegionVectorRelease(&context, &regions);
 	PortalVectorRelease(&context, &base_portals);
@@ -3633,7 +3866,8 @@ int SG_RuneCompactGeometryMaterialize(
 		return 0;
 	}
 	return SG_RuneCompactGeometryOwnerMaterialize(owner.configuration,
-		owner.world, &view.identity, allocator, geometry_out, error_out);
+		owner.semantics, owner.world, &view.identity, allocator, geometry_out,
+		error_out);
 }
 
 int SG_RuneCompactGeometryRead(const sg_rune_compact_geometry_t *geometry,
@@ -3656,6 +3890,11 @@ int SG_RuneCompactGeometryRead(const sg_rune_compact_geometry_t *geometry,
 	view_out->vertex_count = geometry->vertex_count;
 	view_out->portals = geometry->portals;
 	view_out->portal_count = geometry->portal_count;
+	view_out->source_surfaces = geometry->source_surfaces;
+	view_out->source_surface_count = geometry->source_surface_count;
+	view_out->source_surface_vertices = geometry->source_surface_vertices;
+	view_out->source_surface_vertex_count =
+		geometry->source_surface_vertex_count;
 	view_out->compact_cells_for_configuration_cell =
 		geometry->compact_cells_for_configuration_cell;
 	view_out->compact_cells_for_configuration_cell_count =

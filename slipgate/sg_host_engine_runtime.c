@@ -90,7 +90,6 @@ int SG_HostEnginePhysicsLaw(sg_rune_physics_parameters_t *law_out)
 	airaccelerate = gi.cvar("sv_airaccelerate", "0", 0);
 	frame_ms = FRAMETIME * 1000.0f;
 	if (!airaccelerate || !isfinite(airaccelerate->value) ||
-		airaccelerate->value != 0.0f ||
 		!isfinite(sv_gravity->value) || sv_gravity->value < 1.0f ||
 		sv_gravity->value > (float)SHRT_MAX ||
 		truncf(sv_gravity->value) != sv_gravity->value ||
@@ -103,7 +102,9 @@ int SG_HostEnginePhysicsLaw(sg_rune_physics_parameters_t *law_out)
 	memset(law_out, 0, sizeof(*law_out));
 	law_out->gravity = sv_gravity->value;
 	law_out->ground_acceleration = SG_HOST_ENGINE_GROUND_ACCELERATION;
-	law_out->air_acceleration = SG_HOST_ENGINE_AIR_ACCELERATION;
+	law_out->air_acceleration = airaccelerate->value == 0.0f ?
+		SG_HOST_ENGINE_AIR_ACCELERATION :
+		SG_HOST_ENGINE_GROUND_ACCELERATION;
 	law_out->water_acceleration = SG_HOST_ENGINE_WATER_ACCELERATION;
 	law_out->hook_acceleration = SG_HOST_ENGINE_HOOK_ACCELERATION;
 	law_out->external_acceleration = SG_HOST_ENGINE_EXTERNAL_ACCELERATION;
@@ -1180,8 +1181,13 @@ int SG_HostEngineRuntimeOwnerReplayFrame(
 
 	if (error_out)
 		*error_out = SG_HOST_PMOVE_ERROR_NONE;
-	if (replay_out)
-		memset(replay_out, 0, sizeof(*replay_out));
+	if (!replay_out)
+	{
+		if (error_out)
+			*error_out = SG_HOST_PMOVE_ERROR_INVALID_ARGUMENT;
+		return 0;
+	}
+	memset(replay_out, 0, sizeof(*replay_out));
 	if (!runtime || !request || !workspace || !replay_out ||
 		request->state.pm_type != PM_NORMAL)
 		error = SG_HOST_PMOVE_ERROR_INVALID_ARGUMENT;
@@ -1406,6 +1412,90 @@ int SG_HostEngineRuntimeOwnerReplayFrame(
 	if (error_out)
 		*error_out = SG_HOST_PMOVE_ERROR_NONE;
 	return RuntimeSubjectCurrent(runtime, &subject);
+}
+
+static int MintLiveWalkRequest(const sg_host_engine_runtime_t *runtime,
+	const sg_host_engine_subject_identity_t *identity,
+	const sg_host_engine_walk_gradient_t *gradient,
+	sg_host_pmove_request_t *request_out)
+{
+	sg_host_engine_subject_t subject;
+	uint32_t axis;
+
+	if (!request_out || !gradient || gradient->longitudinal >= 0 ||
+		!RuntimeExactBotSubject(runtime, identity, &subject) ||
+		subject.entity->movetype == MOVETYPE_NOCLIP ||
+		subject.entity->s.modelindex != 255 || subject.entity->deadflag)
+		return 0;
+	memset(request_out, 0, sizeof(*request_out));
+	request_out->state = subject.client->ps.pmove;
+	request_out->state.pm_type = PM_NORMAL;
+	request_out->state.gravity = (short)runtime->static_identity.physics.gravity;
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		request_out->state.origin[axis] =
+			(short)(subject.entity->s.origin[axis] * 8.0f);
+		request_out->state.velocity[axis] =
+			(short)(subject.entity->velocity[axis] * 8.0f);
+		request_out->command.angles[axis] =
+			(short)(-request_out->state.delta_angles[axis]);
+	}
+	request_out->previous_state = subject.client->old_pmove;
+	request_out->command.msec = (byte)runtime->static_identity.physics.frame_ms;
+	request_out->command.forwardmove = 400;
+	/* The first certified law uses the longitudinal negative gradient.  It
+	 * leaves lateral input neutral, so host friction makes the persisted
+	 * lateral-velocity debt monotone without a reversal overshoot branch. */
+	request_out->command.sidemove = 0;
+	if (subject.client->hookstate == 2)
+	{
+		request_out->hook_law_id = SG_HOST_PMOVE_HOOK_LAW_ID;
+		request_out->hook_attached = 1U;
+		request_out->hook_length = subject.client->hooklength < 0 ? 0U :
+			(uint32_t)subject.client->hooklength;
+	}
+	if (subject.client->hookstate == 2 && subject.client->hooklength < 50)
+		request_out->state.gravity = 0;
+	return RuntimeSubjectCurrent(runtime, &subject);
+}
+
+int SG_HostEngineRuntimeOwnerReplayLiveWalkGradient(
+	const sg_host_engine_runtime_t *runtime,
+	const sg_host_engine_subject_identity_t *identity,
+	const sg_host_engine_walk_gradient_t *gradient,
+	const sg_host_pmove_replay_workspace_t *workspace,
+	sg_host_pmove_replay_t *replay_out, sg_host_pmove_error_t *error_out)
+{
+	sg_host_pmove_request_t request;
+	sg_host_pmove_request_t current;
+
+	if (error_out)
+		*error_out = SG_HOST_PMOVE_ERROR_NONE;
+	if (!replay_out)
+	{
+		if (error_out)
+			*error_out = SG_HOST_PMOVE_ERROR_INVALID_ARGUMENT;
+		return 0;
+	}
+	memset(replay_out, 0, sizeof(*replay_out));
+	if (!MintLiveWalkRequest(runtime, identity, gradient, &request))
+	{
+		if (error_out)
+			*error_out = SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE;
+		return 0;
+	}
+	if (!SG_HostEngineRuntimeOwnerReplayFrame(runtime, identity, &request,
+		workspace, replay_out, error_out))
+		return 0;
+	if (!MintLiveWalkRequest(runtime, identity, gradient, &current) ||
+		memcmp(&request, &current, sizeof(request)) != 0)
+	{
+		memset(replay_out, 0, sizeof(*replay_out));
+		if (error_out)
+			*error_out = SG_HOST_PMOVE_ERROR_HOST_UNAVAILABLE;
+		return 0;
+	}
+	return 1;
 }
 
 const sg_host_static_identity_t *SG_HostEngineRuntimeStaticIdentity(

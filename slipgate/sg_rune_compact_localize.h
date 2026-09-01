@@ -34,6 +34,13 @@ sg_rune_compact_localize_status_t SG_RuneCompactLocalizeIndexed(
 	const sg_rune_compact_cell_index_t *candidate_cells,
 	uint32_t candidate_count, sg_rune_compact_location_t *location_out);
 
+/* Host pusher rotation leaves rider origins at ordinary binary32 positions.
+ * This path retains those exact coordinates instead of inventing a Q8 snap;
+ * it uses the same dense-cell ownership rule as the Q8 localizer. */
+sg_rune_compact_localize_status_t SG_RuneCompactLocalizeBinary32(
+	const sg_rune_compact_model_t *model, const sg_rune_vec3_t *point,
+	sg_rune_compact_location_t *location_out);
+
 const char *SG_RuneCompactLocalizeStatusString(
 	sg_rune_compact_localize_status_t status);
 

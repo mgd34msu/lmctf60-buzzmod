@@ -17,30 +17,15 @@
 
 /* Reuse the already-reviewed complete compact-wire fixture without copying a
  * second 400-line model construction into this boundary test. */
-int sg_rune_compact_wire_fixture_main(void);
+int sg_rune_compact_wire_fixture_main(int argc, char **argv);
 #define main sg_rune_compact_wire_fixture_main
 #include "sg_rune_compact_wire_test.c"
 #undef main
 
 #ifdef SG_RUNE_COMPACT_ARTIFACT_TEST_WRAP_CALLOC
-static int fail_next_calloc;
-
-void *__real_calloc(size_t count, size_t size);
-void *__wrap_calloc(size_t count, size_t size);
-
-void *__wrap_calloc(size_t count, size_t size)
-{
-	if (fail_next_calloc)
-	{
-		fail_next_calloc = 0;
-		return NULL;
-	}
-	return __real_calloc(count, size);
-}
-
 static void FailNextCalloc(void)
 {
-	fail_next_calloc = 1;
+	calloc_fail_after = calloc_count;
 }
 #endif
 
@@ -853,7 +838,7 @@ static int TestInjectedPublication(void)
 
 	init_fixture(&old_fixture);
 	init_fixture(&new_fixture);
-	new_fixture.model.identity.gravity_law_id++;
+	new_fixture.model.identity.bsp_sha256[0] ^= UINT8_C(1);
 	CHECK(SG_RuneCompactArtifactEncode(&old_fixture.model, &old_image,
 		&old_size, &error));
 	CHECK(SG_RuneCompactArtifactEncode(&new_fixture.model, &new_image,
@@ -1061,16 +1046,15 @@ static int TestStageDiagnostics(void)
 	CHECK(FakeDestinationMatches(&fake, old_image, old_size));
 	fixture.cells[0].reserved[0] = 0U;
 
-	/* A structurally encoded but semantically invalid bound fails at validate. */
 	fixture.cells[0].bounds.maxs.value[0] = -1;
 	write_result = SG_RuneCompactArtifactWriteModel(&fixture.model,
 		SinkWrite, &sink);
 	CHECK(write_result.diagnostic ==
 		SG_RUNE_COMPACT_ARTIFACT_WRITE_WIRE_REJECTED);
 	CHECK(write_result.stage ==
-		SG_RUNE_COMPACT_ARTIFACT_WRITE_STAGE_VALIDATE);
+		SG_RUNE_COMPACT_ARTIFACT_WRITE_STAGE_ENCODE);
 	CHECK(write_result.wire_error.code ==
-		SG_RUNE_COMPACT_WIRE_ERROR_INVALID_MODEL);
+		SG_RUNE_COMPACT_WIRE_ERROR_INVALID_FORMAT);
 	CHECK(InitFakePublication(&fake, old_image, old_size));
 	ops.context = &fake;
 	publish_result = SG_RuneCompactArtifactPublishModel("virtual",
@@ -1078,7 +1062,7 @@ static int TestStageDiagnostics(void)
 	CHECK(publish_result.diagnostic ==
 		SG_RUNE_COMPACT_ARTIFACT_PUBLICATION_WIRE_REJECTED);
 	CHECK(publish_result.stage ==
-		SG_RUNE_COMPACT_ARTIFACT_PUBLICATION_STAGE_VALIDATE);
+		SG_RUNE_COMPACT_ARTIFACT_PUBLICATION_STAGE_ENCODE);
 	CHECK(fake.open_calls == 0U);
 	CHECK(FakeDestinationMatches(&fake, old_image, old_size));
 
@@ -1196,7 +1180,8 @@ static int TestLoaderTransactionalFailures(void)
 	CHECK_ALLOCATED(result.wire_error.code == SG_RUNE_COMPACT_WIRE_ERROR_INVALID_FORMAT);
 	CHECK_ALLOCATED(SG_RuneCompactArtifactLoaderSnapshot(&loader) == published);
 	memcpy(copy, image, size);
-	copy[800] ^= 1U;
+	copy[TEST_HEADER_FIXED +
+		SG_RUNE_COMPACT_WIRE_SECTION_COUNT * TEST_DESCRIPTOR_SIZE] ^= 1U;
 	result = SG_RuneCompactArtifactLoaderLoadBytes(&loader, copy, size,
 		&fixture.model.identity);
 	CHECK_ALLOCATED(result.wire_error.code == SG_RUNE_COMPACT_WIRE_ERROR_CHECKSUM_MISMATCH);
@@ -1252,6 +1237,7 @@ static int TestPublication(void)
 	test_fixture_t new_fixture;
 	sg_rune_compact_artifact_publication_result_t result;
 	sg_rune_compact_artifact_load_result_t load_result;
+	sg_rune_compact_identity_t accepted_identity;
 	sg_rune_compact_artifact_loader_t loader =
 		SG_RUNE_COMPACT_ARTIFACT_LOADER_INITIALIZER;
 	sg_rune_compact_wire_error_t error;
@@ -1276,7 +1262,7 @@ static int TestPublication(void)
 		destination) > 0);
 	init_fixture(&old_fixture);
 	init_fixture(&new_fixture);
-	new_fixture.model.identity.gravity_law_id++;
+	new_fixture.model.identity.bsp_sha256[0] ^= UINT8_C(1);
 	CHECK(SG_RuneCompactArtifactEncode(&old_fixture.model, &old_image,
 		&old_size, &error));
 	CHECK(SG_RuneCompactArtifactEncode(&new_fixture.model, &new_image,
@@ -1296,13 +1282,15 @@ static int TestPublication(void)
 
 	/* Candidate validation happens before any temp file is opened. */
 	CHECK(new_size > 800U);
-	new_image[800] ^= 1U;
+	new_image[TEST_HEADER_FIXED +
+		SG_RUNE_COMPACT_WIRE_SECTION_COUNT * TEST_DESCRIPTOR_SIZE] ^= 1U;
 	result = SG_RuneCompactArtifactPublish(destination, new_image, new_size,
 		&new_fixture.model.identity, NULL);
 	CHECK(result.diagnostic ==
 		SG_RUNE_COMPACT_ARTIFACT_PUBLICATION_WIRE_REJECTED);
 	CHECK(!result.published);
-	new_image[800] ^= 1U;
+	new_image[TEST_HEADER_FIXED +
+		SG_RUNE_COMPACT_WIRE_SECTION_COUNT * TEST_DESCRIPTOR_SIZE] ^= 1U;
 	CHECK(ReadFile(destination, observed, observed_capacity, &observed_size));
 	CHECK(observed_size == new_size);
 	CHECK(memcmp(observed, new_image, new_size) == 0);
@@ -1311,6 +1299,14 @@ static int TestPublication(void)
 	load_result = SG_RuneCompactArtifactLoaderLoadFile(&loader, destination,
 		&new_fixture.model.identity);
 	CHECK(load_result.diagnostic == SG_RUNE_COMPACT_ARTIFACT_LOAD_OK);
+	SG_RuneCompactArtifactLoaderDestroy(&loader);
+	memset(&accepted_identity, 0, sizeof(accepted_identity));
+	CHECK(SG_RuneCompactArtifactLoaderInit(&loader));
+	load_result = SG_RuneCompactArtifactLoaderLoadAcceptedFile(&loader,
+		destination, &accepted_identity);
+	CHECK(load_result.diagnostic == SG_RUNE_COMPACT_ARTIFACT_LOAD_OK);
+	CHECK(SG_RuneCompactIdentityMatches(&accepted_identity,
+		&new_fixture.model.identity));
 	CHECK(ReadFile(stale_path, observed, sizeof(stale), &observed_size));
 	CHECK(observed_size == sizeof(stale));
 	CHECK(memcmp(observed, stale, sizeof(stale)) == 0);

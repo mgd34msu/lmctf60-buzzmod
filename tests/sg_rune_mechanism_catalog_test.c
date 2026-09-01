@@ -240,6 +240,10 @@ static void BuildCatalog(sg_mech_catalog_view_t *view)
 	teleporter = &test_edicts[5];
 	custom_teleport = &test_edicts[6];
 	button = &test_edicts[7];
+	/* Deliberately decouple parse/source identity from the live edict key.
+	 * Runtime compact consumers must resolve this semantic ordinal through the
+	 * sealed catalog, rather than indexing g_edicts[47]. */
+	SG_MechCatalogDeclared(master, 47U, master->classname);
 
 	trigger->target = "door-team";
 	trigger->touch = Touch_Multi;
@@ -255,6 +259,9 @@ static void BuildCatalog(sg_mech_catalog_view_t *view)
 	master->teamchain = member;
 	master->moveinfo.state = 1;
 	master->moveinfo.wait = 1.0f;
+	master->moveinfo.start_origin[0] = 0.0f;
+	master->moveinfo.end_origin[0] = 64.0f;
+	master->s.origin[0] = 0.0f;
 
 	member->targetname = "door-team";
 	member->movetype = MOVETYPE_PUSH;
@@ -651,6 +658,81 @@ static void TestEntityGeneration(void)
 	CHECK(SG_MechCatalogEntityGeneration(&test_edicts[8], &key,
 	    &generation));
 	CHECK(key == 8U && generation != 0U);
+}
+
+static void TestSourceOrdinalResolver(void)
+{
+	sg_mech_catalog_view_t view;
+	sg_mech_catalog_source_resolution_t resolution;
+	edict_t *entity;
+	void (*saved_use)(edict_t *, edict_t *, edict_t *);
+
+	memset(&view, 0, sizeof(view));
+	BuildCatalog(&view);
+	entity = &test_edicts[2];
+	memset(&resolution, 0xff, sizeof(resolution));
+	CHECK(SG_MechCatalogResolveSourceOrdinal(47U, &resolution));
+	CHECK(resolution.source_ordinal == 47U && resolution.key == 2U &&
+		resolution.generation != 0U &&
+		resolution.node_kind == SG_MECH_NODE_DOOR_MASTER &&
+		resolution.motion_state == SG_MECH_MOTION_AT_ORIGIN &&
+		resolution.phase_known == 1U && resolution.phase == 0.0f);
+
+	/* Neighboring semantic ordinals prove source ordinal is neither a catalog
+	 * key nor an edict array index. */
+	memset(&resolution, 0xff, sizeof(resolution));
+	CHECK(!SG_MechCatalogResolveSourceOrdinal(46U, &resolution));
+	CHECK(memcmp(&resolution, &(sg_mech_catalog_source_resolution_t){ 0 },
+		sizeof(resolution)) == 0);
+	memset(&resolution, 0xff, sizeof(resolution));
+	CHECK(!SG_MechCatalogResolveSourceOrdinal(48U, &resolution));
+	CHECK(memcmp(&resolution, &(sg_mech_catalog_source_resolution_t){ 0 },
+		sizeof(resolution)) == 0);
+
+	entity->moveinfo.state = SG_PLAT_STATE_TOP;
+	entity->s.origin[0] = 64.0f;
+	CHECK(SG_MechCatalogResolveSourceOrdinal(47U, &resolution));
+	CHECK(resolution.motion_state == SG_MECH_MOTION_AT_DESTINATION &&
+		resolution.phase_known == 1U && resolution.phase == 1.0f);
+	entity->moveinfo.state = SG_PLAT_STATE_UP;
+	entity->s.origin[0] = 32.0f;
+	CHECK(SG_MechCatalogResolveSourceOrdinal(47U, &resolution));
+	CHECK(resolution.motion_state == SG_MECH_MOTION_TO_DESTINATION &&
+		resolution.phase_known == 1U && resolution.phase == 0.5f);
+	entity->moveinfo.state = SG_PLAT_STATE_DOWN;
+	entity->s.origin[0] = 24.0f;
+	CHECK(SG_MechCatalogResolveSourceOrdinal(47U, &resolution));
+	CHECK(resolution.motion_state == SG_MECH_MOTION_TO_ORIGIN &&
+		resolution.phase_known == 1U && resolution.phase == 0.375f);
+	/* A scalar projection is not enough: an off-axis pose or modified live
+	 * endpoint leaves owner identity intact but deliberately withholds phase. */
+	entity->s.origin[1] = 8.0f;
+	CHECK(SG_MechCatalogResolveSourceOrdinal(47U, &resolution));
+	CHECK(resolution.phase_known == 0U);
+	entity->s.origin[1] = 0.0f;
+	entity->moveinfo.start_origin[1] = 1.0f;
+	CHECK(SG_MechCatalogResolveSourceOrdinal(47U, &resolution));
+	CHECK(resolution.phase_known == 0U);
+	entity->moveinfo.start_origin[1] = 0.0f;
+	entity->s.origin[0] = 0.0f;
+	entity->moveinfo.state = SG_PLAT_STATE_BOTTOM;
+
+	/* A sealed source record is not enough: topology drift revokes the live
+	 * owner before a root snapshot may consume it. */
+	saved_use = entity->use;
+	entity->use = UnknownUse;
+	memset(&resolution, 0xff, sizeof(resolution));
+	CHECK(!SG_MechCatalogResolveSourceOrdinal(47U, &resolution));
+	CHECK(memcmp(&resolution, &(sg_mech_catalog_source_resolution_t){ 0 },
+		sizeof(resolution)) == 0);
+	entity->use = saved_use;
+	CHECK(SG_MechCatalogResolveSourceOrdinal(47U, &resolution));
+
+	/* A recycled source slot cannot inherit the sealed level incarnation. */
+	SG_MechCatalogInvalidate(entity);
+	CHECK(!SG_MechCatalogResolveSourceOrdinal(47U, &resolution));
+	SG_MechCatalogEntityInitialized(entity);
+	CHECK(!SG_MechCatalogResolveSourceOrdinal(47U, &resolution));
 }
 
 static void BuildInventoryOnlyCatalog(sg_mech_catalog_view_t *view,
@@ -2152,6 +2234,7 @@ int main(void)
 {
 	TestSealedCatalog();
 	TestEntityGeneration();
+	TestSourceOrdinalResolver();
 	TestInventoryOnlyKinematicsCanonicalized();
 	TestExecutableKinematicsRemainChecked();
 	TestExecutableMoverKinematicsStayCurrent();

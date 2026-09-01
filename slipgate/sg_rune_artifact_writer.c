@@ -129,7 +129,7 @@ static int ArtifactWriter_WorkspaceDisjoint(
 }
 
 static void ArtifactWriter_BuildHeader(sg_rune_codec_header_t *header,
-	uint16_t route_contract, const sg_rune_codec_identity_t *identity,
+	const sg_rune_codec_identity_t *identity,
 	uint32_t num_seeds,
 	uint32_t num_links, uint32_t num_nodes, uint32_t num_edges,
 	uint32_t num_inventory_edges, uint32_t num_plans,
@@ -137,7 +137,6 @@ static void ArtifactWriter_BuildHeader(sg_rune_codec_header_t *header,
 {
 	memset(header, 0, sizeof(*header));
 	header->magic = SG_RUNE_CODEC_MAGIC;
-	header->route_contract = route_contract;
 	header->header_bytes = SG_RUNE_CODEC_HEADER_BYTES;
 	header->seed_bytes = SG_RUNE_CODEC_SEED_BYTES;
 	header->link_bytes = SG_RUNE_CODEC_LINK_BYTES;
@@ -312,7 +311,7 @@ static int ArtifactWriter_Emit(sg_rune_artifact_write_result_t *result,
 }
 
 sg_rune_artifact_write_result_t SG_RuneArtifactWrite(
-	uint16_t route_contract, const sg_rune_codec_identity_t *identity,
+	const sg_rune_codec_identity_t *identity,
 	const sg_rune_codec_seed_t *seeds, uint32_t num_seeds,
 	const sg_rune_codec_link_t *links, uint32_t num_links,
 	const sg_rune_codec_activation_node_t *nodes, uint32_t num_nodes,
@@ -366,7 +365,7 @@ sg_rune_artifact_write_result_t SG_RuneArtifactWrite(
 
 	/* Encode a zero-payload header first so identity and header semantics fail
 	 * before any potentially expensive whole-graph validation. */
-	ArtifactWriter_BuildHeader(&header, route_contract, identity, num_seeds,
+	ArtifactWriter_BuildHeader(&header, identity, num_seeds,
 		num_links, num_nodes, num_edges, num_inventory_edges, num_plans,
 		string_bytes, 0U);
 	diagnostic = SG_RuneCodecEncodeHeader(&header, current_header,
@@ -395,7 +394,7 @@ sg_rune_artifact_write_result_t SG_RuneArtifactWrite(
 		ArtifactWriter_Fail(&result, diagnostic, failure_stage, failure_index);
 		return result;
 	}
-	diagnostic = SG_RuneCodecValidate(route_contract, seeds, num_seeds, links,
+	diagnostic = SG_RuneCodecValidate(seeds, num_seeds, links,
 		num_links,
 		nodes, num_nodes, edges, num_edges, plans, num_plans, strings,
 		string_bytes, workspace);
@@ -406,7 +405,7 @@ sg_rune_artifact_write_result_t SG_RuneArtifactWrite(
 			SG_RUNE_ARTIFACT_WRITE_INDEX_NONE);
 		return result;
 	}
-	ArtifactWriter_BuildHeader(&header, route_contract, identity, num_seeds,
+	ArtifactWriter_BuildHeader(&header, identity, num_seeds,
 		num_links, num_nodes, num_edges, num_inventory_edges, num_plans,
 		string_bytes, result.payload_crc32);
 	diagnostic = SG_RuneCodecEncodeHeader(&header, header_bytes,
@@ -421,7 +420,7 @@ sg_rune_artifact_write_result_t SG_RuneArtifactWrite(
 
 	/* Pass two begins by independently rebuilding the header from the current
 	 * identity.  This makes a pre-emission identity change fail closed. */
-	ArtifactWriter_BuildHeader(&header, route_contract, identity, num_seeds,
+	ArtifactWriter_BuildHeader(&header, identity, num_seeds,
 		num_links, num_nodes, num_edges, num_inventory_edges, num_plans,
 		string_bytes, result.payload_crc32);
 	diagnostic = SG_RuneCodecEncodeHeader(&header, current_header,
@@ -523,7 +522,7 @@ sg_rune_artifact_write_result_t SG_RuneArtifactWrite(
 			SG_RUNE_ARTIFACT_WRITE_INDEX_NONE);
 		return result;
 	}
-	ArtifactWriter_BuildHeader(&header, route_contract, identity, num_seeds,
+	ArtifactWriter_BuildHeader(&header, identity, num_seeds,
 		num_links, num_nodes, num_edges, num_inventory_edges, num_plans,
 		string_bytes, final_crc);
 	diagnostic = SG_RuneCodecEncodeHeader(&header, current_header,

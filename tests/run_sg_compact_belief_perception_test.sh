@@ -5,8 +5,8 @@ repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp_dir=$(mktemp -d)
 trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 
-strict='-std=c11 -DSG_BELIEF_TESTING -Wall -Wextra -Werror -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wcast-align'
-sources='tests/sg_compact_belief_perception_test.c slipgate/sg_compact_belief_perception.c slipgate/sg_belief_runtime.c slipgate/sg_perception_evidence.c slipgate/sg_belief.c slipgate/sg_rune_v2_content_identity.c'
+strict='-std=c11 -Wall -Wextra -Werror -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wcast-align'
+sources='tests/sg_compact_belief_perception_test.c slipgate/sg_compact_belief_perception.c slipgate/sg_belief_runtime.c'
 
 cd "$repo_dir"
 

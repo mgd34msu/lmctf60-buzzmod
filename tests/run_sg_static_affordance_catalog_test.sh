@@ -19,6 +19,7 @@ slipgate/sg_static_visibility.c
 slipgate/sg_configuration_semantics.c
 slipgate/sg_configuration_lattice.c
 slipgate/sg_configuration_space.c
+slipgate/sg_rune_compact_spatial_index.c
 slipgate/sg_configuration_audit.c
 slipgate/sg_host_collision.c
 slipgate/sg_bsp_world.c

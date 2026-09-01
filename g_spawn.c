@@ -951,6 +951,15 @@ Creates a server's entity / program execution context by
 parsing textual entity definitions out of an ent file.
 ==============
 */
+void SG_LevelTransitionSaveOutgoingState (void)
+{
+	/* Client persistence sees the outgoing edicts and every level-bound
+	 * authority stays valid until that copy has completed.  Production
+	 * retirement then runs before either identity source is reset. */
+	SaveClientData ();
+	SG_LevelChange ();
+}
+
 void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 {
 	edict_t		*ent;
@@ -964,16 +973,9 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	sg_level_identity_t identity = { 0 };
 	sg_rune_source_status_t source_status;
 
-	/* No transition failure may leave the outgoing map's authority visible. */
-	SG_RuneSourceAuthorityReset();
-	SG_LevelIdentityReset();
-	SaveClientData ();
-
 	/* TAG_LEVEL is about to invalidate every SLIPGATE graph/field pointer.
-	 * Reset synchronously, while the outgoing map name and bot edicts still
-	 * exist, so an rcon `sv sg add` between spawn and the first game frame
-	 * cannot create a client that the deferred time-rewind detector orphans. */
-	SG_LevelChange ();
+	 * Retire it while outgoing identity and client state are still visible. */
+	SG_LevelTransitionSaveOutgoingState ();
 
 	SG_HumanTraceNewLevel ();
 	SG_NetNewLevel ();
@@ -1028,7 +1030,12 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 		entities = ED_ParseEdict (entities, ent);
 
 		total_ents++;
-		SG_MechCatalogDeclared(ent, (uint32_t)total_ents, ent->classname);
+		/* Source ordinals are the parsed entity ordinals used by effective
+		 * entity semantics: the world is zero and this declaration is therefore
+		 * total_ents - 1.  The catalog resolver deliberately maps this semantic
+		 * value back to an authenticated live owner; it is never an edict slot. */
+		SG_MechCatalogDeclared(ent, (uint32_t)(total_ents - 1),
+			ent->classname);
 
 		// yet another map hack
 		if (!Q_stricmp(level.mapname, "command") && !Q_stricmp(ent->classname, "trigger_once") && !Q_stricmp(ent->model, "*27"))

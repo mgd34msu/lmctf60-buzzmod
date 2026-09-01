@@ -38,6 +38,13 @@ static sg_rune_q8_vec3_t Point(int32_t x, int32_t y, int32_t z)
 	return point;
 }
 
+static sg_rune_vec3_t FloatPoint(float x, float y, float z)
+{
+	const sg_rune_vec3_t point = { { x, y, z } };
+
+	return point;
+}
+
 static void InitFixture(localize_fixture_t *fixture)
 {
 	memset(fixture, 0, sizeof(*fixture));
@@ -181,6 +188,63 @@ static void TestExactLargePlaneArithmetic(void)
 		SG_RUNE_STANCE_VALID_CROUCHING);
 }
 
+static void TestBinary32Localization(void)
+{
+	localize_fixture_t fixture;
+	sg_rune_compact_location_t first;
+	sg_rune_compact_location_t second;
+	sg_rune_vec3_t point = FloatPoint(4.125f, 2.0f, 2.0f);
+
+	InitFixture(&fixture);
+	CHECK(SG_RuneCompactLocalizeBinary32(&fixture.model, &point, &first) ==
+		SG_RUNE_COMPACT_LOCALIZE_OK);
+	CHECK(first.cell.value == 0U &&
+		first.valid_stances == SG_RUNE_STANCE_VALID_ALL);
+	CHECK(SG_RuneCompactLocalizeBinary32(&fixture.model,
+		&(sg_rune_vec3_t){ { 8.0f, 2.0f, 2.0f } }, &first) ==
+		SG_RUNE_COMPACT_LOCALIZE_OK);
+	CHECK(first.cell.value == 0U);
+	fixture.incidences[0].boundary = SG_RUNE_BOUNDARY_OPEN;
+	fixture.incidences[1].boundary = SG_RUNE_BOUNDARY_CLOSED;
+	CHECK(SG_RuneCompactLocalizeBinary32(&fixture.model,
+		&(sg_rune_vec3_t){ { 8.0f, 2.0f, 2.0f } }, &first) ==
+		SG_RUNE_COMPACT_LOCALIZE_OK);
+	CHECK(first.cell.value == 1U &&
+		first.valid_stances == SG_RUNE_STANCE_VALID_CROUCHING);
+	CHECK(SG_RuneCompactLocalizeBinary32(&fixture.model, &point, &first) ==
+		SG_RUNE_COMPACT_LOCALIZE_OK);
+	CHECK(SG_RuneCompactLocalizeBinary32(&fixture.model, &point, &second) ==
+		SG_RUNE_COMPACT_LOCALIZE_OK);
+	CHECK(memcmp(&first, &second, sizeof(first)) == 0);
+}
+
+static void TestBinary32ExactCancellation(void)
+{
+	localize_fixture_t fixture;
+	sg_rune_compact_location_t location;
+
+	InitFixture(&fixture);
+	fixture.model.cell_count = 1U;
+	fixture.cells[0].bounds.mins = Point(0, 0, 0);
+	fixture.cells[0].bounds.maxs = Point(64, 64, 64);
+	fixture.facets[0].plane.normal_bits[0] = Bits(1.0f);
+	fixture.facets[0].plane.normal_bits[1] = Bits(1.0e30f);
+	fixture.facets[0].plane.normal_bits[2] = Bits(0.0f);
+	fixture.facets[0].plane.distance_bits = Bits(1.0e30f);
+	fixture.incidences[0].side = SG_RUNE_FACET_NEGATIVE_SIDE;
+	fixture.incidences[0].boundary = SG_RUNE_BOUNDARY_CLOSED;
+	CHECK(SG_RuneCompactLocalizeBinary32(&fixture.model,
+		&(sg_rune_vec3_t){ { 1.0f, 1.0f, 0.0f } }, &location) ==
+		SG_RUNE_COMPACT_LOCALIZE_NOT_FOUND);
+
+	fixture.facets[0].plane.normal_bits[0] = UINT32_C(1);
+	fixture.facets[0].plane.normal_bits[1] = Bits(0.0f);
+	fixture.facets[0].plane.distance_bits = Bits(0.0f);
+	CHECK(SG_RuneCompactLocalizeBinary32(&fixture.model,
+		&(sg_rune_vec3_t){ { 1.40129846e-45f, 0.0f, 0.0f } },
+		&location) == SG_RUNE_COMPACT_LOCALIZE_NOT_FOUND);
+}
+
 static void TestIndexedCandidates(void)
 {
 	localize_fixture_t fixture;
@@ -239,6 +303,8 @@ int main(void)
 	TestFacetHalfspaceRejectsOverlappingBounds();
 	TestExactSubnormalBoundary();
 	TestExactLargePlaneArithmetic();
+	TestBinary32Localization();
+	TestBinary32ExactCancellation();
 	TestIndexedCandidates();
 	TestFailuresClearOutput();
 	if (failures != 0) {

@@ -594,8 +594,7 @@ static int TestGeneratorIntegrationOrder(void)
 	char *flood, *candidate, *ground, *meeting, *record;
 	char *generate, *bounds, *face_scan, *surface_scan, *flood_call;
 	char *overlay, *early_audit;
-	char *water, *base, *compound, *rocket;
-	char *restore, *final_audit, *objective;
+	char *water, *base, *compound, *final_audit;
 	char *operator_definition, *operator_end, *operator_pair_loop;
 
 	CHECK(source != NULL && seed_source != NULL);
@@ -643,22 +642,26 @@ static int TestGeneratorIntegrationOrder(void)
 	operator_pair_loop = operator_definition ? strstr(operator_definition,
 		"for (i = 0; i < gen_num_seeds") : NULL;
 	compound = base ? strstr(base, "Link_CompoundDrops()") : NULL;
-	rocket = compound ? strstr(compound, "Prove_RocketJumps()") : NULL;
-	restore = rocket ? strstr(rocket, "Doors_Restore(&doors)") : NULL;
-	final_audit = restore ? strstr(restore, "SG_RuneTopologySnapshotBuild")
+	final_audit = compound ? strstr(compound,
+		"SG_RuneTopologySnapshotBuild")
 		: NULL;
-	objective = final_audit ? strstr(final_audit,
-		"Graph_PruneObjectiveCoreWithClosure") : NULL;
 	CHECK(generate && bounds && face_scan && surface_scan && flood_call &&
 		overlay && early_audit &&
-		water && base && compound && rocket && restore && final_audit &&
-		objective);
+		water && base && compound && final_audit);
 	CHECK(bounds < face_scan && face_scan < surface_scan &&
 		surface_scan < flood_call &&
 		flood_call < water && water < overlay && overlay < early_audit &&
 		early_audit < base &&
-		final_audit > restore &&
-		final_audit < objective);
+		final_audit > compound);
+	CHECK(strstr(source, "Prove_RocketJumps(") == NULL);
+	CHECK(strstr(source, "ProveRocketJump(") == NULL);
+	CHECK(strstr(source, "Reach_Within(") == NULL);
+	CHECK(strstr(source, "Graph_ProveLatePath(") == NULL);
+	CHECK(strstr(source, "SG_RuneLatePathSelect(") == NULL);
+	CHECK(strstr(source, "RL_ROCKETJUMP") == NULL);
+	CHECK(strstr(source, "rocket-jumps") == NULL);
+	CHECK(strstr(source, "grenade-jump") == NULL);
+	CHECK(strstr(source, "GrenadeJump") == NULL);
 	CHECK(operator_definition && operator_end);
 	CHECK(strstr(operator_definition,
 		"The BSP contact ledger already ran RUN, JUMP, DROP, and SWIM") != NULL);

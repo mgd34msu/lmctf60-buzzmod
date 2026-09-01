@@ -388,6 +388,9 @@
     <ClCompile Include="slipgate\sg_rune_door_scope.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_door_frontier.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="slipgate\sg_drop_live.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -420,6 +423,156 @@
     </ClCompile>
     <ClCompile Include="slipgate\sg_belief_runtime.c">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_compact_belief_perception.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_compact_localization.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_compact_runtime_level.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_localize.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_analytic.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_eval.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_static.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_source_surface_catalog.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_weapon_catalog.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_model.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_pmove_control_build.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_pmove_control.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_pmove_control_wire.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_field.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_field_region_hierarchy.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_field_service.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_spatial_index.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_portal_snapshot.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_portal_snapshot_source.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_artifact.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_wire.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_game.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_production.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_learning.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_learning_consumer.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_rune_compact_learning_game.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_bot_localization.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_bsp_entity_semantics.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_bsp_entity_semantics_audit_expected.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_bsp_entity_semantics_publication.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_bsp_world.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_host_collision.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_host_engine_pmove.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_host_engine_runtime.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_host_engine_parity.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_host_hook_law.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_host_law_owner.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_host_law_publication.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_host_mechanism_law.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_host_pmove.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_weapon_effect_profile.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_strategy.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_strategy_caller.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_strategy_runtime_bridge.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_tactic_execution.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_tactic_execution_owner.c">
+      <Filter>Source Files\slipgate</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_tactic_policy.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_authority_entropy.c">
+      <Filter>Source Files\slipgate</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_tactic_runtime.c">
+      <Filter>Source Files\slipgate</Filter>
+    </ClCompile>
+    <ClCompile Include="slipgate\sg_tactic_pmove_control_runtime.c">
+      <Filter>Source Files\slipgate</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_destination.c">
       <Filter>Source Files</Filter>
@@ -572,15 +725,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_rune_hook_frontier.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_rune_late_path.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_rune_learning.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_rune_learning_game.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_rune_reverse_boundary.c">
@@ -828,6 +972,171 @@
     <ClInclude Include="slipgate\sg_belief_runtime.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="slipgate\sg_compact_belief_perception.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_compact_localization.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_compact_runtime_level.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_localization_runtime.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_localize.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_analytic.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_eval.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_static.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_source_surface_catalog.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_model.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_pmove_control_build_private.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_pmove_control.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_pmove_control_wire.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_field.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_field_plan_private.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_field_region_hierarchy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_field_service.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_spatial_index.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_portal_snapshot.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_portal_snapshot_source.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_artifact.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_wire.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_game.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_production.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_learning.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_learning_consumer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_learning_game.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_learning_owner.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_bot_localization.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_bot_localization_owner.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_bsp_entity_semantics.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_bsp_entity_semantics_publication.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_bsp_world.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_host_collision.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_host_engine_pmove.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_host_engine_runtime.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_host_engine_parity.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_host_hook_law.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_host_law_owner.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_host_law_publication.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_host_mechanism_law.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_host_pmove.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_weapon_effect_profile.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_strategy_contract.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_strategy_caller.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_strategy_runtime_bridge.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_tactic_execution.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_tactic_execution_owner.h">
+      <Filter>Header Files\slipgate</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_tactic_execution_owner_private.h">
+      <Filter>Header Files\slipgate</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_tactic_policy.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_authority_entropy.h">
+      <Filter>Header Files\slipgate</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_tactic_runtime.h">
+      <Filter>Header Files\slipgate</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_tactic_pmove_control_runtime_private.h">
+      <Filter>Header Files\slipgate</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_tactic_runtime_private.h">
+      <Filter>Header Files\slipgate</Filter>
+    </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_compact_field_service_private.h">
+      <Filter>Header Files\slipgate</Filter>
+    </ClInclude>
     <ClInclude Include="slipgate\sg_destination.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -966,6 +1275,9 @@
     <ClInclude Include="slipgate\sg_rune_door_scope.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="slipgate\sg_rune_door_frontier.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="slipgate\sg_drop_live.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1066,15 +1378,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_rune_hook_frontier.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_rune_late_path.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_rune_learning.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_rune_learning_game.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_rune_reverse_boundary.h">

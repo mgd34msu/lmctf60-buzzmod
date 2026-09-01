@@ -6,12 +6,21 @@
 #include <string.h>
 
 #include "slipgate/sg_rune_compact_field.h"
+#include "slipgate/sg_rune_compact_field_plan_private.h"
+#include "slipgate/sg_rune_compact_mechanisms.h"
 
 static int failures;
 
+#define CHECK(expression) do { \
+	if (!(expression)) { \
+		fprintf(stderr, "%s:%d: check failed: %s\n", \
+			__FILE__, __LINE__, #expression); \
+		failures++; \
+	} \
+} while (0)
+
 #if defined(SG_RUNE_COMPACT_FIELD_TEST_WRAP_CALLOC)
 static int fail_calloc_after = -1;
-
 void *__real_calloc(size_t count, size_t size);
 void *__wrap_calloc(size_t count, size_t size);
 
@@ -27,63 +36,53 @@ void *__wrap_calloc(size_t count, size_t size)
 }
 #endif
 
-#define CHECK(expression) do { \
-	if (!(expression)) { \
-		fprintf(stderr, "%s:%d: check failed: %s\n", \
-			__FILE__, __LINE__, #expression); \
-		failures++; \
-	} \
-} while (0)
-
 enum
 {
 	CELL_COUNT = 4,
-	FACET_COUNT = 4,
-	INCIDENCE_COUNT = 7,
-	VERTEX_COUNT = 16,
 	PORTAL_COUNT = 3,
-	MOVEMENT_FIELD_COUNT = 8,
-	WEAPON_PROFILE_COUNT = 12,
-	WEAPON_KERNELS_PER_REGION = 13,
-	WEAPON_KERNEL_COUNT = CELL_COUNT * WEAPON_KERNELS_PER_REGION,
-	MOVEMENT_REFERENCE_COUNT = MOVEMENT_FIELD_COUNT * 3,
-	WEAPON_REFERENCE_COUNT = CELL_COUNT * 54,
-	REFERENCE_COUNT = MOVEMENT_REFERENCE_COUNT + WEAPON_REFERENCE_COUNT,
-	FUNCTION_COUNT = 7,
-	CONSTANT_COUNT = 5,
-	AFFINE_COUNT = 2,
-	INPUT_COUNT = SG_RUNE_ANALYTIC_INPUT_DIMENSION_COUNT + 1,
-	SLOPE_COUNT = SG_RUNE_ANALYTIC_INPUT_DIMENSION_COUNT + 1
+	CAPABILITY_MAX = 24,
+	FIBER_MAX = 24,
+	HOOK_TARGET_MAX = 6,
+	FUNCTION_MAX = 128,
+	FUNCTION_REF_MAX = 192,
+	CONSTANT_MAX = 128
 };
 
 typedef struct field_fixture_s
 {
 	sg_rune_compact_cell_t cells[CELL_COUNT];
-	sg_rune_compact_facet_t facets[FACET_COUNT];
-	sg_rune_compact_incidence_t incidences[INCIDENCE_COUNT];
-	sg_rune_compact_incidence_index_t cell_incidences[INCIDENCE_COUNT];
-	sg_rune_q8_vec3_t vertices[VERTEX_COUNT];
+	sg_rune_compact_incidence_t incidences[PORTAL_COUNT * 2U];
 	sg_rune_compact_portal_t portals[PORTAL_COUNT];
-	sg_rune_movement_field_attachment_t
-		movement_fields[MOVEMENT_FIELD_COUNT];
-	sg_rune_weapon_response_region_t weapon_regions[CELL_COUNT];
-	sg_rune_weapon_profile_t weapon_profiles[WEAPON_PROFILE_COUNT];
-	sg_rune_weapon_response_kernel_t weapon_kernels[WEAPON_KERNEL_COUNT];
-	sg_rune_analytic_function_index_t analytic_refs[REFERENCE_COUNT];
-	sg_rune_analytic_function_t functions[FUNCTION_COUNT];
-	sg_rune_analytic_input_dimension_t input_dimensions[INPUT_COUNT];
-	sg_rune_analytic_constant_t constants[CONSTANT_COUNT];
-	sg_rune_analytic_affine_t affines[AFFINE_COUNT];
-	sg_rune_analytic_scalar_bits_t slopes[SLOPE_COUNT];
+	sg_rune_movement_capability_t capabilities[CAPABILITY_MAX];
+	sg_rune_compact_movement_state_t states[9];
+	sg_rune_compact_movement_fiber_t fibers[FIBER_MAX];
+	sg_rune_compact_movement_hook_target_t hook_targets[HOOK_TARGET_MAX];
+	sg_rune_analytic_function_index_t function_refs[FUNCTION_REF_MAX];
+	sg_rune_analytic_function_t functions[FUNCTION_MAX];
+	sg_rune_analytic_constant_t constants[CONSTANT_MAX];
+	sg_rune_analytic_affine_t affines[4];
+	sg_rune_analytic_scalar_bits_t slopes[4];
+	sg_rune_analytic_input_dimension_t input_dimensions[4];
 	sg_rune_compact_analytic_t analytic;
-	sg_rune_compact_landmark_t landmark;
-	sg_rune_compact_cell_index_t landmark_cells[2];
-	sg_rune_compact_mechanism_t mechanisms[2];
-	sg_rune_compact_portal_mechanism_t portal_mechanisms[4];
-	sg_rune_compact_field_mechanism_phase_t mechanism_phases[2];
-	sg_rune_compact_field_mechanism_snapshot_t mechanism_snapshot;
+	sg_rune_compact_response_patch_t patches[HOOK_TARGET_MAX];
+	sg_rune_compact_response_fact_t facts[HOOK_TARGET_MAX];
+	sg_rune_compact_mechanism_transition_t transitions[3];
+	sg_rune_compact_mechanism_t static_mechanisms[2];
+	sg_rune_compact_portal_mechanism_t portal_mechanisms[2];
 	sg_rune_compact_static_t static_data;
+	sg_rune_compact_field_mechanism_phase_t phases[2];
+	sg_rune_compact_field_mechanism_snapshot_t mechanism_snapshot;
+	sg_rune_compact_field_portal_root_t roots[2];
+	sg_rune_compact_field_portal_root_snapshot_t root_snapshot;
 	sg_rune_compact_model_t model;
+	uint32_t capability_count;
+	uint32_t fiber_count;
+	uint32_t hook_target_count;
+	uint32_t function_count;
+	uint32_t function_ref_count;
+	uint32_t constant_count;
+	uint32_t affine_count;
+	uint32_t input_count;
 } field_fixture_t;
 
 static uint32_t Bits(float value)
@@ -94,468 +93,296 @@ static uint32_t Bits(float value)
 	return bits;
 }
 
-static sg_rune_compact_source_t BspPlaneSource(uint32_t plane)
+int SG_RuneCompactModelValidateBound(
+	const sg_rune_compact_model_t *model,
+	const sg_rune_compact_identity_t *expected_identity,
+	sg_rune_compact_error_t *error_out)
 {
-	sg_rune_compact_source_t source;
-
-	memset(&source, 0, sizeof(source));
-	source.kind = SG_RUNE_COMPACT_SOURCE_BSP_PLANE;
-	source.value.bsp_plane.model = 0U;
-	source.value.bsp_plane.leaf = 1U;
-	source.value.bsp_plane.plane = plane;
-	return source;
+	if (error_out != NULL)
+		memset(error_out, 0, sizeof(*error_out));
+	return model != NULL && expected_identity != NULL &&
+		model->version == SG_RUNE_COMPACT_MODEL_VERSION &&
+		model->schema_tag == SG_RUNE_COMPACT_MODEL_SCHEMA_TAG &&
+		SG_RuneCompactIdentityMatches(&model->identity, expected_identity);
 }
 
-static sg_rune_compact_source_t SplitSource(uint32_t parent)
+int SG_RuneCompactIdentityMatches(
+	const sg_rune_compact_identity_t *actual,
+	const sg_rune_compact_identity_t *expected)
 {
-	sg_rune_compact_source_t source;
-
-	memset(&source, 0, sizeof(source));
-	source.kind = SG_RUNE_COMPACT_SOURCE_SPLIT;
-	source.value.split.parent_facet.value = parent;
-	return source;
+	return actual != NULL && expected != NULL &&
+		memcmp(actual, expected, sizeof(*actual)) == 0;
 }
 
-static void InitIdentity(sg_rune_compact_identity_t *identity)
-{
-	identity->bsp_sha256[0] = UINT8_C(0x5a);
-	identity->bsp_bytes = UINT64_C(1024);
-	identity->bsp_checksum = UINT32_C(0x101);
-	identity->entity_crc32 = UINT32_C(0x102);
-	identity->entity_semantics_id = UINT64_C(0x202);
-	identity->physics_abi_id = UINT64_C(0x303);
-	identity->collision_law_id = UINT64_C(0x3031);
-	identity->pmove_law_id = UINT64_C(0x3032);
-	identity->gravity_law_id = UINT64_C(0x3033);
-	identity->hook_law_id = UINT64_C(0x3034);
-	identity->mechanism_law_id = UINT64_C(0x304);
-	identity->weapon_law_id = UINT64_C(0x305);
-	identity->construction_id = UINT64_C(0x306);
-	identity->schema_id = UINT64_C(0x404);
-	identity->producer_identity = UINT64_C(0x50524f4455434552);
-	identity->source_counts = (sg_rune_compact_source_counts_t){
-		1U, 5U, 5U, 4U, 1U, 1U, 32U
-	};
-	identity->standing_hull.mins =
-		(sg_rune_q8_vec3_t){ { -128, -128, -192 } };
-	identity->standing_hull.maxs =
-		(sg_rune_q8_vec3_t){ { 128, 128, 256 } };
-	identity->crouching_hull.mins =
-		(sg_rune_q8_vec3_t){ { -128, -128, -192 } };
-	identity->crouching_hull.maxs =
-		(sg_rune_q8_vec3_t){ { 128, 128, 128 } };
-	identity->physics.gravity_bits = Bits(100.0f);
-	identity->physics.ground_acceleration_bits = Bits(10.0f);
-	identity->physics.air_acceleration_bits = Bits(1.0f);
-	identity->physics.water_acceleration_bits = Bits(4.0f);
-	identity->physics.hook_acceleration_bits = Bits(1000.0f);
-	identity->physics.external_acceleration_bits = Bits(1200.0f);
-	identity->physics.water_drag_bits = Bits(0.5f);
-	identity->physics.max_velocity_bits = Bits(800.0f);
-	identity->physics.frame_ms = 8U;
-	identity->physics.substep_ms = 1U;
-}
-
-static void InitGeometry(field_fixture_t *fixture)
+sg_rune_compact_localize_status_t SG_RuneCompactLocalize(
+	const sg_rune_compact_model_t *model,
+	const sg_rune_q8_vec3_t *point,
+	sg_rune_compact_location_t *location_out)
 {
 	uint32_t cell;
 
-	fixture->vertices[0] = (sg_rune_q8_vec3_t){ { 64, 0, 0 } };
-	fixture->vertices[1] = (sg_rune_q8_vec3_t){ { 64, 64, 0 } };
-	fixture->vertices[2] = (sg_rune_q8_vec3_t){ { 64, 64, 64 } };
-	fixture->vertices[3] = (sg_rune_q8_vec3_t){ { 64, 0, 64 } };
-	fixture->vertices[4] = (sg_rune_q8_vec3_t){ { 128, 0, 0 } };
-	fixture->vertices[5] = (sg_rune_q8_vec3_t){ { 128, 64, 0 } };
-	fixture->vertices[6] = (sg_rune_q8_vec3_t){ { 128, 64, 64 } };
-	fixture->vertices[7] = (sg_rune_q8_vec3_t){ { 128, 0, 64 } };
-	fixture->vertices[8] = (sg_rune_q8_vec3_t){ { 96, 0, 0 } };
-	fixture->vertices[9] = (sg_rune_q8_vec3_t){ { 96, 64, 0 } };
-	fixture->vertices[10] = (sg_rune_q8_vec3_t){ { 96, 64, 64 } };
-	fixture->vertices[11] = (sg_rune_q8_vec3_t){ { 96, 0, 64 } };
-	fixture->vertices[12] = (sg_rune_q8_vec3_t){ { 320, 0, 0 } };
-	fixture->vertices[13] = (sg_rune_q8_vec3_t){ { 320, 64, 0 } };
-	fixture->vertices[14] = (sg_rune_q8_vec3_t){ { 320, 64, 64 } };
-	fixture->vertices[15] = (sg_rune_q8_vec3_t){ { 320, 0, 64 } };
-	for (cell = 0U; cell < CELL_COUNT; cell++) {
-		fixture->cells[cell].source = (sg_rune_compact_cell_source_t){
-			0U, cell + 1U, cell + 1U, (int32_t)cell, 0U
-		};
-		fixture->cells[cell].incidences =
-			(sg_rune_compact_cell_incidence_span_t){ cell, 1U };
-		fixture->cells[cell].weapon_regions =
-			(sg_rune_weapon_response_region_span_t){ cell, 1U };
-		fixture->cells[cell].valid_stances = SG_RUNE_STANCE_VALID_ALL;
-	}
-	fixture->cells[0].bounds = (sg_rune_q8_bounds_t){
-		{ { 0, 0, 0 } }, { { 64, 64, 64 } }
-	};
-	fixture->cells[1].bounds = (sg_rune_q8_bounds_t){
-		{ { 64, 0, 0 } }, { { 128, 64, 64 } }
-	};
-	fixture->cells[2].bounds = (sg_rune_q8_bounds_t){
-		{ { 128, 0, 0 } }, { { 192, 64, 64 } }
-	};
-	fixture->cells[3].bounds = (sg_rune_q8_bounds_t){
-		{ { 256, 0, 0 } }, { { 320, 64, 64 } }
-	};
-	fixture->cells[0].movement_fields =
-		(sg_rune_movement_field_span_t){ 0U, 3U };
-	fixture->cells[1].movement_fields =
-		(sg_rune_movement_field_span_t){ 3U, 2U };
-	fixture->cells[2].movement_fields =
-		(sg_rune_movement_field_span_t){ 5U, 2U };
-	fixture->cells[3].movement_fields =
-		(sg_rune_movement_field_span_t){ 7U, 1U };
-	fixture->cells[0].incidences =
-		(sg_rune_compact_cell_incidence_span_t){ 0U, 2U };
-	fixture->cells[1].incidences =
-		(sg_rune_compact_cell_incidence_span_t){ 2U, 2U };
-	fixture->cells[2].incidences =
-		(sg_rune_compact_cell_incidence_span_t){ 4U, 2U };
-	fixture->cells[3].incidences =
-		(sg_rune_compact_cell_incidence_span_t){ 6U, 1U };
-	fixture->facets[0].source = BspPlaneSource(0U);
-	fixture->facets[0].plane.normal_bits[0] = Bits(1.0f);
-	fixture->facets[0].plane.distance_bits = Bits(8.0f);
-	fixture->facets[0].vertices =
-		(sg_rune_compact_vertex_span_t){ 0U, 4U };
-	fixture->facets[0].incidences =
-		(sg_rune_compact_incidence_span_t){ 0U, 2U };
-	fixture->facets[0].portal.value = 0U;
-	fixture->facets[1].source = BspPlaneSource(1U);
-	fixture->facets[1].plane.normal_bits[0] = Bits(1.0f);
-	fixture->facets[1].plane.distance_bits = Bits(16.0f);
-	fixture->facets[1].vertices =
-		(sg_rune_compact_vertex_span_t){ 4U, 4U };
-	fixture->facets[1].incidences =
-		(sg_rune_compact_incidence_span_t){ 2U, 2U };
-	fixture->facets[1].portal.value = 1U;
-	fixture->facets[2].source = BspPlaneSource(2U);
-	fixture->facets[2].plane.normal_bits[0] = Bits(1.0f);
-	fixture->facets[2].plane.distance_bits = Bits(12.0f);
-	fixture->facets[2].vertices =
-		(sg_rune_compact_vertex_span_t){ 8U, 4U };
-	fixture->facets[2].incidences =
-		(sg_rune_compact_incidence_span_t){ 4U, 2U };
-	fixture->facets[2].portal.value = 2U;
-	fixture->facets[3].source = BspPlaneSource(3U);
-	fixture->facets[3].plane.normal_bits[0] = Bits(1.0f);
-	fixture->facets[3].plane.distance_bits = Bits(40.0f);
-	fixture->facets[3].vertices =
-		(sg_rune_compact_vertex_span_t){ 12U, 4U };
-	fixture->facets[3].incidences =
-		(sg_rune_compact_incidence_span_t){ 6U, 1U };
-	fixture->facets[3].portal.value = SG_RUNE_COMPACT_INDEX_NONE;
-	fixture->incidences[0].cell.value = 0U;
-	fixture->incidences[0].facet.value = 0U;
-	fixture->incidences[0].side = SG_RUNE_FACET_NEGATIVE_SIDE;
-	fixture->incidences[0].boundary = SG_RUNE_BOUNDARY_CLOSED;
-	fixture->incidences[1] = fixture->incidences[0];
-	fixture->incidences[1].cell.value = 1U;
-	fixture->incidences[1].side = SG_RUNE_FACET_POSITIVE_SIDE;
-	fixture->incidences[1].boundary = SG_RUNE_BOUNDARY_OPEN;
-	fixture->incidences[2] = fixture->incidences[0];
-	fixture->incidences[2].cell.value = 1U;
-	fixture->incidences[2].facet.value = 1U;
-	fixture->incidences[2].cell_ordinal = 1U;
-	fixture->incidences[3] = fixture->incidences[2];
-	fixture->incidences[3].cell.value = 2U;
-	fixture->incidences[3].side = SG_RUNE_FACET_POSITIVE_SIDE;
-	fixture->incidences[3].boundary = SG_RUNE_BOUNDARY_OPEN;
-	fixture->incidences[3].cell_ordinal = 0U;
-	fixture->incidences[4] = fixture->incidences[0];
-	fixture->incidences[4].cell.value = 0U;
-	fixture->incidences[4].facet.value = 2U;
-	fixture->incidences[4].cell_ordinal = 1U;
-	fixture->incidences[5] = fixture->incidences[4];
-	fixture->incidences[5].cell.value = 2U;
-	fixture->incidences[5].side = SG_RUNE_FACET_POSITIVE_SIDE;
-	fixture->incidences[5].boundary = SG_RUNE_BOUNDARY_OPEN;
-	fixture->incidences[6] = fixture->incidences[0];
-	fixture->incidences[6].cell.value = 3U;
-	fixture->incidences[6].facet.value = 3U;
-	fixture->cell_incidences[0].value = 0U;
-	fixture->cell_incidences[1].value = 4U;
-	fixture->cell_incidences[2].value = 1U;
-	fixture->cell_incidences[3].value = 2U;
-	fixture->cell_incidences[4].value = 3U;
-	fixture->cell_incidences[5].value = 5U;
-	fixture->cell_incidences[6].value = 6U;
-	fixture->portals[0].source = SplitSource(0U);
-	fixture->portals[0].facet.value = 0U;
-	fixture->portals[0].negative_incidence.value = 0U;
-	fixture->portals[0].positive_incidence.value = 1U;
-	fixture->portals[0].clearance_q8 = 32U;
-	fixture->portals[0].direction = SG_RUNE_PORTAL_CONTINUITY_BOTH;
-	fixture->portals[0].valid_stances = SG_RUNE_STANCE_VALID_ALL;
-	fixture->portals[1].source = SplitSource(1U);
-	fixture->portals[1].facet.value = 1U;
-	fixture->portals[1].negative_incidence.value = 2U;
-	fixture->portals[1].positive_incidence.value = 3U;
-	fixture->portals[1].clearance_q8 = 32U;
-	fixture->portals[1].direction = SG_RUNE_PORTAL_CONTINUITY_BOTH;
-	fixture->portals[1].valid_stances = SG_RUNE_STANCE_VALID_ALL;
-	fixture->portals[2].source = SplitSource(2U);
-	fixture->portals[2].facet.value = 2U;
-	fixture->portals[2].negative_incidence.value = 4U;
-	fixture->portals[2].positive_incidence.value = 5U;
-	fixture->portals[2].clearance_q8 = 32U;
-	fixture->portals[2].direction =
-		SG_RUNE_PORTAL_CONTINUITY_POSITIVE_TO_NEGATIVE;
-	fixture->portals[2].valid_stances = SG_RUNE_STANCE_VALID_ALL;
+	if (model == NULL || point == NULL || location_out == NULL)
+		return SG_RUNE_COMPACT_LOCALIZE_INVALID_ARGUMENT;
+	if (point->value[0] < 0 || point->value[0] >= 256)
+		return SG_RUNE_COMPACT_LOCALIZE_NOT_FOUND;
+	cell = (uint32_t)point->value[0] / 64U;
+	memset(location_out, 0, sizeof(*location_out));
+	location_out->cell.value = cell;
+	location_out->valid_stances = model->cells[cell].valid_stances;
+	return SG_RUNE_COMPACT_LOCALIZE_OK;
 }
 
-static void InitAnalytics(field_fixture_t *fixture)
+static sg_rune_analytic_function_span_t AddConstantTriple(
+	field_fixture_t *fixture, float cost)
 {
-	uint32_t dimension;
-	uint32_t field;
+	sg_rune_analytic_function_span_t span = {
+		fixture->function_ref_count, 3U
+	};
+	const float values[3] = { cost, 0.25f, 1.0f };
+	const sg_rune_analytic_output_meaning_t outputs[3] = {
+		SG_RUNE_ANALYTIC_OUTPUT_COST,
+		SG_RUNE_ANALYTIC_OUTPUT_TRAVEL_TIME_SECONDS,
+		SG_RUNE_ANALYTIC_OUTPUT_REACHABILITY_MARGIN
+	};
+	uint32_t offset;
 
-	fixture->constants[0].value.bits = Bits(2.5f);
-	fixture->constants[1].value.bits = Bits(3.0f);
-	fixture->constants[2].value.bits = Bits(0.75f);
-	fixture->constants[3].value.bits = Bits(1.0f);
-	fixture->constants[4].value.bits = Bits(4.0f);
-	fixture->functions[0].definition = 0U;
-	fixture->functions[0].output =
-		SG_RUNE_ANALYTIC_OUTPUT_TRAVEL_TIME_SECONDS;
-	fixture->functions[1].definition = 1U;
-	fixture->functions[1].output = SG_RUNE_ANALYTIC_OUTPUT_DAMAGE;
-	fixture->functions[2].definition = 2U;
-	fixture->functions[2].output = SG_RUNE_ANALYTIC_OUTPUT_HIT_PROBABILITY;
-	fixture->functions[3].definition = 3U;
-	fixture->functions[3].output =
-		SG_RUNE_ANALYTIC_OUTPUT_VISIBILITY_FRACTION;
-	fixture->functions[4].definition = 4U;
-	fixture->functions[4].output =
-		SG_RUNE_ANALYTIC_OUTPUT_FUSE_REMAINING_SECONDS;
-	for (field = 0U; field < CONSTANT_COUNT; field++)
-		fixture->functions[field].form = SG_RUNE_COMPACT_ANALYTIC_CONSTANT;
-	fixture->functions[5].inputs =
-		(sg_rune_analytic_input_span_t){
-			0U, SG_RUNE_ANALYTIC_INPUT_DIMENSION_COUNT
-		};
-	fixture->functions[5].definition = 0U;
-	fixture->functions[5].output = SG_RUNE_ANALYTIC_OUTPUT_COST;
-	fixture->functions[5].form = SG_RUNE_COMPACT_ANALYTIC_AFFINE;
-	fixture->functions[6].inputs =
-		(sg_rune_analytic_input_span_t){
-			SG_RUNE_ANALYTIC_INPUT_DIMENSION_COUNT, 1U
-		};
-	fixture->functions[6].definition = 1U;
-	fixture->functions[6].output =
-		SG_RUNE_ANALYTIC_OUTPUT_REACHABILITY_MARGIN;
-	fixture->functions[6].form = SG_RUNE_COMPACT_ANALYTIC_AFFINE;
-	for (dimension = 0U;
-		dimension < (uint32_t)SG_RUNE_ANALYTIC_INPUT_DIMENSION_COUNT;
-		dimension++) {
-		fixture->input_dimensions[dimension] =
-			(sg_rune_analytic_input_dimension_t)dimension;
-		fixture->slopes[dimension].bits = Bits((float)(dimension + 1U));
+	for (offset = 0U; offset < 3U; offset++) {
+		const uint32_t function = fixture->function_count++;
+		const uint32_t constant = fixture->constant_count++;
+
+		fixture->functions[function].form =
+			SG_RUNE_COMPACT_ANALYTIC_CONSTANT;
+		fixture->functions[function].definition = constant;
+		fixture->functions[function].output = outputs[offset];
+		fixture->constants[constant].value.bits = Bits(values[offset]);
+		fixture->function_refs[fixture->function_ref_count++].value = function;
 	}
-	fixture->input_dimensions[SG_RUNE_ANALYTIC_INPUT_DIMENSION_COUNT] =
-		SG_RUNE_ANALYTIC_INPUT_MOVER_PHASE;
-	fixture->slopes[SG_RUNE_ANALYTIC_INPUT_DIMENSION_COUNT].bits = Bits(1.0f);
-	fixture->affines[0].bias.bits = Bits(100.0f);
-	fixture->affines[0].slopes =
-		(sg_rune_analytic_affine_slope_span_t){
-			0U, SG_RUNE_ANALYTIC_INPUT_DIMENSION_COUNT
-		};
-	fixture->affines[1].bias.bits = Bits(0.0f);
-	fixture->affines[1].slopes =
-		(sg_rune_analytic_affine_slope_span_t){
-			SG_RUNE_ANALYTIC_INPUT_DIMENSION_COUNT, 1U
-		};
+	return span;
+}
+
+static sg_rune_analytic_function_span_t AddMoverTriple(
+	field_fixture_t *fixture, float bias)
+{
+	sg_rune_analytic_function_span_t span = {
+		fixture->function_ref_count, 3U
+	};
+	const uint32_t function = fixture->function_count++;
+	const uint32_t affine = fixture->affine_count++;
+	const uint32_t input = fixture->input_count++;
+	sg_rune_analytic_function_span_t tail;
+
+	fixture->functions[function].form = SG_RUNE_COMPACT_ANALYTIC_AFFINE;
+	fixture->functions[function].definition = affine;
+	fixture->functions[function].output = SG_RUNE_ANALYTIC_OUTPUT_COST;
+	fixture->functions[function].inputs =
+		(sg_rune_analytic_input_span_t){ input, 1U };
+	fixture->affines[affine].bias.bits = Bits(bias);
+	fixture->affines[affine].slopes =
+		(sg_rune_analytic_affine_slope_span_t){ input, 1U };
+	fixture->slopes[input].bits = Bits(1.0f);
+	fixture->input_dimensions[input] = SG_RUNE_ANALYTIC_INPUT_MOVER_PHASE;
+	fixture->function_refs[fixture->function_ref_count++].value = function;
+	tail = AddConstantTriple(fixture, 0.0f);
+	fixture->function_refs[span.first + 1U] = fixture->function_refs[tail.first + 1U];
+	fixture->function_refs[span.first + 2U] = fixture->function_refs[tail.first + 2U];
+	fixture->function_ref_count = span.first + 3U;
+	return span;
+}
+
+static uint32_t AddCapability(field_fixture_t *fixture, uint32_t cell,
+	uint32_t portal, sg_rune_movement_capability_kind_t kind,
+	sg_rune_stance_validity_t source_stance,
+	sg_rune_stance_validity_t destination_stance,
+	sg_rune_movement_fiber_kind_t fiber_kind, uint32_t source_state,
+	uint32_t destination_state, uint32_t transition, float cost)
+{
+	const uint32_t capability_index = fixture->capability_count++;
+	const uint32_t fiber_index = fixture->fiber_count++;
+	sg_rune_movement_capability_t *capability =
+		&fixture->capabilities[capability_index];
+	sg_rune_compact_movement_fiber_t *fiber = &fixture->fibers[fiber_index];
+
+	memset(capability, 0, sizeof(*capability));
+	capability->cell.value = cell;
+	capability->boundary_portal.value = portal;
+	capability->kind = kind;
+	capability->source_stances = source_stance;
+	capability->destination_stances = destination_stance;
+	capability->fibers = (sg_rune_movement_fiber_span_t){ fiber_index, 1U };
+	memset(fiber, 0, sizeof(*fiber));
+	fiber->capability.value = capability_index;
+	fiber->kind = fiber_kind;
+	fiber->state_variables = SG_RUNE_MOVEMENT_STATE_POSITION |
+		SG_RUNE_MOVEMENT_STATE_VELOCITY | SG_RUNE_MOVEMENT_STATE_STANCE |
+		SG_RUNE_MOVEMENT_STATE_TIME;
+	if (kind <= SG_RUNE_MOVEMENT_CAPABILITY_AIR_CONTROL &&
+		kind != SG_RUNE_MOVEMENT_CAPABILITY_SWIM)
+		fiber->state_variables |= SG_RUNE_MOVEMENT_STATE_SUPPORT;
+	if (kind == SG_RUNE_MOVEMENT_CAPABILITY_SWIM)
+		fiber->state_variables |= SG_RUNE_MOVEMENT_STATE_WATER |
+			SG_RUNE_MOVEMENT_STATE_CURRENT;
+	if (kind >= SG_RUNE_MOVEMENT_CAPABILITY_HOOK_BOLT &&
+		kind <= SG_RUNE_MOVEMENT_CAPABILITY_HOOK_RELAUNCH)
+		fiber->state_variables |= SG_RUNE_MOVEMENT_STATE_HOOK;
+	if (kind == SG_RUNE_MOVEMENT_CAPABILITY_MOVER ||
+		kind == SG_RUNE_MOVEMENT_CAPABILITY_CONTROLLER_ACTION)
+		fiber->state_variables |= SG_RUNE_MOVEMENT_STATE_MOVER;
+	if (kind == SG_RUNE_MOVEMENT_CAPABILITY_EXTERNAL_FORCE)
+		fiber->state_variables |= SG_RUNE_MOVEMENT_STATE_EXTERNAL_FORCE;
+	fiber->source_state.value = source_state;
+	fiber->destination_state.value = destination_state;
+	fiber->functions = AddConstantTriple(fixture, cost);
+	fiber->hook_targets.first = fixture->hook_target_count;
+	fiber->mechanism_transition.value = transition;
+	fiber->angular_schedule = SG_RUNE_COMPACT_INDEX_NONE;
+	fiber->controller_action_controller.value = SG_RUNE_COMPACT_INDEX_NONE;
+	fiber->controller_action_target.value = SG_RUNE_COMPACT_INDEX_NONE;
+	return fiber_index;
+}
+
+static void AddHookCapability(field_fixture_t *fixture,
+	sg_rune_movement_capability_kind_t kind, float selected_cost,
+	sg_rune_movement_hook_target_class_t visibility)
+{
+	const uint32_t phase = (uint32_t)kind -
+		(uint32_t)SG_RUNE_MOVEMENT_CAPABILITY_HOOK_BOLT;
+	static const uint32_t source_states[6] = { 0U, 6U, 7U, 7U, 8U, 8U };
+	static const uint32_t destination_states[6] = { 6U, 7U, 7U, 8U, 8U, 6U };
+	const uint32_t fiber_index = AddCapability(fixture, 0U,
+		SG_RUNE_COMPACT_INDEX_NONE, kind, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_MOVEMENT_FIBER_HOOK,
+		source_states[phase], destination_states[phase],
+		SG_RUNE_COMPACT_INDEX_NONE, 90.0f);
+	sg_rune_compact_movement_fiber_t *fiber = &fixture->fibers[fiber_index];
+	sg_rune_compact_movement_hook_target_t *target =
+		&fixture->hook_targets[fixture->hook_target_count];
+	sg_rune_analytic_function_span_t *spans[6] = {
+		&target->functions.bolt, &target->functions.body,
+		&target->functions.pull, &target->functions.release,
+		&target->functions.coast, &target->functions.relaunch
+	};
+	uint32_t index;
+
+	memset(target, 0, sizeof(*target));
+	target->fiber.value = fiber_index;
+	target->provenance =
+		SG_RUNE_MOVEMENT_HOOK_TARGET_PROVENANCE_STATIC_RESPONSE;
+	target->response.kind = SG_RUNE_COMPACT_RESPONSE_REF_CERTIFIED_FACT;
+	target->response.index = phase;
+	target->visibility_class = visibility;
+	target->source_stances = SG_RUNE_STANCE_VALID_STANDING;
+	target->target_stances = SG_RUNE_STANCE_VALID_STANDING;
+	for (index = 0U; index < 6U; index++)
+		*spans[index] = AddConstantTriple(fixture,
+			index == phase ? selected_cost : 80.0f + (float)index);
+	fiber->hook_targets.count = 1U;
+	fixture->patches[phase].target_cell.value = 3U;
+	fixture->facts[phase].target_patch = phase;
+	fixture->hook_target_count++;
+}
+
+static void FinalizeModel(field_fixture_t *fixture)
+{
 	fixture->analytic.version = SG_RUNE_COMPACT_ANALYTIC_VERSION;
 	fixture->analytic.functions = fixture->functions;
-	fixture->analytic.function_count = FUNCTION_COUNT;
+	fixture->analytic.function_count = fixture->function_count;
 	fixture->analytic.input_dimensions = fixture->input_dimensions;
-	fixture->analytic.input_dimension_count = INPUT_COUNT;
+	fixture->analytic.input_dimension_count = fixture->input_count;
 	fixture->analytic.constants = fixture->constants;
-	fixture->analytic.constant_count = CONSTANT_COUNT;
+	fixture->analytic.constant_count = fixture->constant_count;
 	fixture->analytic.affines = fixture->affines;
-	fixture->analytic.affine_count = AFFINE_COUNT;
+	fixture->analytic.affine_count = fixture->affine_count;
 	fixture->analytic.affine_slopes = fixture->slopes;
-	fixture->analytic.affine_slope_count = SLOPE_COUNT;
-	for (field = 0U; field < MOVEMENT_FIELD_COUNT; field++) {
-		static const uint32_t cells[MOVEMENT_FIELD_COUNT] = {
-			0U, 0U, 0U, 1U, 1U, 2U, 2U, 3U
-		};
-		static const uint32_t portals[MOVEMENT_FIELD_COUNT] = {
-			0U, 0U, 2U, 0U, 1U, 1U, 2U,
-			SG_RUNE_COMPACT_INDEX_NONE
-		};
-
-		fixture->movement_fields[field].cell.value = cells[field];
-		fixture->movement_fields[field].boundary_portal.value = portals[field];
-		fixture->movement_fields[field].family = field == 0U ?
-			SG_RUNE_MOVEMENT_FIELD_GROUND : SG_RUNE_MOVEMENT_FIELD_HOOK;
-		fixture->movement_fields[field].valid_stances =
-			SG_RUNE_STANCE_VALID_ALL;
-		fixture->movement_fields[field].functions =
-			(sg_rune_analytic_function_span_t){ field * 3U, 3U };
-		fixture->analytic_refs[field * 3U].value = 5U;
-		fixture->analytic_refs[field * 3U + 1U].value = 0U;
-		fixture->analytic_refs[field * 3U + 2U].value = 6U;
-	}
-}
-
-static void InitWeapons(field_fixture_t *fixture)
-{
-	uint32_t reference_cursor = MOVEMENT_REFERENCE_COUNT;
-	uint32_t kernel_cursor = 0U;
-	uint32_t profile;
-	uint32_t region;
-
-	for (profile = 0U; profile < WEAPON_PROFILE_COUNT; profile++) {
-		fixture->weapon_profiles[profile].source_profile = profile + 1U;
-		fixture->weapon_profiles[profile].response_families =
-			SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(profile);
-	}
-	fixture->weapon_profiles[SG_RUNE_WEAPON_RESPONSE_ROCKET_IMPACT].
-		response_families |= SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(
-			SG_RUNE_WEAPON_RESPONSE_ROCKET_SPLASH);
-	for (region = 0U; region < CELL_COUNT; region++) {
-		fixture->weapon_regions[region].cell.value = region;
-		fixture->weapon_regions[region].boundary_incidences =
-			(sg_rune_compact_cell_incidence_span_t){
-				fixture->cells[region].incidences.first, 1U
-			};
-		fixture->weapon_regions[region].kernels =
-			(sg_rune_weapon_response_kernel_span_t){
-				region * WEAPON_KERNELS_PER_REGION,
-				WEAPON_KERNELS_PER_REGION
-			};
-		for (profile = 0U; profile < WEAPON_PROFILE_COUNT; profile++) {
-			uint32_t family;
-
-			for (family = 0U;
-				family < (uint32_t)SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT;
-				family++) {
-				const uint32_t bit =
-					SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(family);
-				const int grenade =
-					family == SG_RUNE_WEAPON_RESPONSE_GRENADE_FLIGHT ||
-					family == SG_RUNE_WEAPON_RESPONSE_GRENADE_BOUNCE_FUSE;
-				sg_rune_weapon_response_kernel_t *kernel;
-
-				if ((fixture->weapon_profiles[profile].response_families &
-					bit) == 0U)
-					continue;
-				kernel = &fixture->weapon_kernels[kernel_cursor++];
-				kernel->region.value = region;
-				kernel->profile = profile;
-				kernel->family = (sg_rune_weapon_response_family_t)family;
-				kernel->functions.first = reference_cursor;
-				kernel->functions.count = grenade ? 5U : 4U;
-				fixture->analytic_refs[reference_cursor++].value = 0U;
-				fixture->analytic_refs[reference_cursor++].value = 1U;
-				fixture->analytic_refs[reference_cursor++].value = 2U;
-				fixture->analytic_refs[reference_cursor++].value = 3U;
-				if (grenade)
-					fixture->analytic_refs[reference_cursor++].value = 4U;
-			}
-		}
-	}
-	CHECK(kernel_cursor == WEAPON_KERNEL_COUNT);
-	CHECK(reference_cursor == REFERENCE_COUNT);
+	fixture->analytic.affine_slope_count = fixture->input_count;
+	fixture->model.movement_capabilities = fixture->capabilities;
+	fixture->model.movement_capability_count = fixture->capability_count;
+	fixture->model.movement_states = fixture->states;
+	fixture->model.movement_state_count = 9U;
+	fixture->model.movement_fibers = fixture->fibers;
+	fixture->model.movement_fiber_count = fixture->fiber_count;
+	fixture->model.movement_hook_targets = fixture->hook_targets;
+	fixture->model.movement_hook_target_count = fixture->hook_target_count;
+	fixture->model.movement_fiber_function_refs = fixture->function_refs;
+	fixture->model.movement_fiber_function_ref_count = fixture->function_ref_count;
+	fixture->model.analytic = &fixture->analytic;
 }
 
 static void InitFixture(field_fixture_t *fixture)
 {
-	sg_rune_compact_model_t *model;
+	uint32_t index;
 
 	memset(fixture, 0, sizeof(*fixture));
-	InitGeometry(fixture);
-	InitAnalytics(fixture);
-	InitWeapons(fixture);
-	fixture->landmark.source.entity_ordinal = 20U;
-	fixture->landmark.cells =
-		(sg_rune_compact_landmark_cell_span_t){ 0U, 2U };
-	fixture->landmark.mechanism.value = SG_RUNE_COMPACT_INDEX_NONE;
-	fixture->landmark.origin = (sg_rune_q8_vec3_t){ { 64, 16, 16 } };
-	fixture->landmark.bounds = (sg_rune_q8_bounds_t){
-		{ { 56, 8, 8 } }, { { 72, 24, 24 } }
-	};
-	fixture->landmark.kind = SG_RUNE_COMPACT_LANDMARK_POWERUP;
-	fixture->landmark_cells[0].value = 0U;
-	fixture->landmark_cells[1].value = 1U;
-	fixture->static_data.landmarks = &fixture->landmark;
-	fixture->static_data.landmark_count = 1U;
-	fixture->static_data.landmark_cells = fixture->landmark_cells;
-	fixture->static_data.landmark_cell_count = 2U;
-	fixture->mechanisms[0].source.entity_ordinal = 10U;
-	fixture->mechanisms[0].controller.entity_ordinal = 10U;
-	fixture->mechanisms[0].entry_cell.value = 0U;
-	fixture->mechanisms[0].exit_cell.value = 1U;
-	fixture->mechanisms[0].activation_landmark.value =
-		SG_RUNE_COMPACT_INDEX_NONE;
-	fixture->mechanisms[0].bounds = fixture->cells[0].bounds;
-	fixture->mechanisms[0].kind = SG_RUNE_COMPACT_MECHANISM_DOOR;
-	fixture->mechanisms[0].activation =
-		SG_RUNE_COMPACT_MECHANISM_ACTIVATION_AUTOMATIC;
-	fixture->mechanisms[0].initial_state =
-		SG_RUNE_COMPACT_MECHANISM_STATE_INACTIVE;
-	fixture->mechanisms[0].activated_state =
-		SG_RUNE_COMPACT_MECHANISM_STATE_ACTIVE;
-	fixture->mechanisms[0].reset_state =
-		SG_RUNE_COMPACT_MECHANISM_STATE_INACTIVE;
-	fixture->mechanisms[0].recovery = SG_RUNE_COMPACT_MECHANISM_RECOVERY_NONE;
-	fixture->mechanisms[1] = fixture->mechanisms[0];
-	fixture->mechanisms[1].source.entity_ordinal = 11U;
-	fixture->mechanisms[1].controller.entity_ordinal = 11U;
-	fixture->mechanisms[1].entry_cell.value = 1U;
-	fixture->mechanisms[1].exit_cell.value = 2U;
-	fixture->mechanisms[1].bounds = fixture->cells[1].bounds;
-	fixture->static_data.mechanisms = fixture->mechanisms;
+	for (index = 0U; index < CELL_COUNT; index++) {
+		fixture->cells[index].bounds.mins.value[0] = (int32_t)(index * 64U);
+		fixture->cells[index].bounds.maxs.value[0] =
+			(int32_t)((index + 1U) * 64U);
+		fixture->cells[index].bounds.maxs.value[1] = 32;
+		fixture->cells[index].bounds.maxs.value[2] = 32;
+		fixture->cells[index].valid_stances = SG_RUNE_STANCE_VALID_ALL;
+	}
+	for (index = 0U; index < PORTAL_COUNT; index++) {
+		fixture->incidences[index * 2U].cell.value = index;
+		fixture->incidences[index * 2U + 1U].cell.value = index + 1U;
+		fixture->portals[index].negative_incidence.value = index * 2U;
+		fixture->portals[index].positive_incidence.value = index * 2U + 1U;
+		fixture->portals[index].direction =
+			SG_RUNE_PORTAL_CONTINUITY_NEGATIVE_TO_POSITIVE;
+		fixture->portals[index].valid_stances = SG_RUNE_STANCE_VALID_ALL;
+	}
+	fixture->states[0].stance = SG_RUNE_STANCE_VALID_STANDING;
+	fixture->states[0].support = SG_RUNE_MOVEMENT_SUPPORT_STATIC;
+	fixture->states[0].water = SG_RUNE_MOVEMENT_WATER_DRY;
+	fixture->states[0].hook_phase = SG_HOST_HOOK_IDLE;
+	fixture->states[0].mover_mechanism = SG_RUNE_COMPACT_INDEX_NONE;
+	fixture->states[1] = fixture->states[0];
+	fixture->states[1].stance = SG_RUNE_STANCE_VALID_CROUCHING;
+	fixture->states[2] = fixture->states[0];
+	fixture->states[2].support = SG_RUNE_MOVEMENT_SUPPORT_MOVER;
+	fixture->states[2].flags = SG_RUNE_MOVEMENT_STATE_MOVER_RELATIVE;
+	fixture->states[2].mover_mechanism = 0U;
+	fixture->states[3] = fixture->states[0];
+	fixture->states[3].support = SG_RUNE_MOVEMENT_SUPPORT_NONE;
+	fixture->states[3].flags = SG_RUNE_MOVEMENT_STATE_AIRBORNE |
+		SG_RUNE_MOVEMENT_STATE_FLAG_EXTERNAL_FORCE;
+	fixture->states[4] = fixture->states[0];
+	fixture->states[4].support = SG_RUNE_MOVEMENT_SUPPORT_NONE;
+	fixture->states[4].water = SG_RUNE_MOVEMENT_WATER_SUBMERGED;
+	fixture->states[4].flags = SG_RUNE_MOVEMENT_STATE_AIRBORNE;
+	fixture->states[5] = fixture->states[0];
+	fixture->states[5].support = SG_RUNE_MOVEMENT_SUPPORT_NONE;
+	fixture->states[5].flags = SG_RUNE_MOVEMENT_STATE_AIRBORNE;
+	fixture->states[6] = fixture->states[0];
+	fixture->states[6].hook_phase = SG_HOST_HOOK_IN_FLIGHT;
+	fixture->states[7] = fixture->states[0];
+	fixture->states[7].hook_phase = SG_HOST_HOOK_ATTACHED;
+	fixture->states[8] = fixture->states[0];
+	fixture->states[8].hook_phase = SG_HOST_HOOK_COAST;
+	fixture->model.version = SG_RUNE_COMPACT_MODEL_VERSION;
+	fixture->model.schema_tag = SG_RUNE_COMPACT_MODEL_SCHEMA_TAG;
+	fixture->model.identity.schema_id = UINT64_C(12);
+	fixture->model.identity.physics.frame_ms = 16U;
+	fixture->model.cells = fixture->cells;
+	fixture->model.cell_count = CELL_COUNT;
+	fixture->model.incidences = fixture->incidences;
+	fixture->model.incidence_count = PORTAL_COUNT * 2U;
+	fixture->model.portals = fixture->portals;
+	fixture->model.portal_count = PORTAL_COUNT;
+	fixture->model.response.target_patches = fixture->patches;
+	fixture->model.response.target_patch_count = HOOK_TARGET_MAX;
+	fixture->model.response.facts = fixture->facts;
+	fixture->model.response.fact_count = HOOK_TARGET_MAX;
+	fixture->model.mechanism_authority_transitions = fixture->transitions;
+	fixture->model.mechanism_authority_transition_count = 3U;
+	fixture->model.mechanism_authority_count = 2U;
+	fixture->static_data.mechanisms = fixture->static_mechanisms;
 	fixture->static_data.mechanism_count = 2U;
-	fixture->portal_mechanisms[0].portal.value = 0U;
-	fixture->portal_mechanisms[0].mechanism.value = 0U;
-	fixture->portal_mechanisms[0].kind =
-		SG_RUNE_COMPACT_PORTAL_MECHANISM_BLOCKS;
-	fixture->portal_mechanisms[1].portal.value = 1U;
-	fixture->portal_mechanisms[1].mechanism.value = 1U;
-	fixture->portal_mechanisms[1].kind =
-		SG_RUNE_COMPACT_PORTAL_MECHANISM_BLOCKS;
-	fixture->portal_mechanisms[2].portal.value = 2U;
-	fixture->portal_mechanisms[2].mechanism.value = 0U;
-	fixture->portal_mechanisms[2].kind =
-		SG_RUNE_COMPACT_PORTAL_MECHANISM_BLOCKS;
 	fixture->static_data.portal_mechanisms = fixture->portal_mechanisms;
-	fixture->static_data.portal_mechanism_count = 3U;
-	model = &fixture->model;
-	model->version = SG_RUNE_COMPACT_MODEL_VERSION;
-	model->schema_tag = SG_RUNE_COMPACT_MODEL_SCHEMA_TAG;
-	InitIdentity(&model->identity);
-	model->cells = fixture->cells;
-	model->cell_count = CELL_COUNT;
-	model->facets = fixture->facets;
-	model->facet_count = FACET_COUNT;
-	model->incidences = fixture->incidences;
-	model->incidence_count = INCIDENCE_COUNT;
-	model->cell_incidences = fixture->cell_incidences;
-	model->cell_incidence_count = INCIDENCE_COUNT;
-	model->vertices = fixture->vertices;
-	model->vertex_count = VERTEX_COUNT;
-	model->portals = fixture->portals;
-	model->portal_count = PORTAL_COUNT;
-	model->movement_fields = fixture->movement_fields;
-	model->movement_field_count = MOVEMENT_FIELD_COUNT;
-	model->weapon_regions = fixture->weapon_regions;
-	model->weapon_region_count = CELL_COUNT;
-	model->weapon_profiles = fixture->weapon_profiles;
-	model->weapon_profile_count = WEAPON_PROFILE_COUNT;
-	model->weapon_kernels = fixture->weapon_kernels;
-	model->weapon_kernel_count = WEAPON_KERNEL_COUNT;
-	model->analytic_function_refs = fixture->analytic_refs;
-	model->analytic_function_ref_count = REFERENCE_COUNT;
-	model->analytic = &fixture->analytic;
-	model->static_data = &fixture->static_data;
-	fixture->mechanism_phases[0].mechanism.value = 0U;
-	fixture->mechanism_phases[0].phase = 2.0f;
-	fixture->mechanism_phases[1].mechanism.value = 1U;
-	fixture->mechanism_phases[1].phase = 7.0f;
-	fixture->mechanism_snapshot.model_identity = &model->identity;
-	fixture->mechanism_snapshot.phases = fixture->mechanism_phases;
+	fixture->model.static_data = &fixture->static_data;
+	fixture->phases[0] = (sg_rune_compact_field_mechanism_phase_t){ { 0U }, 2.0f };
+	fixture->phases[1] = (sg_rune_compact_field_mechanism_phase_t){ { 1U }, 3.0f };
+	fixture->mechanism_snapshot.model_identity = &fixture->model.identity;
+	fixture->mechanism_snapshot.frame_sequence = 17U;
+	fixture->mechanism_snapshot.phases = fixture->phases;
 	fixture->mechanism_snapshot.phase_count = 2U;
 }
 
@@ -565,49 +392,48 @@ static sg_rune_compact_field_local_context_t Context(
 	sg_rune_compact_field_local_context_t context;
 
 	memset(&context, 0, sizeof(context));
-	context.origin = cell == 0U ?
-		(sg_rune_q8_vec3_t){ { 32, 16, 16 } } :
-		(cell == 1U ? (sg_rune_q8_vec3_t){ { 96, 16, 16 } } :
-		 (cell == 2U ? (sg_rune_q8_vec3_t){ { 160, 16, 16 } } :
-		  (sg_rune_q8_vec3_t){ { 288, 16, 16 } }));
+	context.origin.value[0] = (int32_t)(cell * 64U + 32U);
+	context.origin.value[1] = 16;
+	context.origin.value[2] = 16;
 	context.stance = SG_RUNE_COMPACT_FIELD_STANDING;
-	context.velocity[0] = 1.0f;
-	context.velocity[1] = 2.0f;
-	context.velocity[2] = 3.0f;
-	context.direction[0] = 0.25f;
-	context.direction[1] = 0.5f;
-	context.direction[2] = 0.75f;
-	context.time_seconds = 4.0f;
-	context.distance = 5.0f;
-	context.support_distance = 6.0f;
-	context.fluid_fraction = 0.5f;
-	context.hook_length = 7.0f;
-	context.target_radius = 8.0f;
+	context.support = SG_RUNE_MOVEMENT_SUPPORT_STATIC;
+	context.water = SG_RUNE_MOVEMENT_WATER_DRY;
+	context.hook_phase = SG_HOST_HOOK_IDLE;
+	context.mover_mechanism = SG_RUNE_COMPACT_INDEX_NONE;
+	context.frame_sequence = 17U;
 	context.mechanisms = &fixture->mechanism_snapshot;
+	context.portal_roots = fixture->root_snapshot.model_identity != NULL ?
+		&fixture->root_snapshot : NULL;
 	return context;
+}
+
+static sg_rune_compact_destination_t Destination(uint32_t cell)
+{
+	sg_rune_compact_destination_t destination;
+
+	memset(&destination, 0, sizeof(destination));
+	destination.kind = SG_RUNE_COMPACT_DESTINATION_CELL;
+	destination.value.cell.value = cell;
+	return destination;
 }
 
 static sg_rune_compact_field_t *CreateField(field_fixture_t *fixture)
 {
-	sg_rune_compact_error_t error;
 	sg_rune_compact_field_t *field = NULL;
 
-	CHECK(SG_RuneCompactModelValidate(&fixture->model, &error));
-	CHECK(error.code == SG_RUNE_COMPACT_ERROR_NONE);
 	CHECK(SG_RuneCompactFieldCreate(&fixture->model, &fixture->model.identity,
-		&field, &error) ==
-		SG_RUNE_COMPACT_FIELD_OK);
+		&field, NULL) == SG_RUNE_COMPACT_FIELD_OK);
 	CHECK(field != NULL);
 	return field;
 }
 
 static sg_rune_compact_destination_plan_t *CreatePlan(
-	const sg_rune_compact_field_t *field,
-	const sg_rune_compact_destination_t *destination)
+	const sg_rune_compact_field_t *field, uint32_t cell)
 {
+	const sg_rune_compact_destination_t destination = Destination(cell);
 	sg_rune_compact_destination_plan_t *plan = NULL;
 
-	CHECK(SG_RuneCompactFieldPlanCreate(field, destination, &plan) ==
+	CHECK(SG_RuneCompactFieldPlanCreate(field, &destination, &plan) ==
 		SG_RUNE_COMPACT_FIELD_OK);
 	CHECK(plan != NULL);
 	return plan;
@@ -625,533 +451,682 @@ static sg_rune_compact_field_result_t Query(
 	return result;
 }
 
-static sg_rune_compact_field_portal_step_t PortalStep(
-	const sg_rune_compact_field_result_t *result)
+typedef struct exact_probe_capture_s
 {
-	CHECK(result->kind == SG_RUNE_COMPACT_FIELD_STEP);
-	CHECK(result->value.step.kind == SG_RUNE_COMPACT_FIELD_TRANSITION_PORTAL);
-	return result->value.step.value.portal;
+	sg_rune_compact_field_exact_probe_t probe;
+	uint32_t calls;
+} exact_probe_capture_t;
+
+static int CaptureExactProbe(void *context,
+	const sg_rune_compact_field_exact_probe_t *probe)
+{
+	exact_probe_capture_t *capture = context;
+
+	if (capture == NULL || probe == NULL)
+		return 0;
+	capture->probe = *probe;
+	capture->calls++;
+	return 1;
 }
 
-static float ExpectedCost(const sg_rune_compact_field_local_context_t *context,
-	float mover_phase)
-{
-	const float values[SG_RUNE_ANALYTIC_INPUT_DIMENSION_COUNT] = {
-		(float)context->origin.value[0] / 8.0f,
-		(float)context->origin.value[1] / 8.0f,
-		(float)context->origin.value[2] / 8.0f,
-		context->velocity[0], context->velocity[1], context->velocity[2],
-		context->direction[0], context->direction[1], context->direction[2],
-		context->time_seconds, context->distance, context->support_distance,
-		context->fluid_fraction, mover_phase, context->hook_length,
-		context->target_radius
-	};
-	float cost = 100.0f;
-	uint32_t dimension;
-
-	for (dimension = 0U;
-		dimension < (uint32_t)SG_RUNE_ANALYTIC_INPUT_DIMENSION_COUNT;
-		dimension++)
-		cost += (float)(dimension + 1U) * values[dimension];
-	return cost;
-}
-
-static sg_rune_compact_destination_t CellDestination(uint32_t cell)
-{
-	sg_rune_compact_destination_t destination;
-
-	memset(&destination, 0, sizeof(destination));
-	destination.kind = SG_RUNE_COMPACT_DESTINATION_CELL;
-	destination.value.cell.value = cell;
-	return destination;
-}
-
-static void TestAllDestinations(void)
+static void TestTopologyCapabilitiesAndDescent(void)
 {
 	field_fixture_t fixture;
 	sg_rune_compact_field_t *field;
-	sg_rune_compact_destination_plan_t *plan;
-	sg_rune_compact_destination_t destination;
-	sg_rune_compact_field_local_context_t context;
-	sg_rune_compact_field_result_t result;
-
-	InitFixture(&fixture);
-	field = CreateField(&fixture);
-	memset(&destination, 0, sizeof(destination));
-	destination.kind = SG_RUNE_COMPACT_DESTINATION_POINT;
-	destination.value.point = (sg_rune_q8_vec3_t){ { 104, 24, 24 } };
-	plan = CreatePlan(field, &destination);
-	context = Context(&fixture, 1U);
-	result = Query(plan, &context);
-	CHECK(result.kind == SG_RUNE_COMPACT_FIELD_LOCAL_DESTINATION);
-	CHECK(result.value.destination.kind == SG_RUNE_COMPACT_DESTINATION_POINT);
-	CHECK(memcmp(&result.value.destination.value.point,
-		&destination.value.point, sizeof(destination.value.point)) == 0);
-	CHECK(memcmp(&context.origin, &destination.value.point,
-		sizeof(context.origin)) != 0);
-	SG_RuneCompactFieldPlanDestroy(plan);
-	destination = CellDestination(1U);
-	plan = CreatePlan(field, &destination);
-	CHECK(Query(plan, &context).kind ==
-		SG_RUNE_COMPACT_FIELD_CELL_DESTINATION);
-	SG_RuneCompactFieldPlanDestroy(plan);
-	destination.kind = SG_RUNE_COMPACT_DESTINATION_SURFACE;
-	destination.value.surface.value = 1U;
-	plan = CreatePlan(field, &destination);
-	result = Query(plan, &context);
-	CHECK(result.kind == SG_RUNE_COMPACT_FIELD_LOCAL_DESTINATION);
-	CHECK(result.value.destination.value.surface.value == 1U);
-	SG_RuneCompactFieldPlanDestroy(plan);
-	destination.kind = SG_RUNE_COMPACT_DESTINATION_ITEM;
-	destination.value.item.value = 0U;
-	plan = CreatePlan(field, &destination);
-	context = Context(&fixture, 0U);
-	CHECK(Query(plan, &context).kind ==
-		SG_RUNE_COMPACT_FIELD_LOCAL_DESTINATION);
-	context = Context(&fixture, 1U);
-	CHECK(Query(plan, &context).kind ==
-		SG_RUNE_COMPACT_FIELD_LOCAL_DESTINATION);
-	SG_RuneCompactFieldPlanDestroy(plan);
-	SG_RuneCompactFieldDestroy(field);
-}
-
-static void TestCandidateSpecificMechanismPhase(void)
-{
-	field_fixture_t fixture;
-	sg_rune_compact_field_t *field;
-	sg_rune_compact_destination_t destination;
 	sg_rune_compact_destination_plan_t *plan;
 	sg_rune_compact_field_local_context_t context;
 	sg_rune_compact_field_result_t result;
-	sg_rune_compact_field_portal_step_t step;
+	exact_probe_capture_t capture;
+	uint32_t probe_count;
 
 	InitFixture(&fixture);
+	(void)AddCapability(&fixture, 0U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_WALK,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 0U, 0U, SG_RUNE_COMPACT_INDEX_NONE, 4.0f);
+	(void)AddCapability(&fixture, 0U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_SWIM,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 4U, 4U, SG_RUNE_COMPACT_INDEX_NONE, 1.0f);
+	(void)AddCapability(&fixture, 0U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_AIR_CONTROL,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 5U, 5U, SG_RUNE_COMPACT_INDEX_NONE, 2.0f);
+	(void)AddCapability(&fixture, 1U, 1U, SG_RUNE_MOVEMENT_CAPABILITY_JUMP,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 0U, 5U, SG_RUNE_COMPACT_INDEX_NONE, 5.0f);
+	(void)AddCapability(&fixture, 2U, 2U, SG_RUNE_MOVEMENT_CAPABILITY_DROP,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 5U, 5U, SG_RUNE_COMPACT_INDEX_NONE, 6.0f);
+	(void)AddCapability(&fixture, 2U, 1U, SG_RUNE_MOVEMENT_CAPABILITY_DROP,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 5U, 5U, SG_RUNE_COMPACT_INDEX_NONE, 1.0f);
+	FinalizeModel(&fixture);
 	field = CreateField(&fixture);
-	destination = CellDestination(1U);
-	plan = CreatePlan(field, &destination);
+	plan = CreatePlan(field, 3U);
 	context = Context(&fixture, 0U);
 	result = Query(plan, &context);
-	step = PortalStep(&result);
-	CHECK(step.next_cell.value == 1U);
-	CHECK(step.next_portal.value == 0U);
-	CHECK(step.mechanism.value == 0U);
-	CHECK(fabsf(step.local_cost - ExpectedCost(&context, 2.0f)) < 0.001f);
-	CHECK(fabsf(step.travel_time_seconds - 2.5f) < 0.0001f);
-	SG_RuneCompactFieldPlanDestroy(plan);
-	destination = CellDestination(2U);
-	plan = CreatePlan(field, &destination);
-	context = Context(&fixture, 1U);
+	CHECK(result.kind == SG_RUNE_COMPACT_FIELD_STEP);
+	CHECK(result.value.step.kind == SG_RUNE_COMPACT_FIELD_TRANSITION_PORTAL);
+	CHECK(result.value.step.value.portal.next_portal.value == 0U);
+	CHECK(result.value.step.value.portal.next_cell.value == 1U);
+	CHECK(result.value.step.value.portal.local_cost == 4.0f);
+	CHECK(result.value.step.next_cost_to_go.units <
+		result.value.step.cost_to_go.units);
+	memset(&capture, 0, sizeof(capture));
+	probe_count = 0U;
+	CHECK(SG_RuneCompactFieldPlanVisitExactStepProbes(plan, &context, &result,
+		CaptureExactProbe, &capture, &probe_count) == SG_RUNE_COMPACT_FIELD_OK);
+	CHECK(probe_count == 1U && capture.calls == 1U);
+	CHECK(capture.probe.provenance.kind == SG_RUNE_COMPACT_FIELD_PROBE_PMOVE);
+	CHECK(capture.probe.provenance.value.pmove.movement.field_arc == 0U);
+	CHECK(capture.probe.provenance.value.pmove.movement.capability.value == 0U);
+	CHECK(capture.probe.provenance.value.pmove.movement.fiber.value == 0U);
+	context.support = SG_RUNE_MOVEMENT_SUPPORT_NONE;
+	context.water = SG_RUNE_MOVEMENT_WATER_SUBMERGED;
+	context.state_flags = SG_RUNE_MOVEMENT_STATE_AIRBORNE;
 	result = Query(plan, &context);
-	step = PortalStep(&result);
-	CHECK(step.next_portal.value == 1U);
-	CHECK(step.mechanism.value == 1U);
-	CHECK(fabsf(step.local_cost - ExpectedCost(&context, 7.0f)) < 0.001f);
-	context = Context(&fixture, 3U);
-	CHECK(Query(plan, &context).kind == SG_RUNE_COMPACT_FIELD_DISCONNECTED);
+	CHECK(result.kind == SG_RUNE_COMPACT_FIELD_STEP);
+	CHECK(result.value.step.value.portal.local_cost == 1.0f);
+	context.water = SG_RUNE_MOVEMENT_WATER_DRY;
+	result = Query(plan, &context);
+	CHECK(result.kind == SG_RUNE_COMPACT_FIELD_STEP);
+	CHECK(result.value.step.value.portal.local_cost == 2.0f);
+	SG_RuneCompactFieldPlanDestroy(plan);
+	plan = CreatePlan(field, 0U);
+	context = Context(&fixture, 2U);
+	result = Query(plan, &context);
+	CHECK(result.kind == SG_RUNE_COMPACT_FIELD_DISCONNECTED);
 	SG_RuneCompactFieldPlanDestroy(plan);
 	SG_RuneCompactFieldDestroy(field);
 }
 
-static void ChangeDimension(sg_rune_compact_field_local_context_t *context,
-	uint32_t dimension)
-{
-	switch ((sg_rune_analytic_input_dimension_t)dimension) {
-	case SG_RUNE_ANALYTIC_INPUT_WORLD_X:
-		context->origin.value[0]++;
-		break;
-	case SG_RUNE_ANALYTIC_INPUT_WORLD_Y:
-		context->origin.value[1]++;
-		break;
-	case SG_RUNE_ANALYTIC_INPUT_WORLD_Z:
-		context->origin.value[2]++;
-		break;
-	case SG_RUNE_ANALYTIC_INPUT_VELOCITY_X:
-	case SG_RUNE_ANALYTIC_INPUT_VELOCITY_Y:
-	case SG_RUNE_ANALYTIC_INPUT_VELOCITY_Z:
-		context->velocity[dimension -
-			(uint32_t)SG_RUNE_ANALYTIC_INPUT_VELOCITY_X] += 1.0f;
-		break;
-	case SG_RUNE_ANALYTIC_INPUT_DIRECTION_X:
-	case SG_RUNE_ANALYTIC_INPUT_DIRECTION_Y:
-	case SG_RUNE_ANALYTIC_INPUT_DIRECTION_Z:
-		context->direction[dimension -
-			(uint32_t)SG_RUNE_ANALYTIC_INPUT_DIRECTION_X] += 1.0f;
-		break;
-	case SG_RUNE_ANALYTIC_INPUT_TIME_SECONDS:
-		context->time_seconds += 1.0f;
-		break;
-	case SG_RUNE_ANALYTIC_INPUT_DISTANCE:
-		context->distance += 1.0f;
-		break;
-	case SG_RUNE_ANALYTIC_INPUT_SUPPORT_DISTANCE:
-		context->support_distance += 1.0f;
-		break;
-	case SG_RUNE_ANALYTIC_INPUT_FLUID_FRACTION:
-		context->fluid_fraction += 1.0f;
-		break;
-	case SG_RUNE_ANALYTIC_INPUT_MOVER_PHASE:
-		break;
-	case SG_RUNE_ANALYTIC_INPUT_HOOK_LENGTH:
-		context->hook_length += 1.0f;
-		break;
-	case SG_RUNE_ANALYTIC_INPUT_TARGET_RADIUS:
-		context->target_radius += 1.0f;
-		break;
-	case SG_RUNE_ANALYTIC_INPUT_DIMENSION_COUNT:
-		break;
-	}
-}
-
-static void TestEveryLocalInput(void)
+static void TestStanceDestinationState(void)
 {
 	field_fixture_t fixture;
 	sg_rune_compact_field_t *field;
-	sg_rune_compact_destination_t destination;
-	sg_rune_compact_destination_plan_t *plan;
-	sg_rune_compact_field_local_context_t base;
-	sg_rune_compact_field_result_t base_result;
-	float base_cost;
-	uint32_t dimension;
-
-	InitFixture(&fixture);
-	field = CreateField(&fixture);
-	memset(&destination, 0, sizeof(destination));
-	destination.kind = SG_RUNE_COMPACT_DESTINATION_CELL;
-	destination.value.cell.value = 1U;
-	plan = CreatePlan(field, &destination);
-	base = Context(&fixture, 0U);
-	base_result = Query(plan, &base);
-	base_cost = PortalStep(&base_result).local_cost;
-	for (dimension = 0U;
-		dimension < (uint32_t)SG_RUNE_ANALYTIC_INPUT_DIMENSION_COUNT;
-		dimension++) {
-		sg_rune_compact_field_local_context_t changed = base;
-		sg_rune_compact_field_result_t result;
-		sg_rune_compact_field_mechanism_phase_t phases[2];
-		sg_rune_compact_field_mechanism_snapshot_t snapshot;
-		float expected_delta = (float)(dimension + 1U);
-
-		if (dimension == (uint32_t)SG_RUNE_ANALYTIC_INPUT_MOVER_PHASE) {
-			memcpy(phases, fixture.mechanism_phases, sizeof(phases));
-			phases[0].phase += 1.0f;
-			snapshot = fixture.mechanism_snapshot;
-			snapshot.phases = phases;
-			changed.mechanisms = &snapshot;
-		} else {
-			ChangeDimension(&changed, dimension);
-			if (dimension <= (uint32_t)SG_RUNE_ANALYTIC_INPUT_WORLD_Z)
-				expected_delta /= 8.0f;
-		}
-		result = Query(plan, &changed);
-		CHECK(fabsf(PortalStep(&result).local_cost - base_cost - expected_delta) <
-			0.001f);
-	}
-	SG_RuneCompactFieldPlanDestroy(plan);
-	SG_RuneCompactFieldDestroy(field);
-}
-
-static void TestDirectionAndStanceTransition(void)
-{
-	field_fixture_t fixture;
-	sg_rune_compact_field_t *field;
-	sg_rune_compact_destination_t destination;
 	sg_rune_compact_destination_plan_t *plan;
 	sg_rune_compact_field_local_context_t context;
 	sg_rune_compact_field_result_t result;
+	exact_probe_capture_t capture;
+	uint32_t probe_count = 0U;
 
 	InitFixture(&fixture);
-	fixture.portals[0].direction =
-		SG_RUNE_PORTAL_CONTINUITY_NEGATIVE_TO_POSITIVE;
-	fixture.portals[2].direction =
-		SG_RUNE_PORTAL_CONTINUITY_NEGATIVE_TO_POSITIVE;
+	(void)AddCapability(&fixture, 0U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_CROUCH,
+		SG_RUNE_STANCE_VALID_CROUCHING, SG_RUNE_STANCE_VALID_CROUCHING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 1U, 1U, SG_RUNE_COMPACT_INDEX_NONE, 1.0f);
+	FinalizeModel(&fixture);
 	field = CreateField(&fixture);
-	destination = CellDestination(0U);
-	plan = CreatePlan(field, &destination);
-	context = Context(&fixture, 1U);
-	CHECK(Query(plan, &context).kind == SG_RUNE_COMPACT_FIELD_DISCONNECTED);
-	SG_RuneCompactFieldPlanDestroy(plan);
-	destination = CellDestination(1U);
-	plan = CreatePlan(field, &destination);
-	context = Context(&fixture, 0U);
-	CHECK(Query(plan, &context).kind == SG_RUNE_COMPACT_FIELD_STEP);
-	SG_RuneCompactFieldPlanDestroy(plan);
-	SG_RuneCompactFieldDestroy(field);
-
-	InitFixture(&fixture);
-	fixture.portals[0].valid_stances = SG_RUNE_STANCE_VALID_CROUCHING;
-	fixture.movement_fields[0].valid_stances = SG_RUNE_STANCE_VALID_CROUCHING;
-	fixture.movement_fields[1].valid_stances = SG_RUNE_STANCE_VALID_CROUCHING;
-	fixture.movement_fields[3].valid_stances = SG_RUNE_STANCE_VALID_CROUCHING;
-	field = CreateField(&fixture);
-	destination = CellDestination(1U);
-	plan = CreatePlan(field, &destination);
+	plan = CreatePlan(field, 1U);
 	context = Context(&fixture, 0U);
 	result = Query(plan, &context);
 	CHECK(result.kind == SG_RUNE_COMPACT_FIELD_STEP);
 	CHECK(result.value.step.kind == SG_RUNE_COMPACT_FIELD_TRANSITION_STANCE);
-	CHECK(result.value.step.target_stance ==
+	CHECK(result.value.step.target_stance == SG_RUNE_COMPACT_FIELD_CROUCHING);
+	memset(&capture, 0, sizeof(capture));
+	CHECK(SG_RuneCompactFieldPlanVisitExactStepProbes(plan, &context, &result,
+		CaptureExactProbe, &capture, &probe_count) == SG_RUNE_COMPACT_FIELD_OK);
+	CHECK(probe_count == 1U);
+	CHECK(capture.calls == 1U);
+	CHECK(capture.probe.provenance.kind ==
+		SG_RUNE_COMPACT_FIELD_PROBE_INTRINSIC_STANCE);
+	CHECK(capture.probe.provenance.value.intrinsic_stance.cell.value == 0U);
+	CHECK(capture.probe.provenance.value.intrinsic_stance.source_stance ==
+		SG_RUNE_COMPACT_FIELD_STANDING);
+	CHECK(capture.probe.provenance.value.intrinsic_stance.destination_stance ==
 		SG_RUNE_COMPACT_FIELD_CROUCHING);
-	CHECK(result.value.step.source_rank == 2U);
-	CHECK(result.value.step.target_rank == 1U);
-	context.stance = SG_RUNE_COMPACT_FIELD_CROUCHING;
-	result = Query(plan, &context);
-	CHECK(PortalStep(&result).next_portal.value == 0U);
-	CHECK(result.value.step.target_stance ==
-		SG_RUNE_COMPACT_FIELD_CROUCHING);
+	CHECK(capture.probe.provenance.value.intrinsic_stance.frame_ms == 16U);
+	CHECK(capture.probe.local_cost.units == UINT64_C(66));
+	CHECK(capture.probe.travel_time_seconds == 0.016f);
+	CHECK(result.value.step.next_cost_to_go.units +
+		capture.probe.local_cost.units == result.value.step.cost_to_go.units);
 	SG_RuneCompactFieldPlanDestroy(plan);
 	SG_RuneCompactFieldDestroy(field);
 }
 
-static void TestStrictRankAndZeroCost(void)
+static void TestDirectMechanisms(void)
 {
 	field_fixture_t fixture;
 	sg_rune_compact_field_t *field;
-	sg_rune_compact_destination_t destination;
 	sg_rune_compact_destination_plan_t *plan;
 	sg_rune_compact_field_local_context_t context;
+	sg_rune_compact_field_cost_t source_cost;
 	sg_rune_compact_field_result_t result;
-	uint32_t slope;
-	uint32_t repeat;
+	exact_probe_capture_t capture;
+	uint32_t probe_count;
+	uint32_t fiber;
 
 	InitFixture(&fixture);
-	fixture.affines[0].bias.bits = Bits(0.0f);
-	for (slope = 0U;
-		slope < (uint32_t)SG_RUNE_ANALYTIC_INPUT_DIMENSION_COUNT; slope++)
-		fixture.slopes[slope].bits = Bits(0.0f);
+	fixture.transitions[0].mechanism = 0U;
+	fixture.transitions[0].kind =
+		SG_RUNE_COMPACT_MECHANISM_TRANSITION_MOVER_TRANSPORT;
+	fixture.transitions[0].entry_cell.value = 0U;
+	fixture.transitions[0].exit_cell.value = 2U;
+	fixture.transitions[1].mechanism = 1U;
+	fixture.transitions[1].kind = SG_RUNE_COMPACT_MECHANISM_TRANSITION_PUSH;
+	fixture.transitions[1].entry_cell.value = 2U;
+	fixture.transitions[1].exit_cell.value = 3U;
+	fiber = AddCapability(&fixture, 0U, SG_RUNE_COMPACT_INDEX_NONE,
+		SG_RUNE_MOVEMENT_CAPABILITY_MOVER, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_MECHANISM_TRANSITION, 2U, 2U, 0U, 30.0f);
+	fixture.fibers[fiber].functions = AddMoverTriple(&fixture, 1.0f);
+	(void)AddCapability(&fixture, 2U, SG_RUNE_COMPACT_INDEX_NONE,
+		SG_RUNE_MOVEMENT_CAPABILITY_EXTERNAL_FORCE,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_MECHANISM_TRANSITION, 3U, 3U, 1U, 2.0f);
+	FinalizeModel(&fixture);
 	field = CreateField(&fixture);
-	destination = CellDestination(2U);
-	plan = CreatePlan(field, &destination);
+	plan = CreatePlan(field, 3U);
 	context = Context(&fixture, 0U);
+	context.support = SG_RUNE_MOVEMENT_SUPPORT_MOVER;
+	context.state_flags = SG_RUNE_MOVEMENT_STATE_MOVER_RELATIVE;
+	context.mover_mechanism = 0U;
 	result = Query(plan, &context);
-	CHECK(PortalStep(&result).local_cost == 0.0f);
-	CHECK(result.value.step.source_rank == 2U);
-	CHECK(result.value.step.target_rank == 1U);
-	for (repeat = 0U; repeat < 16U; repeat++) {
-		const sg_rune_compact_field_result_t repeated = Query(plan, &context);
-
-		CHECK(repeated.value.step.value.portal.next_cell.value ==
-			result.value.step.value.portal.next_cell.value);
-		CHECK(repeated.value.step.value.portal.next_portal.value ==
-			result.value.step.value.portal.next_portal.value);
-		CHECK(repeated.value.step.value.portal.movement_field ==
-			result.value.step.value.portal.movement_field);
-		CHECK(repeated.value.step.target_rank <
-			repeated.value.step.source_rank);
-	}
-	context = Context(&fixture, 1U);
+	CHECK(result.kind == SG_RUNE_COMPACT_FIELD_STEP);
+	CHECK(result.value.step.kind == SG_RUNE_COMPACT_FIELD_TRANSITION_DIRECT);
+	CHECK(result.value.step.value.direct.next_cell.value == 2U);
+	CHECK(result.value.step.value.direct.local_cost == 3.0f);
+	CHECK(result.value.step.next_cost_to_go.units <
+		result.value.step.cost_to_go.units);
+	CHECK(SG_RuneCompactFieldPlanCostAt(plan,
+		SG_RUNE_COMPACT_FIELD_STANDING, 0U, &source_cost));
+	fixture.phases[0].phase = -0.5f;
 	result = Query(plan, &context);
-	CHECK(PortalStep(&result).next_cell.value == 2U);
-	CHECK(result.value.step.source_rank == 1U);
-	CHECK(result.value.step.target_rank == 0U);
-	SG_RuneCompactFieldPlanDestroy(plan);
-	SG_RuneCompactFieldDestroy(field);
-
-	InitFixture(&fixture);
-	fixture.portals[2].direction = SG_RUNE_PORTAL_CONTINUITY_BOTH;
-	field = CreateField(&fixture);
-	destination = CellDestination(2U);
-	plan = CreatePlan(field, &destination);
-	context = Context(&fixture, 0U);
+	CHECK(result.kind == SG_RUNE_COMPACT_FIELD_STEP);
+	CHECK(result.value.step.value.direct.local_cost == 0.5f);
+	CHECK(result.value.step.cost_to_go.units == source_cost.units);
+	CHECK(result.value.step.next_cost_to_go.units +
+		SG_RUNE_COMPACT_FIELD_COST_SCALE / UINT64_C(2) <
+		result.value.step.cost_to_go.units);
+	memset(&capture, 0, sizeof(capture));
+	probe_count = 0U;
+	CHECK(SG_RuneCompactFieldPlanVisitExactStepProbes(plan, &context, &result,
+		CaptureExactProbe, &capture, &probe_count) == SG_RUNE_COMPACT_FIELD_OK);
+	CHECK(probe_count == 1U && capture.calls == 1U);
+	CHECK(capture.probe.provenance.kind ==
+		SG_RUNE_COMPACT_FIELD_PROBE_MECHANISM_TRANSITION);
+	CHECK(capture.probe.provenance.value.mechanism.movement.capability.value ==
+		0U);
+	CHECK(capture.probe.provenance.value.mechanism.movement.fiber.value == 0U);
+	CHECK(capture.probe.provenance.value.mechanism.mechanism_transition.value ==
+		0U);
+	CHECK(capture.probe.provenance.value.mechanism.controller.value ==
+		SG_RUNE_COMPACT_INDEX_NONE);
+	CHECK(capture.probe.provenance.value.mechanism.controller_target.value ==
+		SG_RUNE_COMPACT_INDEX_NONE);
+	CHECK(capture.probe.provenance.value.mechanism.mechanism_kind ==
+		SG_RUNE_COMPACT_MECHANISM_TRANSITION_MOVER_TRANSPORT);
+	context.mechanisms = NULL;
+	CHECK(SG_RuneCompactFieldQuery(plan, &context, &result) ==
+		SG_RUNE_COMPACT_FIELD_MECHANISM_PHASE_REQUIRED);
+	context = Context(&fixture, 2U);
+	context.support = SG_RUNE_MOVEMENT_SUPPORT_NONE;
+	context.state_flags = SG_RUNE_MOVEMENT_STATE_AIRBORNE |
+		SG_RUNE_MOVEMENT_STATE_FLAG_EXTERNAL_FORCE;
 	result = Query(plan, &context);
-	CHECK(PortalStep(&result).next_portal.value == 2U);
-	CHECK(result.value.step.source_rank == 1U);
-	CHECK(result.value.step.target_rank == 0U);
+	CHECK(result.kind == SG_RUNE_COMPACT_FIELD_STEP);
+	CHECK(result.value.step.kind == SG_RUNE_COMPACT_FIELD_TRANSITION_DIRECT);
+	CHECK(result.value.step.value.direct.next_cell.value == 3U);
+	CHECK(result.value.step.value.direct.local_cost == 2.0f);
+	memset(&capture, 0, sizeof(capture));
+	probe_count = 0U;
+	CHECK(SG_RuneCompactFieldPlanVisitExactStepProbes(plan, &context, &result,
+		CaptureExactProbe, &capture, &probe_count) == SG_RUNE_COMPACT_FIELD_OK);
+	CHECK(probe_count == 1U && capture.calls == 1U);
+	CHECK(capture.probe.provenance.kind ==
+		SG_RUNE_COMPACT_FIELD_PROBE_MECHANISM_TRANSITION);
+	CHECK(capture.probe.provenance.value.mechanism.movement.capability.value ==
+		1U);
+	CHECK(capture.probe.provenance.value.mechanism.mechanism_transition.value ==
+		1U);
+	CHECK(capture.probe.provenance.value.mechanism.mechanism_kind ==
+		SG_RUNE_COMPACT_MECHANISM_TRANSITION_PUSH);
 	SG_RuneCompactFieldPlanDestroy(plan);
 	SG_RuneCompactFieldDestroy(field);
 }
 
-static void CheckPortalZeroStatus(field_fixture_t *fixture,
-	sg_rune_compact_field_status_t expected)
+static void TestHookSixPhaseTargets(void)
 {
-	sg_rune_compact_field_t *field = CreateField(fixture);
-	sg_rune_compact_destination_t destination = CellDestination(1U);
-	sg_rune_compact_destination_plan_t *plan = CreatePlan(field, &destination);
-	sg_rune_compact_field_local_context_t context = Context(fixture, 0U);
-	sg_rune_compact_field_result_t result;
-	sg_rune_compact_field_result_t sentinel;
+	uint32_t selected;
 
-	memset(&result, 0xa5, sizeof(result));
-	sentinel = result;
-	CHECK(SG_RuneCompactFieldQuery(plan, &context, &result) == expected);
-	CHECK(memcmp(&result, &sentinel, sizeof(result)) == 0);
-	SG_RuneCompactFieldPlanDestroy(plan);
-	SG_RuneCompactFieldDestroy(field);
-}
-
-static void TestMechanismFailures(void)
-{
-	field_fixture_t fixture;
-	sg_rune_compact_field_mechanism_phase_t phase;
-	sg_rune_compact_identity_t wrong_identity;
-
-	InitFixture(&fixture);
-	phase = fixture.mechanism_phases[1];
-	fixture.mechanism_snapshot.phases = &phase;
-	fixture.mechanism_snapshot.phase_count = 1U;
-	CheckPortalZeroStatus(&fixture,
-		SG_RUNE_COMPACT_FIELD_MECHANISM_PHASE_REQUIRED);
-
-	InitFixture(&fixture);
-	fixture.mechanism_phases[0].phase = NAN;
-	CheckPortalZeroStatus(&fixture,
-		SG_RUNE_COMPACT_FIELD_INVALID_MECHANISM_SNAPSHOT);
-
-	InitFixture(&fixture);
-	wrong_identity = fixture.model.identity;
-	wrong_identity.construction_id++;
-	fixture.mechanism_snapshot.model_identity = &wrong_identity;
-	CheckPortalZeroStatus(&fixture,
-		SG_RUNE_COMPACT_FIELD_INVALID_MECHANISM_SNAPSHOT);
-
-	InitFixture(&fixture);
-	fixture.portal_mechanisms[0] = fixture.portal_mechanisms[1];
-	fixture.portal_mechanisms[1] = fixture.portal_mechanisms[2];
-	fixture.static_data.portal_mechanism_count = 2U;
-	CheckPortalZeroStatus(&fixture,
-		SG_RUNE_COMPACT_FIELD_MECHANISM_PHASE_REQUIRED);
-
-	InitFixture(&fixture);
-	fixture.portal_mechanisms[3] = fixture.portal_mechanisms[2];
-	fixture.portal_mechanisms[2] = fixture.portal_mechanisms[1];
-	fixture.portal_mechanisms[1] = fixture.portal_mechanisms[0];
-	fixture.portal_mechanisms[1].mechanism.value = 1U;
-	fixture.static_data.portal_mechanism_count = 4U;
-	CheckPortalZeroStatus(&fixture,
-		SG_RUNE_COMPACT_FIELD_MECHANISM_PHASE_REQUIRED);
-
-	InitFixture(&fixture);
-	fixture.movement_fields[4].boundary_portal.value =
-		SG_RUNE_COMPACT_INDEX_NONE;
-	{
-		sg_rune_compact_field_t *field = CreateField(&fixture);
-		sg_rune_compact_destination_t destination = CellDestination(2U);
-		sg_rune_compact_destination_plan_t *plan = CreatePlan(field, &destination);
-		sg_rune_compact_field_local_context_t context = Context(&fixture, 1U);
+	for (selected = 0U; selected < 6U; selected++) {
+		field_fixture_t fixture;
+		sg_rune_compact_field_t *field;
+		sg_rune_compact_destination_plan_t *plan;
+		sg_rune_compact_field_local_context_t context;
 		sg_rune_compact_field_result_t result;
-		sg_rune_compact_field_result_t sentinel;
+		uint32_t phase;
 
-		memset(&result, 0xa5, sizeof(result));
-		sentinel = result;
-		CHECK(SG_RuneCompactFieldQuery(plan, &context, &result) ==
-			SG_RUNE_COMPACT_FIELD_MECHANISM_PHASE_REQUIRED);
-		CHECK(memcmp(&result, &sentinel, sizeof(result)) == 0);
+		InitFixture(&fixture);
+		for (phase = 0U; phase < 6U; phase++)
+			AddHookCapability(&fixture,
+				(sg_rune_movement_capability_kind_t)(
+					(uint32_t)SG_RUNE_MOVEMENT_CAPABILITY_HOOK_BOLT + phase),
+				11.0f + (float)phase, phase == selected ?
+					SG_RUNE_MOVEMENT_HOOK_TARGET_VISIBLE :
+					SG_RUNE_MOVEMENT_HOOK_TARGET_BLOCKED);
+		FinalizeModel(&fixture);
+		field = CreateField(&fixture);
+		plan = CreatePlan(field, 3U);
+		context = Context(&fixture, 0U);
+		context.hook_phase = fixture.states[
+			fixture.fibers[selected].source_state.value].hook_phase;
+		result = Query(plan, &context);
+		CHECK(result.kind == SG_RUNE_COMPACT_FIELD_STEP);
+		CHECK(result.value.step.kind == SG_RUNE_COMPACT_FIELD_TRANSITION_DIRECT);
+		CHECK(result.value.step.value.direct.next_cell.value == 3U);
+		CHECK(result.value.step.value.direct.local_cost == 11.0f + (float)selected);
+		{
+			exact_probe_capture_t capture;
+			uint32_t probe_count = 0U;
+
+			memset(&capture, 0, sizeof(capture));
+			CHECK(SG_RuneCompactFieldPlanVisitExactStepProbes(plan, &context,
+				&result, CaptureExactProbe, &capture, &probe_count) ==
+				SG_RUNE_COMPACT_FIELD_OK);
+			CHECK(probe_count == 1U && capture.calls == 1U);
+			CHECK(capture.probe.provenance.kind ==
+				SG_RUNE_COMPACT_FIELD_PROBE_HOOK);
+			CHECK(capture.probe.provenance.value.hook.movement.capability.value ==
+				selected);
+			CHECK(capture.probe.provenance.value.hook.movement.fiber.value ==
+				selected);
+			CHECK(capture.probe.provenance.value.hook.hook_target == selected);
+			CHECK(capture.probe.provenance.value.hook.movement.movement_kind ==
+				(sg_rune_movement_capability_kind_t)(
+					(uint32_t)SG_RUNE_MOVEMENT_CAPABILITY_HOOK_BOLT + selected));
+		}
+		SG_RuneCompactFieldPlanDestroy(plan);
+		SG_RuneCompactFieldDestroy(field);
+	}
+	{
+		field_fixture_t fixture;
+		sg_rune_compact_field_t *field;
+		sg_rune_compact_destination_plan_t *plan;
+		sg_rune_compact_field_local_context_t context;
+		sg_rune_compact_field_result_t result;
+
+		InitFixture(&fixture);
+		AddHookCapability(&fixture, SG_RUNE_MOVEMENT_CAPABILITY_HOOK_BOLT,
+			1.0f, SG_RUNE_MOVEMENT_HOOK_TARGET_CONDITIONAL);
+		FinalizeModel(&fixture);
+		field = CreateField(&fixture);
+		plan = CreatePlan(field, 3U);
+		context = Context(&fixture, 0U);
+		result = Query(plan, &context);
+		CHECK(result.kind == SG_RUNE_COMPACT_FIELD_DISCONNECTED);
 		SG_RuneCompactFieldPlanDestroy(plan);
 		SG_RuneCompactFieldDestroy(field);
 	}
 }
 
-static void TestInvalidBoundariesAndAllocation(void)
+static void TestPortalRoots(void)
 {
 	field_fixture_t fixture;
 	sg_rune_compact_field_t *field;
-	sg_rune_compact_field_t *field_sentinel =
-		(sg_rune_compact_field_t *)(uintptr_t)1U;
-	sg_rune_compact_error_t error;
-	sg_rune_compact_identity_t expected;
-	sg_rune_compact_destination_t destination;
 	sg_rune_compact_destination_plan_t *plan;
-	sg_rune_compact_destination_plan_t *plan_sentinel =
-		(sg_rune_compact_destination_plan_t *)(uintptr_t)1U;
 	sg_rune_compact_field_local_context_t context;
 	sg_rune_compact_field_result_t result;
-	sg_rune_compact_field_result_t result_sentinel;
+	sg_rune_compact_portal_index_t portal;
+	sg_rune_compact_mechanism_index_t mechanism;
 
 	InitFixture(&fixture);
-	fixture.cells[0].reserved[0] = 1U;
-	CHECK(SG_RuneCompactFieldCreate(&fixture.model, &fixture.model.identity,
-		&field_sentinel, &error) == SG_RUNE_COMPACT_FIELD_INVALID_MODEL);
-	CHECK(field_sentinel == (sg_rune_compact_field_t *)(uintptr_t)1U);
-	InitFixture(&fixture);
-	expected = fixture.model.identity;
-	expected.schema_id++;
-	CHECK(SG_RuneCompactFieldCreate(&fixture.model, &expected,
-		&field_sentinel, &error) == SG_RUNE_COMPACT_FIELD_INVALID_MODEL);
-	CHECK(field_sentinel == (sg_rune_compact_field_t *)(uintptr_t)1U);
-
+	fixture.portal_mechanisms[0].portal.value = 0U;
+	fixture.portal_mechanisms[0].mechanism.value = 0U;
+	fixture.portal_mechanisms[0].kind = SG_RUNE_COMPACT_PORTAL_MECHANISM_BLOCKS;
+	fixture.portal_mechanisms[1].portal.value = 0U;
+	fixture.portal_mechanisms[1].mechanism.value = 1U;
+	fixture.portal_mechanisms[1].kind = SG_RUNE_COMPACT_PORTAL_MECHANISM_BLOCKS;
+	fixture.static_data.portal_mechanism_count = 2U;
+	fixture.roots[0] = (sg_rune_compact_field_portal_root_t){
+		{ 0U }, { 0U }, SG_RUNE_COMPACT_FIELD_PORTAL_ROOT_UNBLOCKED };
+	fixture.roots[1] = (sg_rune_compact_field_portal_root_t){
+		{ 0U }, { 1U }, SG_RUNE_COMPACT_FIELD_PORTAL_ROOT_BLOCKED };
+	fixture.root_snapshot.model_identity = &fixture.model.identity;
+	fixture.root_snapshot.frame_sequence = 17U;
+	fixture.root_snapshot.roots = fixture.roots;
+	fixture.root_snapshot.root_count = 2U;
+	(void)AddCapability(&fixture, 0U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_WALK,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 0U, 0U, SG_RUNE_COMPACT_INDEX_NONE, 1.0f);
+	FinalizeModel(&fixture);
 	field = CreateField(&fixture);
-	destination = CellDestination(CELL_COUNT);
-	CHECK(SG_RuneCompactFieldPlanCreate(field, &destination, &plan_sentinel) ==
-		SG_RUNE_COMPACT_FIELD_INVALID_DESTINATION);
-	CHECK(plan_sentinel ==
-		(sg_rune_compact_destination_plan_t *)(uintptr_t)1U);
-	destination.kind = SG_RUNE_COMPACT_DESTINATION_KIND_COUNT;
-	CHECK(SG_RuneCompactFieldPlanCreate(field, &destination, &plan_sentinel) ==
-		SG_RUNE_COMPACT_FIELD_INVALID_DESTINATION);
-	destination = CellDestination(1U);
-	plan = CreatePlan(field, &destination);
+	CHECK(SG_RuneCompactFieldPortalRootCount(field) == 2U);
+	CHECK(SG_RuneCompactFieldPortalRootAt(field, 1U, &portal, &mechanism));
+	CHECK(portal.value == 0U && mechanism.value == 1U);
+	plan = CreatePlan(field, 1U);
 	context = Context(&fixture, 0U);
+	result = Query(plan, &context);
+	CHECK(result.kind == SG_RUNE_COMPACT_FIELD_MECHANISMS_REQUIRED);
+	CHECK(result.value.requirements.state ==
+		SG_RUNE_COMPACT_FIELD_MECHANISM_REQUIREMENTS_BLOCKED);
+	CHECK(result.value.requirements.mechanism_count == 2U);
+	fixture.roots[1].state = SG_RUNE_COMPACT_FIELD_PORTAL_ROOT_UNBLOCKED;
+	result = Query(plan, &context);
+	CHECK(result.kind == SG_RUNE_COMPACT_FIELD_STEP);
+	context.portal_roots = NULL;
+	result = Query(plan, &context);
+	CHECK(result.kind == SG_RUNE_COMPACT_FIELD_MECHANISMS_REQUIRED);
+	CHECK(result.value.requirements.state ==
+		SG_RUNE_COMPACT_FIELD_MECHANISM_REQUIREMENTS_UNKNOWN);
+	SG_RuneCompactFieldPlanDestroy(plan);
+	SG_RuneCompactFieldDestroy(field);
+}
+
+static void TestFixedPointAndBoundaries(void)
+{
+	field_fixture_t fixture;
+	sg_rune_compact_field_t *field;
+	sg_rune_compact_destination_plan_t *plan;
+	sg_rune_compact_field_local_context_t context;
+	sg_rune_compact_field_result_t result;
+	sg_rune_compact_field_result_t sentinel;
+	sg_rune_compact_destination_t destination;
+	sg_rune_compact_field_t *field_sentinel =
+		(sg_rune_compact_field_t *)(uintptr_t)1U;
+	sg_rune_compact_identity_t wrong;
+
+	InitFixture(&fixture);
+	(void)AddCapability(&fixture, 0U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_WALK,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 0U, 0U, SG_RUNE_COMPACT_INDEX_NONE, 0.0f);
+	FinalizeModel(&fixture);
+	field = CreateField(&fixture);
+	plan = CreatePlan(field, 1U);
+	context = Context(&fixture, 0U);
+	result = Query(plan, &context);
+	CHECK(result.value.step.cost_to_go.units ==
+		result.value.step.next_cost_to_go.units + UINT64_C(1));
+	CHECK(result.value.step.next_cost_to_go.units <
+		result.value.step.cost_to_go.units);
 	memset(&result, 0xa5, sizeof(result));
-	result_sentinel = result;
-	context.stance = SG_RUNE_COMPACT_FIELD_STANCE_COUNT;
-	CHECK(SG_RuneCompactFieldQuery(plan, &context, &result) ==
-		SG_RUNE_COMPACT_FIELD_INVALID_CONTEXT);
-	CHECK(memcmp(&result, &result_sentinel, sizeof(result)) == 0);
-	context = Context(&fixture, 0U);
+	sentinel = result;
 	context.velocity[0] = INFINITY;
 	CHECK(SG_RuneCompactFieldQuery(plan, &context, &result) ==
 		SG_RUNE_COMPACT_FIELD_INVALID_CONTEXT);
-	CHECK(memcmp(&result, &result_sentinel, sizeof(result)) == 0);
+	CHECK(memcmp(&result, &sentinel, sizeof(result)) == 0);
 	context = Context(&fixture, 0U);
-	context.origin = (sg_rune_q8_vec3_t){ { 1000, 1000, 1000 } };
+	context.origin.value[0] = -1;
 	CHECK(SG_RuneCompactFieldQuery(plan, &context, &result) ==
 		SG_RUNE_COMPACT_FIELD_LOCALIZATION_FAILED);
-	CHECK(memcmp(&result, &result_sentinel, sizeof(result)) == 0);
-	CHECK(SG_RuneCompactFieldQuery(NULL, &context, &result) ==
-		SG_RUNE_COMPACT_FIELD_INVALID_ARGUMENT);
+	CHECK(memcmp(&result, &sentinel, sizeof(result)) == 0);
 	SG_RuneCompactFieldPlanDestroy(plan);
+	destination = Destination(CELL_COUNT);
+	CHECK(SG_RuneCompactFieldPlanCreate(field, &destination, &plan) ==
+		SG_RUNE_COMPACT_FIELD_INVALID_DESTINATION);
 	SG_RuneCompactFieldDestroy(field);
+	wrong = fixture.model.identity;
+	wrong.schema_id++;
+	CHECK(SG_RuneCompactFieldCreate(&fixture.model, &wrong, &field_sentinel,
+		NULL) == SG_RUNE_COMPACT_FIELD_INVALID_MODEL);
+	CHECK(field_sentinel == (sg_rune_compact_field_t *)(uintptr_t)1U);
+#if defined(SG_RUNE_COMPACT_FIELD_TEST_WRAP_CALLOC)
+	fail_calloc_after = 0;
+	CHECK(SG_RuneCompactFieldCreate(&fixture.model, &fixture.model.identity,
+		&field_sentinel, NULL) == SG_RUNE_COMPACT_FIELD_ALLOCATION_FAILED);
+	fail_calloc_after = -1;
+#endif
+}
+
+static void CheckPlanCostsEqual(
+	const sg_rune_compact_destination_plan_t *left,
+	const sg_rune_compact_destination_plan_t *right)
+{
+	uint32_t stance;
+	uint32_t cell;
+
+	for (stance = 0U;
+		stance < (uint32_t)SG_RUNE_COMPACT_FIELD_STANCE_COUNT; stance++)
+		for (cell = 0U; cell < CELL_COUNT; cell++)
+		{
+			sg_rune_compact_field_cost_t left_cost;
+			sg_rune_compact_field_cost_t right_cost;
+
+			CHECK(SG_RuneCompactFieldPlanCostAt(left,
+				(sg_rune_compact_field_stance_t)stance, cell, &left_cost));
+			CHECK(SG_RuneCompactFieldPlanCostAt(right,
+				(sg_rune_compact_field_stance_t)stance, cell, &right_cost));
+			CHECK(left_cost.units == right_cost.units);
+		}
+}
+
+static void TestIncrementalDestinationPlans(void)
+{
+	field_fixture_t fixture;
+	sg_rune_compact_landmark_t landmark;
+	sg_rune_compact_cell_index_t landmark_cells[2];
+	sg_rune_compact_field_t *field;
+	sg_rune_compact_destination_plan_t *previous;
+	sg_rune_compact_destination_plan_t *derived = NULL;
+	sg_rune_compact_destination_plan_t *clean = NULL;
+	sg_rune_compact_field_refresh_report_t report;
+	sg_rune_compact_destination_t destination;
+	uint32_t cell;
 
 	InitFixture(&fixture);
-	fixture.landmark.kind = SG_RUNE_COMPACT_LANDMARK_FLAG;
+	for (cell = 0U; cell < CELL_COUNT; cell++)
+	{
+		fixture.cells[cell].source.area = cell < 2U ? 0U : 1U;
+		fixture.cells[cell].source.cluster = cell < 2U ? 10 : 20;
+	}
+	(void)AddCapability(&fixture, 0U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_WALK,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 0U, 0U,
+		SG_RUNE_COMPACT_INDEX_NONE, 1.0f);
+	(void)AddCapability(&fixture, 1U, 1U, SG_RUNE_MOVEMENT_CAPABILITY_WALK,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 0U, 0U,
+		SG_RUNE_COMPACT_INDEX_NONE, 1.0f);
+	(void)AddCapability(&fixture, 2U, 2U, SG_RUNE_MOVEMENT_CAPABILITY_WALK,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 0U, 0U,
+		SG_RUNE_COMPACT_INDEX_NONE, 1.0f);
+	FinalizeModel(&fixture);
 	field = CreateField(&fixture);
+	CHECK(SG_RuneCompactFieldRegionCount(field) == 2U);
+	previous = CreatePlan(field, 3U);
+
+	destination = Destination(1U);
+#if defined(SG_RUNE_COMPACT_FIELD_TEST_WRAP_CALLOC)
+	{
+		int allocation;
+
+		for (allocation = 0; allocation < 16; allocation++)
+		{
+			fail_calloc_after = allocation;
+			derived = (sg_rune_compact_destination_plan_t *)(uintptr_t)1U;
+			CHECK(SG_RuneCompactFieldPlanDerive(previous, &destination,
+				&derived, &report) ==
+				SG_RUNE_COMPACT_FIELD_ALLOCATION_FAILED);
+			CHECK(derived == NULL);
+		}
+		fail_calloc_after = -1;
+	}
+#endif
+	CHECK(SG_RuneCompactFieldPlanDerive(previous, &destination, &derived,
+		&report) == SG_RUNE_COMPACT_FIELD_OK);
+	CHECK(derived != NULL);
+	CHECK(SG_RuneCompactFieldPlanCreate(field, &destination, &clean) ==
+		SG_RUNE_COMPACT_FIELD_OK);
+	CheckPlanCostsEqual(derived, clean);
+	CHECK(report.affected_state_count != 0U);
+	CHECK(report.invalidated_state_count != 0U);
+	CHECK(report.affected_leaf_region_count == 2U);
+	CHECK(report.affected_coarse_region_count == 2U);
+	SG_RuneCompactFieldPlanDestroy(clean);
+	SG_RuneCompactFieldPlanDestroy(previous);
+	previous = derived;
+	derived = NULL;
+
+	destination.kind = SG_RUNE_COMPACT_DESTINATION_POINT;
+	destination.value.point.value[0] = 96;
+	destination.value.point.value[1] = 0;
+	destination.value.point.value[2] = 0;
+	CHECK(SG_RuneCompactFieldPlanDerive(previous, &destination, &derived,
+		&report) == SG_RUNE_COMPACT_FIELD_OK);
+	CHECK(report.affected_state_count == 0U &&
+		report.affected_leaf_region_count == 0U &&
+		report.affected_coarse_region_count == 0U);
+	CHECK(SG_RuneCompactFieldPlanCreate(field, &destination, &clean) ==
+		SG_RUNE_COMPACT_FIELD_OK);
+	CheckPlanCostsEqual(derived, clean);
+	SG_RuneCompactFieldPlanDestroy(clean);
+	SG_RuneCompactFieldPlanDestroy(previous);
+	previous = derived;
+	derived = NULL;
+
+	memset(&landmark, 0, sizeof(landmark));
+	landmark.kind = SG_RUNE_COMPACT_LANDMARK_HEALTH;
+	landmark.cells.count = 2U;
+	landmark_cells[0].value = 1U;
+	landmark_cells[1].value = 3U;
+	fixture.static_data.landmarks = &landmark;
+	fixture.static_data.landmark_count = 1U;
+	fixture.static_data.landmark_cells = landmark_cells;
+	fixture.static_data.landmark_cell_count = 2U;
 	destination.kind = SG_RUNE_COMPACT_DESTINATION_ITEM;
 	destination.value.item.value = 0U;
-	plan_sentinel = (sg_rune_compact_destination_plan_t *)(uintptr_t)1U;
-	CHECK(SG_RuneCompactFieldPlanCreate(field, &destination, &plan_sentinel) ==
-		SG_RUNE_COMPACT_FIELD_INVALID_DESTINATION);
-	CHECK(plan_sentinel ==
-		(sg_rune_compact_destination_plan_t *)(uintptr_t)1U);
+	CHECK(SG_RuneCompactFieldPlanDerive(previous, &destination, &derived,
+		&report) == SG_RUNE_COMPACT_FIELD_OK);
+	CHECK(SG_RuneCompactFieldPlanCreate(field, &destination, &clean) ==
+		SG_RUNE_COMPACT_FIELD_OK);
+	CheckPlanCostsEqual(derived, clean);
+	CHECK(report.decreased_state_count != 0U);
+	SG_RuneCompactFieldPlanDestroy(clean);
+	SG_RuneCompactFieldPlanDestroy(previous);
+	SG_RuneCompactFieldPlanDestroy(derived);
 	SG_RuneCompactFieldDestroy(field);
+}
 
-#if defined(SG_RUNE_COMPACT_FIELD_TEST_WRAP_CALLOC)
+static void TestIncrementalRetainedEqualSupport(void)
+{
+	field_fixture_t fixture;
+	sg_rune_compact_landmark_t landmarks[2];
+	sg_rune_compact_cell_index_t landmark_cells[3];
+	sg_rune_compact_field_t *field;
+	sg_rune_compact_destination_plan_t *previous = NULL;
+	sg_rune_compact_destination_plan_t *derived = NULL;
+	sg_rune_compact_destination_plan_t *clean = NULL;
+	sg_rune_compact_field_refresh_report_t report;
+	sg_rune_compact_field_cost_t before;
+	sg_rune_compact_field_cost_t after;
+	sg_rune_compact_destination_t destination;
+
 	InitFixture(&fixture);
-	fail_calloc_after = 0;
-	field_sentinel = (sg_rune_compact_field_t *)(uintptr_t)1U;
-	CHECK(SG_RuneCompactFieldCreate(&fixture.model, &fixture.model.identity,
-		&field_sentinel, &error) == SG_RUNE_COMPACT_FIELD_ALLOCATION_FAILED);
-	CHECK(error.code == SG_RUNE_COMPACT_ERROR_LIMIT_EXCEEDED);
-	CHECK(field_sentinel == (sg_rune_compact_field_t *)(uintptr_t)1U);
-	InitFixture(&fixture);
-	fail_calloc_after = 1;
-	field_sentinel = (sg_rune_compact_field_t *)(uintptr_t)1U;
-	CHECK(SG_RuneCompactFieldCreate(&fixture.model, &fixture.model.identity,
-		&field_sentinel, &error) == SG_RUNE_COMPACT_FIELD_ALLOCATION_FAILED);
-	CHECK(field_sentinel == (sg_rune_compact_field_t *)(uintptr_t)1U);
+	fixture.incidences[4].cell.value = 0U;
+	fixture.incidences[5].cell.value = 2U;
+	(void)AddCapability(&fixture, 0U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_WALK,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 0U, 0U,
+		SG_RUNE_COMPACT_INDEX_NONE, 1.0f);
+	(void)AddCapability(&fixture, 0U, 2U, SG_RUNE_MOVEMENT_CAPABILITY_WALK,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 0U, 0U,
+		SG_RUNE_COMPACT_INDEX_NONE, 1.0f);
+	memset(landmarks, 0, sizeof(landmarks));
+	landmarks[0].kind = SG_RUNE_COMPACT_LANDMARK_HEALTH;
+	landmarks[0].cells = (sg_rune_compact_landmark_cell_span_t){ 0U, 2U };
+	landmarks[1].kind = SG_RUNE_COMPACT_LANDMARK_HEALTH;
+	landmarks[1].cells = (sg_rune_compact_landmark_cell_span_t){ 2U, 1U };
+	landmark_cells[0].value = 1U;
+	landmark_cells[1].value = 2U;
+	landmark_cells[2].value = 2U;
+	fixture.static_data.landmarks = landmarks;
+	fixture.static_data.landmark_count = 2U;
+	fixture.static_data.landmark_cells = landmark_cells;
+	fixture.static_data.landmark_cell_count = 3U;
+	FinalizeModel(&fixture);
 	field = CreateField(&fixture);
-	destination = CellDestination(1U);
-	fail_calloc_after = 0;
-	plan_sentinel = (sg_rune_compact_destination_plan_t *)(uintptr_t)1U;
-	CHECK(SG_RuneCompactFieldPlanCreate(field, &destination, &plan_sentinel) ==
-		SG_RUNE_COMPACT_FIELD_ALLOCATION_FAILED);
-	CHECK(plan_sentinel ==
-		(sg_rune_compact_destination_plan_t *)(uintptr_t)1U);
+	destination = Destination(1U);
+	CHECK(SG_RuneCompactFieldPlanCreate(field, &destination, &previous) ==
+		SG_RUNE_COMPACT_FIELD_OK);
+	CHECK(SG_RuneCompactFieldPlanCostAt(previous,
+		SG_RUNE_COMPACT_FIELD_STANDING, 0U, &before));
+	destination.kind = SG_RUNE_COMPACT_DESTINATION_ITEM;
+	destination.value.item.value = 0U;
+	CHECK(SG_RuneCompactFieldPlanDerive(previous, &destination, &derived,
+		&report) == SG_RUNE_COMPACT_FIELD_OK);
+	CHECK(SG_RuneCompactFieldPlanCreate(field, &destination, &clean) ==
+		SG_RUNE_COMPACT_FIELD_OK);
+	CheckPlanCostsEqual(derived, clean);
+	CHECK(report.decreased_state_count != 0U);
+	CHECK(SG_RuneCompactFieldPlanCostAt(derived,
+		SG_RUNE_COMPACT_FIELD_STANDING, 3U, &after));
+	CHECK(after.units == UINT64_MAX);
+	SG_RuneCompactFieldPlanDestroy(clean);
+	SG_RuneCompactFieldPlanDestroy(previous);
+	previous = derived;
+	derived = NULL;
+	clean = NULL;
+
+	destination.value.item.value = 1U;
+	CHECK(SG_RuneCompactFieldPlanDerive(previous, &destination, &derived,
+		&report) == SG_RUNE_COMPACT_FIELD_OK);
+	CHECK(SG_RuneCompactFieldPlanCreate(field, &destination, &clean) ==
+		SG_RUNE_COMPACT_FIELD_OK);
+	CheckPlanCostsEqual(derived, clean);
+	CHECK(SG_RuneCompactFieldPlanCostAt(derived,
+		SG_RUNE_COMPACT_FIELD_STANDING, 0U, &after));
+	CHECK(before.units == after.units);
+	CHECK(report.invalidated_state_count != 0U);
+	SG_RuneCompactFieldPlanDestroy(clean);
+	SG_RuneCompactFieldPlanDestroy(derived);
+	SG_RuneCompactFieldPlanDestroy(previous);
 	SG_RuneCompactFieldDestroy(field);
-#endif
-	SG_RuneCompactFieldDestroy(NULL);
-	SG_RuneCompactFieldPlanDestroy(NULL);
+}
+
+static void TestIncrementalOverflowRollback(void)
+{
+	field_fixture_t fixture;
+	sg_rune_compact_field_t *field;
+	sg_rune_compact_destination_plan_t *previous;
+	sg_rune_compact_destination_plan_t *derived =
+		(sg_rune_compact_destination_plan_t *)(uintptr_t)1U;
+	sg_rune_compact_destination_plan_t *clean = NULL;
+	sg_rune_compact_field_refresh_report_t report;
+	sg_rune_compact_field_cost_t before;
+	sg_rune_compact_field_cost_t after;
+	sg_rune_compact_destination_t destination;
+
+	InitFixture(&fixture);
+	(void)AddCapability(&fixture, 0U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_WALK,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 0U, 0U,
+		SG_RUNE_COMPACT_INDEX_NONE, 3.0e15f);
+	(void)AddCapability(&fixture, 1U, 1U, SG_RUNE_MOVEMENT_CAPABILITY_WALK,
+		SG_RUNE_STANCE_VALID_STANDING, SG_RUNE_STANCE_VALID_STANDING,
+		SG_RUNE_MOVEMENT_FIBER_PMOVE, 0U, 0U,
+		SG_RUNE_COMPACT_INDEX_NONE, 3.0e15f);
+	FinalizeModel(&fixture);
+	field = CreateField(&fixture);
+	previous = CreatePlan(field, 1U);
+	CHECK(SG_RuneCompactFieldPlanCostAt(previous,
+		SG_RUNE_COMPACT_FIELD_STANDING, 0U, &before));
+	destination = Destination(2U);
+	memset(&report, 0xff, sizeof(report));
+	CHECK(SG_RuneCompactFieldPlanDerive(previous, &destination, &derived,
+		&report) == SG_RUNE_COMPACT_FIELD_COST_OVERFLOW);
+	CHECK(derived == NULL && report.affected_state_count == 0U &&
+		report.examined_transition_count == 0U);
+	CHECK(SG_RuneCompactFieldPlanCreate(field, &destination, &clean) ==
+		SG_RUNE_COMPACT_FIELD_COST_OVERFLOW);
+	CHECK(clean == NULL);
+	CHECK(SG_RuneCompactFieldPlanCostAt(previous,
+		SG_RUNE_COMPACT_FIELD_STANDING, 0U, &after));
+	CHECK(before.units == after.units);
+	SG_RuneCompactFieldPlanDestroy(previous);
+	SG_RuneCompactFieldDestroy(field);
 }
 
 int main(void)
 {
-	TestAllDestinations();
-	TestCandidateSpecificMechanismPhase();
-	TestEveryLocalInput();
-	TestDirectionAndStanceTransition();
-	TestStrictRankAndZeroCost();
-	TestMechanismFailures();
-	TestInvalidBoundariesAndAllocation();
-	CHECK(strcmp(SG_RuneCompactFieldStatusString(
-		SG_RUNE_COMPACT_FIELD_INVALID_MODEL), "invalid model") == 0);
+	TestTopologyCapabilitiesAndDescent();
+	TestStanceDestinationState();
+	TestDirectMechanisms();
+	TestHookSixPhaseTargets();
+	TestPortalRoots();
+	TestFixedPointAndBoundaries();
+	TestIncrementalDestinationPlans();
+	TestIncrementalRetainedEqualSupport();
+	TestIncrementalOverflowRollback();
 	CHECK(strcmp(SG_RuneCompactFieldStatusString(
 		SG_RUNE_COMPACT_FIELD_MECHANISM_PHASE_REQUIRED),
 		"mechanism phase required") == 0);

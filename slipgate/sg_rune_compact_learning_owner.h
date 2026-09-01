@@ -7,6 +7,12 @@
 
 #include "sg_rune_compact_learning.h"
 
+/* This is a recorder-minted capability.  The definition remains private to
+ * the human-trace implementation, so a caller cannot manufacture accepted
+ * human evidence from a model and identity alone. */
+typedef struct sg_human_trace_v3_scope_acceptance_s
+	sg_human_trace_v3_scope_acceptance_t;
+
 typedef struct sg_rune_compact_learning_issuer_s
 	sg_rune_compact_learning_issuer_t;
 
@@ -22,6 +28,7 @@ typedef struct sg_rune_compact_learning_claim_s
 sg_rune_compact_learning_status_t SG_RuneCompactLearningIssuerAcquireHuman(
 	const sg_rune_compact_model_t *model,
 	const sg_rune_compact_identity_t *expected_identity,
+	const sg_human_trace_v3_scope_acceptance_t *accepted_scope,
 	sg_rune_compact_learning_issuer_t **issuer_out,
 	sg_rune_compact_error_t *model_error_out);
 sg_rune_compact_learning_status_t SG_RuneCompactLearningIssuerAcquireBot(

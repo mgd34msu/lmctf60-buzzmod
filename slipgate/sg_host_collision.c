@@ -2,9 +2,9 @@
 
 #include <limits.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
-#define SG_HOST_TRACE_EPSILON (1.0f / 32.0f)
 typedef struct sg_host_trace_context_s
 {
 	const sg_bsp_world_t *world;
@@ -130,13 +130,16 @@ static int ZeroTransform(const sg_host_collision_transform_t *transform)
 
 static void AngleAxis(const float angles[3], float axis[3][3])
 {
-	const float degrees_to_radians = 0.01745329251994329577f;
-	float sy = sinf(angles[1] * degrees_to_radians);
-	float cy = cosf(angles[1] * degrees_to_radians);
-	float sp = sinf(angles[0] * degrees_to_radians);
-	float cp = cosf(angles[0] * degrees_to_radians);
-	float sr = sinf(angles[2] * degrees_to_radians);
-	float cr = cosf(angles[2] * degrees_to_radians);
+	const double degrees_to_radians = 0.01745329251994329576923690768489;
+	float yaw = (float)((double)angles[1] * degrees_to_radians);
+	float pitch = (float)((double)angles[0] * degrees_to_radians);
+	float roll = (float)((double)angles[2] * degrees_to_radians);
+	float sy = (float)sin((double)yaw);
+	float cy = (float)cos((double)yaw);
+	float sp = (float)sin((double)pitch);
+	float cp = (float)cos((double)pitch);
+	float sr = (float)sin((double)roll);
+	float cr = (float)cos((double)roll);
 
 	axis[0][0] = cp * cy;
 	axis[0][1] = cp * sy;
@@ -158,6 +161,50 @@ static void RotateVector(const float value[3], const float axis[3][3],
 	result[0] = Dot(source, axis[0]);
 	result[1] = Dot(source, axis[1]);
 	result[2] = Dot(source, axis[2]);
+}
+
+/* SV_Push uses q_shared AngleVectors(-amove), then forms (forward dot,
+ * negative right dot, up dot).  Do not route this through AngleAxis: its
+ * algebraically equivalent -right row changes binary32 rounding for combined
+ * pitch/yaw/roll inputs. */
+static void SVPushRotateVector(const float angles[3], const float value[3],
+	float result[3])
+{
+	const double degrees_to_radians = 0.01745329251994329576923690768489;
+	float angle;
+	float sr;
+	float sp;
+	float sy;
+	float cr;
+	float cp;
+	float cy;
+	float forward[3];
+	float right[3];
+	float up[3];
+
+	angle = (float)((double)angles[1] * degrees_to_radians);
+	sy = (float)sin((double)angle);
+	cy = (float)cos((double)angle);
+	angle = (float)((double)angles[0] * degrees_to_radians);
+	sp = (float)sin((double)angle);
+	cp = (float)cos((double)angle);
+	angle = (float)((double)angles[2] * degrees_to_radians);
+	sr = (float)sin((double)angle);
+	cr = (float)cos((double)angle);
+	forward[0] = cp * cy;
+	forward[1] = cp * sy;
+	forward[2] = -sp;
+	right[0] = -1.0f * sr * sp * cy + -1.0f * cr * -sy;
+	right[1] = -1.0f * sr * sp * sy + -1.0f * cr * cy;
+	right[2] = -1.0f * sr * cp;
+	up[0] = cr * sp * cy + -sr * -sy;
+	up[1] = cr * sp * sy + -sr * cy;
+	up[2] = cr * cp;
+	result[0] = value[0] * forward[0] + value[1] * forward[1] +
+		value[2] * forward[2];
+	result[1] = -(value[0] * right[0] + value[1] * right[1] +
+		value[2] * right[2]);
+	result[2] = value[0] * up[0] + value[1] * up[1] + value[2] * up[2];
 }
 
 static int TransformIsRotated(const sg_host_collision_transform_t *transform)
@@ -184,6 +231,327 @@ static void ToModelPoint(const float point[3],
 		AngleAxis(transform->angles, axis);
 		RotateVector(result, (const float (*)[3])axis, result);
 	}
+}
+
+static void ToWorldVector(const float value[3],
+	const sg_host_collision_transform_t *transform, float result[3])
+{
+	float axis[3][3];
+	float transposed[3][3];
+	uint32_t row, column;
+
+	if (!transform || !TransformIsRotated(transform))
+	{
+		CopyVector(result, value);
+		return;
+	}
+	AngleAxis(transform->angles, axis);
+	for (row = 0; row < 3; row++)
+		for (column = 0; column < 3; column++)
+			transposed[row][column] = axis[column][row];
+	RotateVector(value, (const float (*)[3])transposed, result);
+}
+
+static void ToWorldPoint(const float local[3],
+	const sg_host_collision_transform_t *transform, float result[3])
+{
+	uint32_t coordinate;
+
+	ToWorldVector(local, transform, result);
+	if (!transform)
+		return;
+	for (coordinate = 0; coordinate < 3; coordinate++)
+		result[coordinate] += transform->origin[coordinate];
+}
+
+typedef struct sg_host_collision_polygon_point_s
+{
+	float value[3];
+} sg_host_collision_polygon_point_t;
+
+typedef struct sg_host_collision_polygon_context_s
+{
+	const sg_bsp_world_t *world;
+	sg_host_collision_contents_t mask;
+	const sg_host_collision_polygon_point_t *portal;
+	uint32_t portal_count;
+	sg_host_collision_polygon_point_t *scratch_a;
+	sg_host_collision_polygon_point_t *scratch_b;
+	uint32_t scratch_capacity;
+	int overlap;
+	int valid;
+} sg_host_collision_polygon_context_t;
+
+static int SizeMultiply(size_t left, size_t right, size_t *result_out)
+{
+	if (result_out == NULL || (right != 0U && left > SIZE_MAX / right))
+		return 0;
+	*result_out = left * right;
+	return 1;
+}
+
+static int PolygonHasPositiveArea(
+	const sg_host_collision_polygon_point_t *points, uint32_t count)
+{
+	uint32_t index;
+
+	if (points == NULL || count < 3U)
+		return 0;
+	for (index = 1U; index + 1U < count; index++) {
+		float first[3];
+		float second[3];
+		float cross[3];
+		uint32_t axis;
+
+		for (axis = 0U; axis < 3U; axis++) {
+			first[axis] = points[index].value[axis] - points[0].value[axis];
+			second[axis] = points[index + 1U].value[axis] -
+				points[0].value[axis];
+		}
+		cross[0] = first[1] * second[2] - first[2] * second[1];
+		cross[1] = first[2] * second[0] - first[0] * second[2];
+		cross[2] = first[0] * second[1] - first[1] * second[0];
+		if (isfinite(cross[0]) && isfinite(cross[1]) && isfinite(cross[2]) &&
+			(cross[0] != 0.0f || cross[1] != 0.0f || cross[2] != 0.0f))
+			return 1;
+	}
+	return 0;
+}
+
+static int ClipPolygonToBrush(sg_host_collision_polygon_context_t *context,
+	const sg_bsp_brush_t *brush)
+{
+	const sg_host_collision_polygon_point_t *current = context->portal;
+	sg_host_collision_polygon_point_t *other = context->scratch_a;
+	uint32_t current_count = context->portal_count;
+	uint32_t side_offset;
+
+	for (side_offset = 0U; side_offset < brush->side_count; side_offset++) {
+		const sg_bsp_brush_side_t *side = &context->world->brush_sides[
+			brush->first_side + side_offset];
+		const sg_bsp_plane_t *plane;
+		float previous[3];
+		float previous_distance;
+		int previous_inside;
+		uint32_t index;
+		uint32_t output_count = 0U;
+
+		if (side->plane >= context->world->plane_count) {
+			context->valid = 0;
+			return 0;
+		}
+		plane = &context->world->planes[side->plane];
+		if (current_count == 0U)
+			return 0;
+		memcpy(previous, current[current_count - 1U].value, sizeof(previous));
+		previous_distance = Dot(previous, plane->normal.value) - plane->distance;
+		if (!isfinite(previous_distance)) {
+			context->valid = 0;
+			return 0;
+		}
+		previous_inside = previous_distance <= 0.0f;
+		for (index = 0U; index < current_count; index++) {
+			const float *point = current[index].value;
+			const float distance = Dot(point, plane->normal.value) -
+				plane->distance;
+			const int inside = distance <= 0.0f;
+
+			if (!isfinite(distance)) {
+				context->valid = 0;
+				return 0;
+			}
+			if (inside != previous_inside) {
+				const float denominator = previous_distance - distance;
+				const float fraction = previous_distance / denominator;
+				uint32_t axis;
+
+				if (!isfinite(denominator) || denominator == 0.0f ||
+					!isfinite(fraction) || output_count >= context->scratch_capacity) {
+					context->valid = 0;
+					return 0;
+				}
+				for (axis = 0U; axis < 3U; axis++) {
+					other[output_count].value[axis] = previous[axis] + fraction *
+						(point[axis] - previous[axis]);
+					if (!isfinite(other[output_count].value[axis])) {
+						context->valid = 0;
+						return 0;
+					}
+				}
+				output_count++;
+			}
+			if (inside) {
+				if (output_count >= context->scratch_capacity) {
+					context->valid = 0;
+					return 0;
+				}
+				other[output_count++] = current[index];
+			}
+			memcpy(previous, point, sizeof(previous));
+			previous_distance = distance;
+			previous_inside = inside;
+		}
+		current = other;
+		other = other == context->scratch_a ? context->scratch_b :
+			context->scratch_a;
+		current_count = output_count;
+	}
+	if (!PolygonHasPositiveArea(current, current_count))
+		return 0;
+	for (side_offset = 0U; side_offset < brush->side_count; side_offset++) {
+		const sg_bsp_brush_side_t *side = &context->world->brush_sides[
+			brush->first_side + side_offset];
+		const sg_bsp_plane_t *plane = &context->world->planes[side->plane];
+		int has_strict_interior = 0;
+		uint32_t index;
+
+		for (index = 0U; index < current_count; index++) {
+			const float distance = Dot(current[index].value,
+				plane->normal.value) - plane->distance;
+
+			if (!isfinite(distance)) {
+				context->valid = 0;
+				return 0;
+			}
+			if (distance < 0.0f) {
+				has_strict_interior = 1;
+				break;
+			}
+		}
+		if (!has_strict_interior)
+			return 0;
+	}
+	return 1;
+}
+
+static int PolygonWalkModelBrushes(sg_host_collision_polygon_context_t *context,
+	int32_t child)
+{
+	const sg_bsp_world_t *world = context->world;
+
+	if (context->overlap)
+		return 1;
+	if (child >= 0) {
+		const sg_bsp_node_t *node;
+
+		if ((uint32_t)child >= world->node_count) {
+			context->valid = 0;
+			return 0;
+		}
+		node = &world->nodes[(uint32_t)child];
+		return PolygonWalkModelBrushes(context, node->children[0]) &&
+			PolygonWalkModelBrushes(context, node->children[1]);
+	}
+	else {
+		const uint32_t leaf_index = (uint32_t)(-1 - child);
+		const sg_bsp_leaf_t *leaf;
+		uint32_t offset;
+
+		if (leaf_index >= world->leaf_count) {
+			context->valid = 0;
+			return 0;
+		}
+		leaf = &world->leaves[leaf_index];
+		if (!((uint32_t)leaf->contents & context->mask))
+			return 1;
+		if (leaf->first_leaf_brush > world->leaf_brush_count ||
+			leaf->leaf_brush_count > world->leaf_brush_count -
+				leaf->first_leaf_brush) {
+			context->valid = 0;
+			return 0;
+		}
+		for (offset = 0U; offset < leaf->leaf_brush_count; offset++) {
+			const uint32_t brush_index = world->leaf_brushes[
+				leaf->first_leaf_brush + offset];
+			const sg_bsp_brush_t *brush;
+
+			if (brush_index >= world->brush_count) {
+				context->valid = 0;
+				return 0;
+			}
+			brush = &world->brushes[brush_index];
+			if (!brush->side_count ||
+				!((uint32_t)brush->contents & context->mask))
+				continue;
+			if (brush->first_side > world->brush_side_count ||
+				brush->side_count > world->brush_side_count - brush->first_side) {
+				context->valid = 0;
+				return 0;
+			}
+			if (ClipPolygonToBrush(context, brush)) {
+				context->overlap = 1;
+				return 1;
+			}
+			if (!context->valid)
+				return 0;
+		}
+	}
+	return 1;
+}
+
+int SG_HostCollisionModelPositiveAreaPolygonOverlap(
+	const sg_host_collision_authority_t *authority, uint32_t model_index,
+	const sg_host_collision_transform_t *transform,
+	const sg_rune_vec3_t *world_vertices, uint32_t world_vertex_count,
+	sg_host_collision_contents_t mask, int *overlap_out)
+{
+	sg_host_collision_polygon_point_t *portal = NULL;
+	sg_host_collision_polygon_point_t *scratch_a = NULL;
+	sg_host_collision_polygon_point_t *scratch_b = NULL;
+	sg_host_collision_polygon_context_t context;
+	size_t point_bytes;
+	uint32_t capacity;
+	uint32_t index;
+	int result = 0;
+
+	if (overlap_out == NULL)
+		return 0;
+	*overlap_out = 0;
+	if (authority == NULL || !WorldValid(authority->world) ||
+		model_index >= authority->world->model_count || mask == 0U ||
+		world_vertices == NULL || world_vertex_count < 3U ||
+		!TransformValid(transform) ||
+		(model_index == SG_HOST_COLLISION_MODEL_WORLD && !ZeroTransform(transform)) ||
+		world_vertex_count > UINT32_MAX - authority->world->brush_side_count)
+		return 0;
+	capacity = world_vertex_count + authority->world->brush_side_count;
+	if (!SizeMultiply((size_t)capacity, sizeof(*portal), &point_bytes))
+		return 0;
+	portal = malloc(point_bytes);
+	scratch_a = malloc(point_bytes);
+	scratch_b = malloc(point_bytes);
+	if (portal == NULL || scratch_a == NULL || scratch_b == NULL)
+		goto done;
+	for (index = 0U; index < world_vertex_count; index++) {
+		if (!FiniteVector(world_vertices[index].value))
+			goto done;
+		ToModelPoint(world_vertices[index].value, transform, portal[index].value);
+		if (!FiniteVector(portal[index].value))
+			goto done;
+	}
+	if (!PolygonHasPositiveArea(portal, world_vertex_count)) {
+		result = 1;
+		goto done;
+	}
+	memset(&context, 0, sizeof(context));
+	context.world = authority->world;
+	context.mask = mask;
+	context.portal = portal;
+	context.portal_count = world_vertex_count;
+	context.scratch_a = scratch_a;
+	context.scratch_b = scratch_b;
+	context.scratch_capacity = capacity;
+	context.valid = 1;
+	if (!PolygonWalkModelBrushes(&context,
+		authority->world->models[model_index].headnode) || !context.valid)
+		goto done;
+	*overlap_out = context.overlap;
+	result = 1;
+done:
+	free(scratch_b);
+	free(scratch_a);
+	free(portal);
+	return result;
 }
 
 static int32_t PointLeaf(const sg_bsp_world_t *world, int32_t child,
@@ -237,22 +605,27 @@ static void SetTraceSurface(sg_host_collision_trace_t *trace,
 }
 
 static void ClipBoxToBrush(sg_host_trace_context_t *context,
-	const sg_bsp_brush_t *brush)
+	const sg_bsp_brush_t *brush, uint32_t brush_index)
 {
 	float enter_fraction = -1.0f;
 	float leave_fraction = 1.0f;
 	const sg_bsp_plane_t *clip_plane = NULL;
-	const sg_bsp_brush_side_t *lead_side = NULL;
+	uint32_t lead_side_index = SG_HOST_COLLISION_BRUSH_NONE;
 	int get_out = 0;
 	int start_out = 0;
 	uint32_t side_offset;
 
-	if (!brush->side_count)
+	if (context == NULL || context->world == NULL || brush == NULL ||
+		brush->side_count == 0U ||
+		brush->first_side > context->world->brush_side_count ||
+		brush->side_count >
+			context->world->brush_side_count - brush->first_side)
 		return;
 	for (side_offset = 0; side_offset < brush->side_count; side_offset++)
 	{
+		const uint32_t side_index = brush->first_side + side_offset;
 		const sg_bsp_brush_side_t *side =
-			&context->world->brush_sides[brush->first_side + side_offset];
+			&context->world->brush_sides[side_index];
 		const sg_bsp_plane_t *plane = &context->world->planes[side->plane];
 		float distance = plane->distance;
 		float start_distance, end_distance;
@@ -267,14 +640,14 @@ static void ClipBoxToBrush(sg_host_trace_context_t *context,
 		if (start_distance > 0.0f)
 			start_out = 1;
 		if (start_distance > 0.0f &&
-			(end_distance >= SG_HOST_TRACE_EPSILON ||
+			(end_distance >= SG_HOST_COLLISION_TRACE_EPSILON ||
 			 end_distance >= start_distance))
 			return;
 		if (start_distance <= 0.0f && end_distance <= 0.0f)
 			continue;
 		if (start_distance > end_distance)
 		{
-			float fraction = (start_distance - SG_HOST_TRACE_EPSILON) /
+			float fraction = (start_distance - SG_HOST_COLLISION_TRACE_EPSILON) /
 				(start_distance - end_distance);
 
 			if (fraction < 0.0f)
@@ -283,12 +656,12 @@ static void ClipBoxToBrush(sg_host_trace_context_t *context,
 			{
 				enter_fraction = fraction;
 				clip_plane = plane;
-				lead_side = side;
+				lead_side_index = side_index;
 			}
 		}
 		else
 		{
-			float fraction = (start_distance + SG_HOST_TRACE_EPSILON) /
+			float fraction = (start_distance + SG_HOST_COLLISION_TRACE_EPSILON) /
 				(start_distance - end_distance);
 
 			if (fraction > 1.0f)
@@ -305,12 +678,16 @@ static void ClipBoxToBrush(sg_host_trace_context_t *context,
 		return;
 	}
 	if (enter_fraction < leave_fraction && enter_fraction > -1.0f &&
-		enter_fraction < context->trace->fraction)
+		enter_fraction < context->trace->fraction && clip_plane != NULL &&
+		lead_side_index < context->world->brush_side_count)
 	{
 		context->trace->fraction = enter_fraction;
 		SetTracePlane(context->trace, clip_plane);
-		SetTraceSurface(context->trace, context->world, lead_side);
+		SetTraceSurface(context->trace, context->world,
+			&context->world->brush_sides[lead_side_index]);
 		context->trace->contents = (uint32_t)brush->contents;
+		context->trace->brush = brush_index;
+		context->trace->brush_side = lead_side_index;
 	}
 }
 
@@ -357,7 +734,7 @@ static void TraceLeaf(sg_host_trace_context_t *context, uint32_t leaf_index,
 		if (stationary)
 			TestBoxInBrush(context, brush);
 		else
-			ClipBoxToBrush(context, brush);
+			ClipBoxToBrush(context, brush, brush_index);
 		if (context->trace->fraction == 0.0f)
 			return;
 	}
@@ -469,15 +846,15 @@ static void RecursiveHullCheck(sg_host_trace_context_t *context, int32_t child,
 	{
 		float inverse = 1.0f / (start_distance - end_distance);
 		side = 1;
-		fraction2 = (start_distance + offset + SG_HOST_TRACE_EPSILON) * inverse;
-		fraction = (start_distance - offset + SG_HOST_TRACE_EPSILON) * inverse;
+		fraction2 = (start_distance + offset + SG_HOST_COLLISION_TRACE_EPSILON) * inverse;
+		fraction = (start_distance - offset + SG_HOST_COLLISION_TRACE_EPSILON) * inverse;
 	}
 	else if (start_distance > end_distance)
 	{
 		float inverse = 1.0f / (start_distance - end_distance);
 		side = 0;
-		fraction2 = (start_distance - offset - SG_HOST_TRACE_EPSILON) * inverse;
-		fraction = (start_distance + offset + SG_HOST_TRACE_EPSILON) * inverse;
+		fraction2 = (start_distance - offset - SG_HOST_COLLISION_TRACE_EPSILON) * inverse;
+		fraction = (start_distance + offset + SG_HOST_COLLISION_TRACE_EPSILON) * inverse;
 	}
 	else
 	{
@@ -516,6 +893,8 @@ static void TraceLocal(const sg_bsp_world_t *world, int32_t headnode,
 	memset(trace, 0, sizeof(*trace));
 	trace->fraction = 1.0f;
 	trace->texinfo = SG_HOST_COLLISION_TEXINFO_NONE;
+	trace->brush = SG_HOST_COLLISION_BRUSH_NONE;
+	trace->brush_side = SG_HOST_COLLISION_BRUSH_NONE;
 	for (corner = 0; corner < 8; corner++)
 		for (axis = 0; axis < 3; axis++)
 			context.offsets[corner][axis] =
@@ -546,21 +925,10 @@ static void TraceLocal(const sg_bsp_world_t *world, int32_t headnode,
 static void TransformHitPlane(sg_host_collision_trace_t *trace,
 	const sg_host_collision_transform_t *transform)
 {
-	float axis[3][3];
-	float transposed[3][3];
-	uint32_t row, column;
-
 	if (!transform || trace->fraction == 1.0f)
 		return;
 	if (TransformIsRotated(transform))
-	{
-		AngleAxis(transform->angles, axis);
-		for (row = 0; row < 3; row++)
-			for (column = 0; column < 3; column++)
-				transposed[row][column] = axis[column][row];
-		RotateVector(trace->plane.normal,
-			(const float (*)[3])transposed, trace->plane.normal);
-	}
+		ToWorldVector(trace->plane.normal, transform, trace->plane.normal);
 }
 
 static int TraceArgumentsValid(const sg_host_collision_authority_t *authority,
@@ -664,6 +1032,112 @@ int SG_HostCollisionInit(sg_host_collision_authority_t *authority,
 	authority->world = world;
 	authority->content_identity = world->content_identity;
 	authority->identity = *identity;
+	return 1;
+}
+
+int SG_HostCollisionModelToWorldPoint(
+	const sg_host_collision_authority_t *authority, uint32_t model_index,
+	const sg_host_collision_transform_t *transform, const float local[3],
+	float world_out[3])
+{
+	uint32_t coordinate;
+
+	if (!authority || !WorldValid(authority->world) ||
+		model_index >= authority->world->model_count || !FiniteVector(local) ||
+		!TransformValid(transform) || !world_out ||
+		(model_index == SG_HOST_COLLISION_MODEL_WORLD &&
+			!ZeroTransform(transform)))
+		return 0;
+	ToWorldPoint(local, transform, world_out);
+	if (!FiniteVector(world_out))
+		return 0;
+	/* Q8 callers cannot name negative zero.  Preserve the transform arithmetic
+	 * then canonicalize its representationally equivalent zero result. */
+	for (coordinate = 0U; coordinate < 3U; coordinate++)
+		if (world_out[coordinate] == 0.0f)
+			world_out[coordinate] = 0.0f;
+	return 1;
+}
+
+int SG_HostCollisionWorldTransform(
+	const sg_host_collision_transform_t *transform,
+	sg_host_collision_world_transform_t *world_transform_out)
+{
+	float axis[3][3];
+	uint32_t local_axis;
+	uint32_t world_axis;
+
+	if (!transform || !world_transform_out || !TransformValid(transform))
+		return 0;
+	if (TransformIsRotated(transform))
+		AngleAxis(transform->angles, axis);
+	else {
+		memset(axis, 0, sizeof(axis));
+		axis[0][0] = 1.0f;
+		axis[1][1] = 1.0f;
+		axis[2][2] = 1.0f;
+	}
+	/* Keep the persisted witness fail-closed even if a platform math routine
+	 * were ever to produce a non-finite basis value for finite input angles. */
+	for (world_axis = 0U; world_axis < 3U; world_axis++)
+		for (local_axis = 0U; local_axis < 3U; local_axis++)
+			if (!isfinite(axis[local_axis][world_axis]))
+				return 0;
+	for (world_axis = 0U; world_axis < 3U; world_axis++) {
+		world_transform_out->origin[world_axis] =
+			transform->origin[world_axis];
+		if (world_transform_out->origin[world_axis] == 0.0f)
+			world_transform_out->origin[world_axis] = 0.0f;
+		for (local_axis = 0U; local_axis < 3U; local_axis++) {
+			world_transform_out->axis[local_axis][world_axis] =
+				axis[local_axis][world_axis];
+			if (world_transform_out->axis[local_axis][world_axis] == 0.0f)
+				world_transform_out->axis[local_axis][world_axis] = 0.0f;
+		}
+	}
+	return 1;
+}
+
+int SG_HostCollisionPusherCarry(
+	const sg_host_collision_transform_t *pusher_transform,
+	const float move[3], const float amove[3], const float rider_start[3],
+	float rider_end_out[3])
+{
+	sg_host_collision_transform_t inverse_delta;
+	float pusher_end[3];
+	float translated_rider[3];
+	float relative[3];
+	float rotated[3];
+	uint32_t axis;
+
+	if (!TransformValid(pusher_transform) || !FiniteVector(move) ||
+		!FiniteVector(amove) || !FiniteVector(rider_start) ||
+		rider_end_out == NULL)
+		return 0;
+	memset(&inverse_delta, 0, sizeof(inverse_delta));
+	for (axis = 0U; axis < 3U; axis++) {
+		pusher_end[axis] = pusher_transform->origin[axis] + move[axis];
+		translated_rider[axis] = rider_start[axis] + move[axis];
+		inverse_delta.angles[axis] = -amove[axis];
+		if (!isfinite(pusher_end[axis]) || !isfinite(translated_rider[axis]) ||
+			!isfinite(inverse_delta.angles[axis]))
+			return 0;
+		relative[axis] = translated_rider[axis] - pusher_end[axis];
+		if (!isfinite(relative[axis]))
+			return 0;
+	}
+	/* g_phys.c computes org2 directly from AngleVectors(-amove).  That is a
+	 * model-space rotation, not the transpose used for brush-local to world
+	 * conversion.  Keep its dot-product order so this is one SV_Push step. */
+	SVPushRotateVector(inverse_delta.angles, relative, rotated);
+	for (axis = 0U; axis < 3U; axis++) {
+		rider_end_out[axis] = translated_rider[axis] +
+			(rotated[axis] - relative[axis]);
+		if (!isfinite(rider_end_out[axis]))
+			return 0;
+		if (rider_end_out[axis] == 0.0f)
+			rider_end_out[axis] = 0.0f;
+	}
 	return 1;
 }
 

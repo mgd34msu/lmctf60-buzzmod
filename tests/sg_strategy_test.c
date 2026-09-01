@@ -74,26 +74,10 @@ static sg_strategy_frame_t Frame(uint64_t sequence, uint64_t revision,
 	return frame;
 }
 
-static sg_destination_handle_t Handle(sg_destination_kind_t kind, uint64_t id,
-	uint64_t generation)
-{
-	sg_destination_handle_t handle;
-
-	memset(&handle, 0, sizeof(handle));
-	handle.id = id;
-	handle.generation = generation;
-	handle.kind = kind;
-	handle.motion = SG_DESTINATION_MOVING;
-	handle.valid = 1U;
-	handle.pose.phase.phase_id = 1U;
-	handle.pose.phase.cell_id = 1U;
-	handle.pose.sample_time_ms = 1U;
-	return handle;
-}
-
 static sg_strategy_destination_observation_t Observation(uint64_t plan_id,
 	uint32_t goal_id, uint32_t target_id, uint64_t revision, uint64_t at_ms,
-	sg_strategy_destination_status_t status, uint32_t cost, uint64_t handle_id)
+	sg_strategy_field_state_t field_state, uint64_t cost_units,
+	uint64_t semantic_id)
 {
 	sg_strategy_destination_observation_t observation;
 
@@ -104,14 +88,9 @@ static sg_strategy_destination_observation_t Observation(uint64_t plan_id,
 	observation.observation_revision = revision;
 	observation.observed_at_ms = at_ms;
 	observation.valid_until_ms = at_ms + 10000U;
-	observation.status = status;
-	observation.cost_ms = cost;
-	if (status != SG_STRATEGY_DESTINATION_UNOBSERVED)
-	{
-		observation.pose_revision = revision;
-		observation.handle = Handle(SG_DESTINATION_WAYPOINT, handle_id,
-			revision);
-	}
+	observation.field_state = field_state;
+	observation.cost_to_go.units = cost_units;
+	observation.target_generation = semantic_id;
 	return observation;
 }
 
@@ -323,9 +302,9 @@ static void TestInitPriorityAndTieBreak(void)
 	spec.goals[0].choices[1].destination = Waypoint(101U);
 	CHECK(Compile(&spec, &plan));
 	observations[0] = Observation(15U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 40U, 1000U);
+		SG_STRATEGY_FIELD_STEP, 40U, 1000U);
 	observations[1] = Observation(15U, 1U, 11U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 40U, 1001U);
+		SG_STRATEGY_FIELD_STEP, 40U, 1001U);
 	Begin(&state, &plan, observations, 2U, &reduction);
 	CHECK(reduction.instruction.choice_index == 0U);
 
@@ -337,9 +316,9 @@ static void TestInitPriorityAndTieBreak(void)
 	spec.goals[1].priority = 20;
 	CHECK(Compile(&spec, &plan));
 	observations[0] = Observation(16U, 1U, 20U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 2000U);
+		SG_STRATEGY_FIELD_STEP, 10U, 2000U);
 	observations[1] = Observation(16U, 2U, 21U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 20U, 2001U);
+		SG_STRATEGY_FIELD_STEP, 20U, 2001U);
 	Begin(&state, &plan, observations, 2U, &reduction);
 	CHECK(state.activation.goal_id == 2U);
 }
@@ -399,9 +378,11 @@ static void TestCheapestMovingAndDuplicateRejects(void)
 	spec.goals[0].choices[1].destination = Waypoint(101U);
 	CHECK(Compile(&spec, &plan));
 	observations[0] = Observation(30U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 50U, 1000U);
+		SG_STRATEGY_FIELD_STEP,
+		(UINT64_C(1) << 40) + UINT64_C(50), 1000U);
 	observations[1] = Observation(30U, 1U, 11U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 40U, 1001U);
+		SG_STRATEGY_FIELD_STEP,
+		(UINT64_C(1) << 40) + UINT64_C(40), 1001U);
 	Begin(&state, &plan, observations, 2U, &reduction);
 	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE);
 	CHECK(reduction.instruction.choice_index == 1U);
@@ -410,14 +391,17 @@ static void TestCheapestMovingAndDuplicateRejects(void)
 	frame = Frame(2U, state.revision, 110U);
 	BindTactical(&frame, &state, 1U, 0U, SG_STRATEGY_BLOCK_NONE);
 	observations[0] = Observation(30U, 1U, 11U, 2U, 110U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 25U, 2001U);
+		SG_STRATEGY_FIELD_STEP,
+		(UINT64_C(1) << 40) + UINT64_C(25), 2001U);
 	frame.destinations = observations;
 	frame.destination_count = 1U;
 	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
 		SG_STRATEGY_REDUCE_APPLIED);
 	CHECK(state.activation.activation_id == activation);
-	CHECK(reduction.instruction.handle.id == 2001U);
-	CHECK(reduction.instruction.cost_ms == 25U);
+	CHECK(reduction.instruction.target_id == 11U);
+	CHECK(reduction.instruction.target_generation == 2001U);
+	CHECK(reduction.instruction.cost_to_go.units ==
+		(UINT64_C(1) << 40) + UINT64_C(25));
 
 	before = state;
 	frame = Frame(2U, 0U, 0U);
@@ -426,7 +410,7 @@ static void TestCheapestMovingAndDuplicateRejects(void)
 	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
 		SG_STRATEGY_REDUCE_DUPLICATE);
 	CHECK(memcmp(&state, &before, sizeof(state)) == 0);
-	CHECK(reduction.instruction.handle.id == 2001U);
+	CHECK(reduction.instruction.target_generation == 2001U);
 
 	frame = Frame(3U, state.revision - 1U, 120U);
 	before = state;
@@ -445,7 +429,7 @@ static void TestCheapestMovingAndDuplicateRejects(void)
 	frame = Frame(3U, state.revision, 120U);
 	BindTactical(&frame, &state, 2U, 0U, SG_STRATEGY_BLOCK_NONE);
 	observations[0] = Observation(30U, 1U, 11U, 3U, 120U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 20U, 3001U);
+		SG_STRATEGY_FIELD_STEP, 20U, 3001U);
 	observations[1] = observations[0];
 	observations[1].target_id = 999U;
 	frame.destinations = observations;
@@ -472,7 +456,7 @@ static void TestSuspensionDeathAndRespawn(void)
 	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(40U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
 	Begin(&state, &plan, &observation, 1U, &reduction);
 	first_activation = state.activation.activation_id;
 
@@ -530,6 +514,41 @@ static void TestSuspensionDeathAndRespawn(void)
 	CHECK(state.goals[0].attempt_count == 1U);
 }
 
+static void TestMissedDeathGenerationChange(void)
+{
+	sg_strategy_plan_spec_t spec;
+	sg_strategy_plan_t plan;
+	sg_strategy_state_t state;
+	sg_strategy_reduction_t reduction;
+	sg_strategy_destination_observation_t observation;
+	sg_strategy_frame_t frame;
+	uint64_t first_activation;
+
+	memset(&spec, 0, sizeof(spec));
+	spec.plan_id = 42U;
+	spec.goal_count = 1U;
+	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
+	CHECK(Compile(&spec, &plan));
+	observation = Observation(42U, 1U, 10U, 1U, 100U,
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
+	Begin(&state, &plan, &observation, 1U, &reduction);
+	first_activation = state.activation.activation_id;
+
+	frame = Frame(2U, state.revision, 110U);
+	frame.life.present = 1U;
+	frame.life.alive = 1U;
+	frame.life.observation_revision = 2U;
+	frame.life.life_id = 2U;
+	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
+		SG_STRATEGY_REDUCE_APPLIED);
+	CHECK(HasEffect(&reduction, SG_STRATEGY_EFFECT_LIFE_RETIRED));
+	CHECK(state.life_id == 2U);
+	CHECK(state.activation.activation_id != 0U);
+	CHECK(state.activation.activation_id != first_activation);
+	CHECK(state.goals[0].attempt_count == 1U);
+	CHECK(state.goals[0].choices[0].attempts == 1U);
+}
+
 static void TestSuspensionPersistsUntilTacticsResume(void)
 {
 	sg_strategy_plan_spec_t spec;
@@ -545,8 +564,8 @@ static void TestSuspensionPersistsUntilTacticsResume(void)
 	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(41U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
-	observation.valid_until_ms = UINT64_MAX;
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
+	observation.valid_until_ms = 1000001U;
 	Begin(&state, &plan, &observation, 1U, &reduction);
 	frame = Frame(2U, state.revision, 110U);
 	BindTactical(&frame, &state, 1U, 1U, SG_STRATEGY_BLOCK_COMBAT);
@@ -585,8 +604,7 @@ static void TestTerminalOutcomeSettlesBlockedActivation(void)
 	spec.goals[0].choices[0].destination.value.item.item_id = 100U;
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(411U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
-	observation.handle.kind = SG_DESTINATION_WEAPON;
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
 	Begin(&state, &plan, &observation, 1U, &reduction);
 
 	frame = Frame(2U, state.revision, 110U);
@@ -617,8 +635,7 @@ static void TestTerminalOutcomeSettlesBlockedActivation(void)
 		SG_DESTINATION_FLAG_CURRENT;
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(412U, 2U, 20U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 2000U);
-	observation.handle.kind = SG_DESTINATION_FLAG;
+		SG_STRATEGY_FIELD_STEP, 10U, 2000U);
 	Begin(&state, &plan, &observation, 1U, &reduction);
 
 	frame = Frame(2U, state.revision, 110U);
@@ -650,7 +667,7 @@ static void TestTerminalOutcomeBindingAndDirectiveIsolation(void)
 	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(413U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
 	Begin(&state, &plan, &observation, 1U, &reduction);
 
 	frame = Frame(2U, state.revision, 110U);
@@ -709,7 +726,7 @@ static void TestCancelSettlesEveryOpenGoal(void)
 	spec.goals[1] = DestinationGoal(2U, 11U, 101U);
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(42U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
 	Begin(&state, &plan, &observation, 1U, &reduction);
 	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_ACTIVE);
 	CHECK(state.goals[1].phase == SG_STRATEGY_GOAL_PENDING);
@@ -745,7 +762,7 @@ static void TestCancelAtGoalCapacity(void)
 			(uint32_t)index + 100U, (uint64_t)index + 1000U);
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(43U, 1U, 100U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
 	Begin(&state, &plan, &observation, 1U, &reduction);
 
 	frame = Frame(2U, state.revision, 110U);
@@ -782,9 +799,11 @@ static void TestUnavailableAlternativeRetry(void)
 	spec.goals[0].choices[1].destination = Waypoint(101U);
 	CHECK(Compile(&spec, &plan));
 	observations[0] = Observation(50U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE, 1U);
+		SG_STRATEGY_FIELD_DISCONNECTED,
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE, 1U);
 	observations[1] = Observation(50U, 1U, 11U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE, 2U);
+		SG_STRATEGY_FIELD_DISCONNECTED,
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE, 2U);
 	Begin(&state, &plan, observations, 2U, &reduction);
 	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_RETRY_WAIT);
 	CHECK(state.goals[0].choices[0].attempts == 1U);
@@ -832,9 +851,9 @@ static void TestOutcomeAlternativeExhaustion(void)
 	spec.goals[0].choices[1].destination = Waypoint(101U);
 	CHECK(Compile(&spec, &plan));
 	observations[0] = Observation(51U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
 	observations[1] = Observation(51U, 1U, 11U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 20U, 1001U);
+		SG_STRATEGY_FIELD_STEP, 20U, 1001U);
 	Begin(&state, &plan, observations, 2U, &reduction);
 	CHECK(state.goals[0].selected_choice == 0U);
 	frame = Frame(2U, state.revision, 110U);
@@ -879,9 +898,10 @@ static void TestRetryWakeGatesRepeatedChoice(void)
 	spec.goals[0].choices[1].destination = Waypoint(101U);
 	CHECK(Compile(&spec, &plan));
 	observations[0] = Observation(52U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
 	observations[1] = Observation(52U, 1U, 11U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE, 1001U);
+		SG_STRATEGY_FIELD_DISCONNECTED,
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE, 1001U);
 	Begin(&state, &plan, observations, 2U, &reduction);
 	CHECK(state.goals[0].choices[0].attempts == 1U);
 
@@ -942,10 +962,12 @@ static void TestTargetRevisionWakeIsPerChoice(void)
 	spec.goals[0].choices[1].destination = Waypoint(101U);
 	CHECK(Compile(&spec, &plan));
 	observations[0] = Observation(55U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE,
+		SG_STRATEGY_FIELD_DISCONNECTED,
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE,
 		1000U);
 	observations[1] = Observation(55U, 1U, 11U, 100U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE,
+		SG_STRATEGY_FIELD_DISCONNECTED,
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE,
 		1001U);
 	Begin(&state, &plan, observations, 2U, &reduction);
 	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_RETRY_WAIT);
@@ -953,7 +975,7 @@ static void TestTargetRevisionWakeIsPerChoice(void)
 	CHECK(state.goals[0].retry.target_baseline_revisions[1] == 100U);
 
 	observations[0] = Observation(55U, 1U, 10U, 2U, 110U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
 	frame = Frame(2U, state.revision, 110U);
 	frame.destinations = observations;
 	frame.destination_count = 1U;
@@ -986,7 +1008,7 @@ static void TestUnobservedAlternativeCannotBypassRetry(void)
 	spec.goals[0].choices[1].destination = Waypoint(101U);
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(56U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
 	Begin(&state, &plan, &observation, 1U, &reduction);
 	CHECK(state.goals[0].selected_choice == 0U);
 	CHECK(state.goals[0].choices[0].attempts == 1U);
@@ -1028,7 +1050,7 @@ static void TestStaleTargetIsNotReissued(void)
 	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(53U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
 	observation.valid_until_ms = 105U;
 	Begin(&state, &plan, &observation, 1U, &reduction);
 
@@ -1038,8 +1060,9 @@ static void TestStaleTargetIsNotReissued(void)
 		SG_STRATEGY_REDUCE_APPLIED);
 	CHECK(reduction.instruction.kind ==
 		SG_STRATEGY_INSTRUCTION_WAIT_DESTINATION);
-	CHECK(reduction.instruction.handle.valid == 0U);
-	CHECK(reduction.instruction.cost_ms == SG_DESTINATION_COST_INFINITE);
+	CHECK(reduction.instruction.target_id == 10U);
+	CHECK(reduction.instruction.cost_to_go.units ==
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE);
 	CHECK(reduction.instruction.destination_wait_reason ==
 		SG_STRATEGY_DESTINATION_WAIT_STALE);
 	CHECK(state.activation.goal_id == 1U);
@@ -1208,10 +1231,8 @@ static void TestWeaponArmorFlagChain(void)
 	{
 		observations[index] = Observation(70U, (uint32_t)index + 1U,
 			(uint32_t)index + 10U, 1U, 100U,
-			SG_STRATEGY_DESTINATION_REACHABLE, 10U + (uint32_t)index,
+			SG_STRATEGY_FIELD_STEP, 10U + (uint32_t)index,
 			1000U + (uint64_t)index);
-		observations[index].handle.kind =
-			spec.goals[index].choices[0].destination.kind;
 	}
 	Begin(&state, &plan, observations, 3U, &reduction);
 	CHECK(state.activation.goal_id == 1U);
@@ -1253,13 +1274,15 @@ static void TestUnavailableWaitAndTimeWindow(void)
 	spec.goals[0].conditions[0].value.time.not_after_ms = 300U;
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(80U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE, 1000U);
+		SG_STRATEGY_FIELD_DISCONNECTED,
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE, 1000U);
 	Begin(&state, &plan, &observation, 1U, &reduction);
 	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_WAIT_CONDITION);
 	CHECK(state.goals[0].attempt_count == 0U);
 	frame = Frame(2U, state.revision, 200U);
 	observation = Observation(80U, 1U, 10U, 2U, 200U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE, 1000U);
+		SG_STRATEGY_FIELD_DISCONNECTED,
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE, 1000U);
 	frame.destinations = &observation;
 	frame.destination_count = 1U;
 	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
@@ -1279,7 +1302,8 @@ static void TestUnavailableWaitAndTimeWindow(void)
 	spec.goals[0].failure.exhausted = SG_STRATEGY_FAILURE_SKIP_GOAL;
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(81U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE, 1000U);
+		SG_STRATEGY_FIELD_DISCONNECTED,
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE, 1000U);
 	Begin(&state, &plan, &observation, 1U, &reduction);
 	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_SKIPPED);
 	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_COMPLETED);
@@ -1339,7 +1363,7 @@ static void TestFactsSurviveReplacement(void)
 	CHECK(state.fact_count == 1U);
 }
 
-static void TestSemanticObservationRejectsReservedBytes(void)
+static void TestSemanticObservationRejectsInvalidFieldState(void)
 {
 	sg_strategy_plan_spec_t spec;
 	sg_strategy_plan_t plan;
@@ -1354,18 +1378,16 @@ static void TestSemanticObservationRejectsReservedBytes(void)
 	spec.goals[0] = DestinationGoal(1U, 10U, 100U);
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(92U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
 	Begin(&state, &plan, &observation, 1U, &reduction);
 	frame = Frame(2U, state.revision, 110U);
 	BindTactical(&frame, &state, 1U, 0U, SG_STRATEGY_BLOCK_NONE);
-	observation.handle.reserved[0] = 0xa5U;
-	observation.handle.reserved[1] = 0x5aU;
-	observation.handle.reserved[2] = 0xffU;
+	observation.field_state = SG_STRATEGY_FIELD_STATE_COUNT;
 	frame.destinations = &observation;
 	frame.destination_count = 1U;
 	CHECK(SG_StrategyReduce(&state, &frame, &reduction) ==
 		SG_STRATEGY_REDUCE_REJECTED_INVALID);
-	CHECK(state.goals[0].choices[0].handle.reserved[0] == 0U);
+	CHECK(state.goals[0].choices[0].field_state == SG_STRATEGY_FIELD_STEP);
 }
 
 static void TestEscortRecoveryAndTimedPowerupPlan(void)
@@ -1422,10 +1444,8 @@ static void TestEscortRecoveryAndTimedPowerupPlan(void)
 	{
 		observations[index] = Observation(93U, (uint32_t)index + 1U,
 			(uint32_t)index + 10U, 1U, 100U,
-			SG_STRATEGY_DESTINATION_REACHABLE,
+			SG_STRATEGY_FIELD_STEP,
 			10U + (uint32_t)index, 1000U + (uint64_t)index);
-		observations[index].handle.kind =
-			spec.goals[index].choices[0].destination.kind;
 	}
 	Begin(&state, &plan, observations, 3U, &reduction);
 	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_WAIT_CONDITION);
@@ -1467,7 +1487,7 @@ static void TestRoleChangeAndHumanOrderAuthority(void)
 	CHECK(Compile(&first_spec, &first));
 	CHECK(SG_StrategyStateInit(&state));
 	observation = Observation(94U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
 	frame = Frame(1U, state.revision, 100U);
 	frame.directive.kind = SG_STRATEGY_DIRECTIVE_REPLACE;
 	frame.directive.stamp = Authority(SG_STRATEGY_AUTHORITY_AUTONOMOUS,
@@ -1488,7 +1508,7 @@ static void TestRoleChangeAndHumanOrderAuthority(void)
 	second_spec.goals[0] = DestinationGoal(2U, 20U, 200U);
 	CHECK(Compile(&second_spec, &second));
 	observation = Observation(95U, 2U, 20U, 1U, 110U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 20U, 2000U);
+		SG_STRATEGY_FIELD_STEP, 20U, 2000U);
 	frame = Frame(2U, state.revision, 110U);
 	frame.directive.kind = SG_STRATEGY_DIRECTIVE_REPLACE;
 	frame.directive.stamp = Authority(SG_STRATEGY_AUTHORITY_TEAM,
@@ -1533,9 +1553,10 @@ static void TestUnavailablePrerequisiteFailsDependentGoal(void)
 	spec.goals[1].dependencies[0].accept = SG_STRATEGY_DEPENDENCY_SUCCESS;
 	CHECK(Compile(&spec, &plan));
 	observations[0] = Observation(96U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_UNREACHABLE, SG_DESTINATION_COST_INFINITE, 1000U);
+		SG_STRATEGY_FIELD_DISCONNECTED,
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE, 1000U);
 	observations[1] = Observation(96U, 2U, 11U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1001U);
+		SG_STRATEGY_FIELD_STEP, 10U, 1001U);
 	Begin(&state, &plan, observations, 2U, &reduction);
 	CHECK(state.goals[0].phase == SG_STRATEGY_GOAL_SKIPPED);
 	CHECK(state.goals[0].last_failure == SG_STRATEGY_FAILURE_UNAVAILABLE);
@@ -1567,7 +1588,7 @@ static void TestItemLossRetiresActiveGoal(void)
 	spec.goals[0].conditions[0].value.fact.expected_value = 1;
 	CHECK(Compile(&spec, &plan));
 	observation = Observation(97U, 1U, 10U, 1U, 100U,
-		SG_STRATEGY_DESTINATION_REACHABLE, 10U, 1000U);
+		SG_STRATEGY_FIELD_STEP, 10U, 1000U);
 	Begin(&state, &plan, &observation, 1U, &reduction);
 	CHECK(reduction.instruction.kind == SG_STRATEGY_INSTRUCTION_WAIT_CONDITION);
 
@@ -1600,6 +1621,62 @@ static void TestItemLossRetiresActiveGoal(void)
 		SG_STRATEGY_FAILURE_CONDITION_LOST);
 }
 
+static void TestAllCompactFieldStatesRemainTyped(void)
+{
+	static const sg_strategy_field_state_t states[] = {
+		SG_STRATEGY_FIELD_DISCONNECTED,
+		SG_STRATEGY_FIELD_LOCAL_DESTINATION,
+		SG_STRATEGY_FIELD_CELL_DESTINATION,
+		SG_STRATEGY_FIELD_MECHANISMS_REQUIRED,
+		SG_STRATEGY_FIELD_BLOCKED_NOW,
+		SG_STRATEGY_FIELD_STEP
+	};
+	uint32_t index;
+
+	for (index = 0U; index < sizeof(states) / sizeof(states[0]); index++)
+	{
+		sg_strategy_plan_spec_t spec;
+		sg_strategy_plan_t plan;
+		sg_strategy_state_t state;
+		sg_strategy_reduction_t reduction;
+		sg_strategy_destination_observation_t observation;
+		uint64_t cost = SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE;
+
+		if (states[index] == SG_STRATEGY_FIELD_LOCAL_DESTINATION ||
+		    states[index] == SG_STRATEGY_FIELD_CELL_DESTINATION)
+			cost = 0U;
+		else if (states[index] == SG_STRATEGY_FIELD_STEP)
+			cost = UINT64_C(4097);
+		memset(&spec, 0, sizeof(spec));
+		spec.plan_id = UINT64_C(200) + index;
+		spec.goal_count = 1U;
+		spec.goals[0] = DestinationGoal(1U, 10U, 100U);
+		CHECK(Compile(&spec, &plan));
+		observation = Observation(spec.plan_id, 1U, 10U, 1U, 100U,
+			states[index], cost, UINT64_C(500) + index);
+		Begin(&state, &plan, &observation, 1U, &reduction);
+		CHECK(state.goals[0].choices[0].field_state == states[index]);
+		CHECK(state.goals[0].choices[0].cost_to_go.units == cost);
+		if (states[index] == SG_STRATEGY_FIELD_LOCAL_DESTINATION ||
+		    states[index] == SG_STRATEGY_FIELD_CELL_DESTINATION ||
+		    states[index] == SG_STRATEGY_FIELD_STEP)
+		{
+			CHECK(reduction.instruction.kind ==
+				SG_STRATEGY_INSTRUCTION_EXECUTE);
+			CHECK(reduction.instruction.field_state == states[index]);
+			CHECK(reduction.instruction.target_generation ==
+				UINT64_C(500) + index);
+		}
+		else if (states[index] == SG_STRATEGY_FIELD_MECHANISMS_REQUIRED ||
+			 states[index] == SG_STRATEGY_FIELD_BLOCKED_NOW)
+		{
+			CHECK(reduction.instruction.kind ==
+				SG_STRATEGY_INSTRUCTION_WAIT_DESTINATION);
+			CHECK(reduction.instruction.field_state == states[index]);
+		}
+	}
+}
+
 int main(void)
 {
 	TestForwardDag();
@@ -1609,6 +1686,7 @@ int main(void)
 	TestFixedPoint64AndOwnedPlan();
 	TestCheapestMovingAndDuplicateRejects();
 	TestSuspensionDeathAndRespawn();
+	TestMissedDeathGenerationChange();
 	TestSuspensionPersistsUntilTacticsResume();
 	TestTerminalOutcomeSettlesBlockedActivation();
 	TestTerminalOutcomeBindingAndDirectiveIsolation();
@@ -1626,11 +1704,12 @@ int main(void)
 	TestWeaponArmorFlagChain();
 	TestUnavailableWaitAndTimeWindow();
 	TestFactsSurviveReplacement();
-	TestSemanticObservationRejectsReservedBytes();
+	TestSemanticObservationRejectsInvalidFieldState();
 	TestEscortRecoveryAndTimedPowerupPlan();
 	TestRoleChangeAndHumanOrderAuthority();
 	TestUnavailablePrerequisiteFailsDependentGoal();
 	TestItemLossRetiresActiveGoal();
+	TestAllCompactFieldStatesRemainTyped();
 	if (failures != 0) {
 		fprintf(stderr, "sg_strategy_test: %d failure(s)\n", failures);
 		return 1;

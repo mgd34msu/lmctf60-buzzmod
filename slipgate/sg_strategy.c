@@ -619,13 +619,6 @@ static int StrategyFindChoice(const sg_strategy_goal_t *goal,
 	return -1;
 }
 
-static int StrategyHandleMatchesRef(const sg_destination_handle_t *handle,
-	const sg_destination_ref_t *ref)
-{
-	return SG_DestinationHandleValid(handle) && ref &&
-		handle->kind == ref->kind;
-}
-
 static int StrategyFactObservationEqual(
 	const sg_strategy_fact_observation_t *left,
 	const sg_strategy_fact_observation_t *right)
@@ -637,48 +630,6 @@ static int StrategyFactObservationEqual(
 		left->valid_until_ms == right->valid_until_ms;
 }
 
-static int StrategyDestinationHandleEqual(const sg_destination_handle_t *left,
-	const sg_destination_handle_t *right)
-{
-	uint8_t index;
-
-	if (!left || !right || left->id != right->id ||
-	    left->generation != right->generation || left->kind != right->kind ||
-	    left->motion != right->motion || left->valid != right->valid ||
-	    left->pose.phase.phase_id != right->pose.phase.phase_id ||
-	    left->pose.phase.cell_id != right->pose.phase.cell_id ||
-	    left->pose.sample_time_ms != right->pose.sample_time_ms ||
-	    left->pose.region_id != right->pose.region_id)
-		return 0;
-	for (index = 0U; index < 3U; index++)
-		if (left->pose.position[index] != right->pose.position[index] ||
-		    left->pose.velocity[index] != right->pose.velocity[index])
-			return 0;
-	return 1;
-}
-
-static void StrategyCopyDestinationHandle(sg_destination_handle_t *out,
-	const sg_destination_handle_t *source)
-{
-	uint8_t index;
-
-	memset(out, 0, sizeof(*out));
-	out->id = source->id;
-	out->generation = source->generation;
-	out->kind = source->kind;
-	out->motion = source->motion;
-	out->valid = source->valid;
-	out->pose.phase.phase_id = source->pose.phase.phase_id;
-	out->pose.phase.cell_id = source->pose.phase.cell_id;
-	for (index = 0U; index < 3U; index++)
-	{
-		out->pose.position[index] = source->pose.position[index];
-		out->pose.velocity[index] = source->pose.velocity[index];
-	}
-	out->pose.sample_time_ms = source->pose.sample_time_ms;
-	out->pose.region_id = source->pose.region_id;
-}
-
 static int StrategyDestinationObservationEqual(
 	const sg_strategy_destination_observation_t *left,
 	const sg_strategy_destination_observation_t *right)
@@ -687,12 +638,12 @@ static int StrategyDestinationObservationEqual(
 		left->goal_id == right->goal_id &&
 		left->target_id == right->target_id &&
 		left->observation_revision == right->observation_revision &&
-		left->pose_revision == right->pose_revision &&
+		left->target_generation == right->target_generation &&
 		left->observed_at_ms == right->observed_at_ms &&
 		left->valid_until_ms == right->valid_until_ms &&
-		left->status == right->status && left->cost_ms == right->cost_ms;
-	return common && (left->status == SG_STRATEGY_DESTINATION_UNOBSERVED ||
-		StrategyDestinationHandleEqual(&left->handle, &right->handle));
+		left->field_state == right->field_state &&
+		left->cost_to_go.units == right->cost_to_go.units;
+	return common;
 }
 
 static int StrategyFindFactRecord(const sg_strategy_state_t *state,
@@ -723,15 +674,14 @@ static int StrategyDestinationObservationValid(
 {
 	int goal_index;
 	int choice_index;
-	const sg_strategy_target_choice_t *choice;
 
 	if (!observation || !plan || observation->plan_id != plan->plan_id ||
 	    observation->observation_revision == 0U ||
+	    observation->target_generation == 0U ||
 	    observation->observed_at_ms == 0U ||
 	    observation->observed_at_ms > at_ms ||
 	    observation->valid_until_ms < at_ms ||
-	    observation->status < SG_STRATEGY_DESTINATION_UNOBSERVED ||
-	    observation->status >= SG_STRATEGY_DESTINATION_STATUS_COUNT)
+	    observation->field_state >= SG_STRATEGY_FIELD_STATE_COUNT)
 		return 0;
 	goal_index = StrategyFindPlanGoal(plan, observation->goal_id);
 	if (goal_index < 0)
@@ -740,18 +690,24 @@ static int StrategyDestinationObservationValid(
 		observation->target_id);
 	if (choice_index < 0)
 		return 0;
-	choice = &plan->goals[(uint16_t)goal_index].choices[(uint8_t)choice_index];
-	if (observation->status == SG_STRATEGY_DESTINATION_UNOBSERVED)
-		return observation->cost_ms == SG_DESTINATION_COST_INFINITE &&
-			observation->pose_revision == 0U && observation->handle.valid == 0U;
-	if (observation->cost_ms != SG_DESTINATION_COST_INFINITE &&
-	    observation->status == SG_STRATEGY_DESTINATION_UNREACHABLE)
+	switch (observation->field_state)
+	{
+	case SG_STRATEGY_FIELD_LOCAL_DESTINATION:
+	case SG_STRATEGY_FIELD_CELL_DESTINATION:
+		return observation->cost_to_go.units == 0U;
+	case SG_STRATEGY_FIELD_STEP:
+		return observation->cost_to_go.units != 0U &&
+			observation->cost_to_go.units !=
+				SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE;
+	case SG_STRATEGY_FIELD_DISCONNECTED:
+	case SG_STRATEGY_FIELD_MECHANISMS_REQUIRED:
+	case SG_STRATEGY_FIELD_BLOCKED_NOW:
+		return observation->cost_to_go.units ==
+			SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE;
+	case SG_STRATEGY_FIELD_STATE_COUNT:
+	default:
 		return 0;
-	if (observation->status == SG_STRATEGY_DESTINATION_REACHABLE &&
-	    observation->cost_ms >= SG_DESTINATION_COST_INFINITE)
-		return 0;
-	return observation->pose_revision != 0U &&
-		StrategyHandleMatchesRef(&observation->handle, &choice->destination);
+	}
 }
 
 static sg_strategy_reduce_result_t StrategyPreflight(
@@ -759,6 +715,7 @@ static sg_strategy_reduce_result_t StrategyPreflight(
 {
 	const sg_strategy_plan_t *plan;
 	uint16_t index;
+	int life_retires_activation = 0;
 
 	if (!state || !frame || state->revision == 0U || frame->sequence == 0U ||
 	    frame->expected_revision == 0U || frame->at_ms == 0U)
@@ -821,6 +778,21 @@ static sg_strategy_reduce_result_t StrategyPreflight(
 		    (frame->life.alive != state->life_alive ||
 		     frame->life.life_id != state->life_id))
 			return SG_STRATEGY_REDUCE_REJECTED_INVALID;
+		if (state->life_known && frame->life.observation_revision >
+		    state->life_observation_revision)
+		{
+			if (state->life_alive && !frame->life.alive &&
+			    frame->life.life_id != state->life_id)
+				return SG_STRATEGY_REDUCE_REJECTED_INVALID;
+			if (!state->life_alive && frame->life.alive &&
+			    frame->life.life_id == state->life_id)
+				return SG_STRATEGY_REDUCE_REJECTED_INVALID;
+			if (!state->life_alive && !frame->life.alive &&
+			    frame->life.life_id != state->life_id)
+				return SG_STRATEGY_REDUCE_REJECTED_INVALID;
+		}
+		life_retires_activation = state->life_known && state->life_alive &&
+			(!frame->life.alive || frame->life.life_id != state->life_id);
 	}
 	if (frame->life.present && !frame->life.alive &&
 	    frame->goal_outcome.present)
@@ -891,12 +863,11 @@ static sg_strategy_reduce_result_t StrategyPreflight(
 				saved.target_id = state->plan.goals[(uint16_t)goal_index]
 					.choices[(uint8_t)choice_index].id;
 				saved.observation_revision = prior->observation_revision;
-				saved.pose_revision = prior->pose_revision;
+				saved.target_generation = prior->target_generation;
 				saved.observed_at_ms = prior->observed_at_ms;
 				saved.valid_until_ms = prior->valid_until_ms;
-				saved.status = prior->status;
-				saved.cost_ms = prior->cost_ms;
-				saved.handle = prior->handle;
+				saved.field_state = prior->field_state;
+				saved.cost_to_go = prior->cost_to_go;
 				if (!StrategyDestinationObservationEqual(
 				    &frame->destinations[index], &saved))
 					return SG_STRATEGY_REDUCE_REJECTED_INVALID;
@@ -921,7 +892,8 @@ static sg_strategy_reduce_result_t StrategyPreflight(
 	if (!StrategyActivationEmpty(&state->activation) &&
 	    frame->directive.kind == SG_STRATEGY_DIRECTIVE_NONE)
 	{
-		if ((!frame->goal_outcome.present && !frame->tactical.present) ||
+		if ((!frame->goal_outcome.present && !frame->tactical.present &&
+		     !life_retires_activation) ||
 		    (frame->tactical.present &&
 		     !StrategyActivationEqual(&frame->tactical.activation,
 			&state->activation)))
@@ -1122,15 +1094,11 @@ static int StrategyApplyDestinations(sg_strategy_state_t *state,
 			continue;
 		choice->observed = 1U;
 		choice->observation_revision = observation->observation_revision;
-		choice->pose_revision = observation->pose_revision;
+		choice->target_generation = observation->target_generation;
 		choice->observed_at_ms = observation->observed_at_ms;
 		choice->valid_until_ms = observation->valid_until_ms;
-		choice->status = observation->status;
-		choice->cost_ms = observation->cost_ms;
-		memset(&choice->handle, 0, sizeof(choice->handle));
-		if (observation->status != SG_STRATEGY_DESTINATION_UNOBSERVED)
-			StrategyCopyDestinationHandle(&choice->handle,
-				&observation->handle);
+		choice->field_state = observation->field_state;
+		choice->cost_to_go = observation->cost_to_go;
 	}
 	return 1;
 }
@@ -1274,9 +1242,11 @@ static int StrategyAnyChoiceCapacity(const sg_strategy_goal_t *goal,
 static int StrategyChoiceUsable(const sg_strategy_choice_runtime_t *choice,
 	uint64_t at_ms)
 {
-	return choice->observed &&
-		choice->status == SG_STRATEGY_DESTINATION_REACHABLE &&
-		choice->observed_at_ms <= at_ms && choice->valid_until_ms >= at_ms;
+	return choice->observed && choice->observed_at_ms <= at_ms &&
+		choice->valid_until_ms >= at_ms &&
+		(choice->field_state == SG_STRATEGY_FIELD_LOCAL_DESTINATION ||
+		 choice->field_state == SG_STRATEGY_FIELD_CELL_DESTINATION ||
+		 choice->field_state == SG_STRATEGY_FIELD_STEP);
 }
 
 static int StrategyHasFreshAlternative(const sg_strategy_goal_t *goal,
@@ -1476,6 +1446,7 @@ static int StrategyApplyLife(sg_strategy_state_t *state,
 	const sg_strategy_frame_t *frame, sg_strategy_reduction_t *out)
 {
 	uint8_t was_alive;
+	uint64_t prior_life_id;
 	int found;
 
 	if (!frame->life.present ||
@@ -1483,11 +1454,13 @@ static int StrategyApplyLife(sg_strategy_state_t *state,
 	     state->life_observation_revision))
 		return 1;
 	was_alive = state->life_alive;
+	prior_life_id = state->life_id;
 	state->life_known = 1U;
 	state->life_alive = frame->life.alive;
 	state->life_observation_revision = frame->life.observation_revision;
 	state->life_id = frame->life.life_id;
-	if (!frame->life.alive && was_alive &&
+	if (was_alive && (!frame->life.alive ||
+	    frame->life.life_id != prior_life_id) &&
 	    !StrategyActivationEmpty(&state->activation))
 	{
 		found = StrategyFindPlanGoal(&state->plan, state->activation.goal_id);
@@ -1513,7 +1486,9 @@ static int StrategySelectReachable(const sg_strategy_goal_t *goal,
 	uint8_t limit = goal->failure.try_alternatives ? goal->choice_count : 1U;
 	int selected = -1;
 	uint8_t fewest_attempts = UINT8_MAX;
-	uint32_t best_cost = SG_DESTINATION_COST_INFINITE;
+	sg_rune_compact_field_cost_t best_cost = {
+		SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE
+	};
 
 	for (index = 0U; index < limit; index++)
 		if (runtime->choices[index].attempts <
@@ -1521,11 +1496,11 @@ static int StrategySelectReachable(const sg_strategy_goal_t *goal,
 		    StrategyChoiceUsable(&runtime->choices[index], at_ms) &&
 		    (selected < 0 || runtime->choices[index].attempts < fewest_attempts ||
 		     (runtime->choices[index].attempts == fewest_attempts &&
-		      runtime->choices[index].cost_ms < best_cost)))
+		      runtime->choices[index].cost_to_go.units < best_cost.units)))
 		{
 			selected = (int)index;
 			fewest_attempts = runtime->choices[index].attempts;
-			best_cost = runtime->choices[index].cost_ms;
+			best_cost = runtime->choices[index].cost_to_go;
 		}
 	return selected;
 }
@@ -1545,7 +1520,8 @@ static int StrategyAllEligibleObserved(const sg_strategy_goal_t *goal,
 		has_capacity = 1;
 		if (!choice->observed || choice->observed_at_ms > at_ms ||
 		    choice->valid_until_ms < at_ms ||
-		    choice->status == SG_STRATEGY_DESTINATION_UNOBSERVED)
+		    choice->field_state == SG_STRATEGY_FIELD_MECHANISMS_REQUIRED ||
+		    choice->field_state == SG_STRATEGY_FIELD_BLOCKED_NOW)
 			return 0;
 	}
 	return has_capacity;
@@ -1611,13 +1587,15 @@ static void StrategyInstructionBase(sg_strategy_instruction_t *instruction,
 static sg_strategy_destination_wait_reason_t StrategyChoiceWaitReason(
 	const sg_strategy_choice_runtime_t *choice, uint64_t at_ms)
 {
-	if (!choice->observed ||
-	    choice->status == SG_STRATEGY_DESTINATION_UNOBSERVED)
+	if (!choice->observed)
 		return SG_STRATEGY_DESTINATION_WAIT_UNOBSERVED;
 	if (choice->observed_at_ms > at_ms || choice->valid_until_ms < at_ms)
 		return SG_STRATEGY_DESTINATION_WAIT_STALE;
-	if (choice->status == SG_STRATEGY_DESTINATION_UNREACHABLE)
+	if (choice->field_state == SG_STRATEGY_FIELD_DISCONNECTED)
 		return SG_STRATEGY_DESTINATION_WAIT_UNREACHABLE;
+	if (choice->field_state == SG_STRATEGY_FIELD_MECHANISMS_REQUIRED ||
+	    choice->field_state == SG_STRATEGY_FIELD_BLOCKED_NOW)
+		return SG_STRATEGY_DESTINATION_WAIT_UNOBSERVED;
 	return SG_STRATEGY_DESTINATION_WAIT_NONE;
 }
 
@@ -1665,17 +1643,23 @@ static void StrategyInstructionForActive(sg_strategy_state_t *state,
 	if (choice < goal->choice_count)
 	{
 		state->current_instruction.destination = goal->choices[choice].destination;
+		state->current_instruction.target_id = goal->choices[choice].id;
+		state->current_instruction.target_generation =
+			runtime->choices[choice].target_generation;
+		state->current_instruction.field_state =
+			runtime->choices[choice].field_state;
 		if (kind == SG_STRATEGY_INSTRUCTION_WAIT_DESTINATION)
 		{
-			state->current_instruction.cost_ms = SG_DESTINATION_COST_INFINITE;
+			state->current_instruction.cost_to_go.units =
+				SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE;
 			state->current_instruction.destination_wait_reason =
 				StrategyChoiceWaitReason(&runtime->choices[choice],
 					at_ms);
 		}
 		else
 		{
-			state->current_instruction.handle = runtime->choices[choice].handle;
-			state->current_instruction.cost_ms = runtime->choices[choice].cost_ms;
+			state->current_instruction.cost_to_go =
+				runtime->choices[choice].cost_to_go;
 		}
 	}
 	if (kind == SG_STRATEGY_INSTRUCTION_SUSPENDED)
@@ -1903,6 +1887,23 @@ static int StrategyFixedPoint(sg_strategy_state_t *state,
 			StrategyInstructionBase(&state->current_instruction,
 				SG_STRATEGY_INSTRUCTION_WAIT_DESTINATION, state);
 			state->current_instruction.goal_id = goal->id;
+			choice = StrategyFirstChoiceCapacity(goal, runtime);
+			if (choice >= 0)
+			{
+				const uint8_t selected_choice = (uint8_t)choice;
+
+				state->current_instruction.choice_index = selected_choice;
+				state->current_instruction.destination =
+					goal->choices[selected_choice].destination;
+				state->current_instruction.target_id =
+					goal->choices[selected_choice].id;
+				state->current_instruction.target_generation =
+					runtime->choices[selected_choice].target_generation;
+				state->current_instruction.field_state =
+					runtime->choices[selected_choice].field_state;
+				state->current_instruction.cost_to_go.units =
+					SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE;
+			}
 			state->current_instruction.destination_wait_reason =
 				StrategyGoalWaitReason(goal, runtime, frame->at_ms);
 			return 1;

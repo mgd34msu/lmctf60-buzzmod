@@ -70,6 +70,151 @@ static int BoundsComponentsFinite(const sg_rune_bounds_t *value)
 	return value && VectorFinite(&value->mins) && VectorFinite(&value->maxs);
 }
 
+static int AngularDoorScheduleEqual(
+	const sg_bsp_entity_angular_door_schedule_t *left,
+	const sg_bsp_entity_angular_door_schedule_t *right)
+{
+	return left && right &&
+		VectorEqual(&left->inactive_angles, &right->inactive_angles) &&
+		VectorEqual(&left->active_angles, &right->active_angles) &&
+		VectorEqual(&left->axis, &right->axis) &&
+		VectorEqual(&left->angular_displacement,
+			&right->angular_displacement) &&
+		FloatEqual(left->speed, right->speed) &&
+		FloatEqual(left->acceleration, right->acceleration) &&
+		FloatEqual(left->deceleration, right->deceleration) &&
+		left->frame_ms == right->frame_ms;
+}
+
+static int ContinuousAngularScheduleEqual(
+	const sg_bsp_entity_continuous_angular_schedule_t *left,
+	const sg_bsp_entity_continuous_angular_schedule_t *right)
+{
+	return left && right &&
+		VectorEqual(&left->initial_angles, &right->initial_angles) &&
+		VectorEqual(&left->axis, &right->axis) &&
+		VectorEqual(&left->angular_velocity, &right->angular_velocity) &&
+		VectorEqual(&left->frame_angular_delta,
+			&right->frame_angular_delta) &&
+		FloatEqual(left->speed, right->speed) &&
+		left->frame_ms == right->frame_ms;
+}
+
+static int AngularMoverEqual(const sg_bsp_entity_angular_mover_t *left,
+	const sg_bsp_entity_angular_mover_t *right)
+{
+	if (!left || !right || left->kind != right->kind ||
+		left->flags != right->flags)
+		return 0;
+	switch (left->kind) {
+	case SG_BSP_ENTITY_ANGULAR_MOVER_NONE:
+		return 1;
+	case SG_BSP_ENTITY_ANGULAR_MOVER_FINITE_DOOR:
+		return AngularDoorScheduleEqual(&left->schedule.finite_door,
+			&right->schedule.finite_door);
+	case SG_BSP_ENTITY_ANGULAR_MOVER_CONTINUOUS_ROTATOR:
+		return ContinuousAngularScheduleEqual(
+			&left->schedule.continuous_rotator,
+			&right->schedule.continuous_rotator);
+	case SG_BSP_ENTITY_ANGULAR_MOVER_KIND_COUNT:
+		return 0;
+	}
+	return 0;
+}
+
+static int AngularDoorScheduleValid(
+	const sg_bsp_entity_angular_door_schedule_t *schedule)
+{
+	return schedule && VectorFinite(&schedule->inactive_angles) &&
+		VectorFinite(&schedule->active_angles) && VectorFinite(&schedule->axis) &&
+		VectorFinite(&schedule->angular_displacement) &&
+		FloatFinite(schedule->speed) && FloatFinite(schedule->acceleration) &&
+		FloatFinite(schedule->deceleration) && schedule->frame_ms != 0U;
+}
+
+static int ContinuousAngularScheduleValid(
+	const sg_bsp_entity_continuous_angular_schedule_t *schedule)
+{
+	return schedule && VectorFinite(&schedule->initial_angles) &&
+		VectorFinite(&schedule->axis) &&
+		VectorFinite(&schedule->angular_velocity) &&
+		VectorFinite(&schedule->frame_angular_delta) &&
+		FloatFinite(schedule->speed) && schedule->frame_ms != 0U;
+}
+
+static int BytesZero(const void *bytes, size_t count)
+{
+	const uint8_t *cursor = bytes;
+	size_t index;
+
+	if (cursor == NULL)
+		return 0;
+	for (index = 0U; index < count; index++)
+		if (cursor[index] != 0U)
+			return 0;
+	return 1;
+}
+
+static int AngularMoverUnusedBytesZero(
+	const sg_bsp_entity_angular_mover_t *mover)
+{
+	const uint8_t *schedule;
+	size_t active_bytes;
+	size_t schedule_bytes;
+
+	if (mover == NULL)
+		return 0;
+	schedule = (const uint8_t *)&mover->schedule;
+	schedule_bytes = sizeof(mover->schedule);
+	switch (mover->kind) {
+	case SG_BSP_ENTITY_ANGULAR_MOVER_NONE:
+		return BytesZero(schedule, schedule_bytes);
+	case SG_BSP_ENTITY_ANGULAR_MOVER_FINITE_DOOR:
+		active_bytes = sizeof(mover->schedule.finite_door);
+		break;
+	case SG_BSP_ENTITY_ANGULAR_MOVER_CONTINUOUS_ROTATOR:
+		active_bytes = sizeof(mover->schedule.continuous_rotator);
+		break;
+	case SG_BSP_ENTITY_ANGULAR_MOVER_KIND_COUNT:
+	default:
+		return 0;
+	}
+	return active_bytes <= schedule_bytes &&
+		BytesZero(schedule + active_bytes, schedule_bytes - active_bytes);
+}
+
+static int AngularMoverValid(const sg_bsp_entity_angular_mover_t *mover)
+{
+	const sg_bsp_entity_angular_mover_flags_t door_flags =
+		SG_BSP_ENTITY_ANGULAR_MOVER_START_OPEN |
+		SG_BSP_ENTITY_ANGULAR_MOVER_REVERSE |
+		SG_BSP_ENTITY_ANGULAR_MOVER_TOGGLE |
+		SG_BSP_ENTITY_ANGULAR_MOVER_CRUSHER;
+	const sg_bsp_entity_angular_mover_flags_t rotator_flags =
+		SG_BSP_ENTITY_ANGULAR_MOVER_START_ON |
+		SG_BSP_ENTITY_ANGULAR_MOVER_REVERSE |
+		SG_BSP_ENTITY_ANGULAR_MOVER_STOP_ON_BLOCK |
+		SG_BSP_ENTITY_ANGULAR_MOVER_TOUCH_DAMAGE;
+
+	if (!mover)
+		return 0;
+	if (!AngularMoverUnusedBytesZero(mover))
+		return 0;
+	switch (mover->kind) {
+	case SG_BSP_ENTITY_ANGULAR_MOVER_NONE:
+		return mover->flags == 0U;
+	case SG_BSP_ENTITY_ANGULAR_MOVER_FINITE_DOOR:
+		return (mover->flags & ~door_flags) == 0U &&
+			AngularDoorScheduleValid(&mover->schedule.finite_door);
+	case SG_BSP_ENTITY_ANGULAR_MOVER_CONTINUOUS_ROTATOR:
+		return (mover->flags & ~rotator_flags) == 0U &&
+			ContinuousAngularScheduleValid(&mover->schedule.continuous_rotator);
+	case SG_BSP_ENTITY_ANGULAR_MOVER_KIND_COUNT:
+		return 0;
+	}
+	return 0;
+}
+
 static int StringOffsetValid(const sg_bsp_entity_semantics_t *semantics,
 	uint32_t offset)
 {
@@ -262,6 +407,12 @@ static int EntityEqual(const sg_bsp_entity_semantic_t *left,
 			*domain_out = SG_BSP_ENTITY_SEMANTICS_FACT_MECHANISM;
 		return 0;
 	}
+	if (!AngularMoverEqual(&left->angular_mover, &right->angular_mover))
+	{
+		if (domain_out)
+			*domain_out = SG_BSP_ENTITY_SEMANTICS_FACT_MECHANISM;
+		return 0;
+	}
 	if (left->physics_kind != right->physics_kind ||
 		!VectorEqual(&left->origin, &right->origin) ||
 		!VectorEqual(&left->angles, &right->angles) ||
@@ -318,6 +469,7 @@ static int EntityValuesFinite(const sg_bsp_entity_semantic_t *entity)
 		VectorFinite(&entity->move_direction) &&
 		VectorFinite(&entity->move_origin) &&
 		VectorFinite(&entity->move_angles) &&
+		AngularMoverValid(&entity->angular_mover) &&
 		BoundsComponentsFinite(&entity->bounds) &&
 		(!(entity->flags & SG_BSP_ENTITY_HAS_BOUNDS) ||
 			BoundsFinite(&entity->bounds)) && FloatFinite(entity->delay_ms) &&

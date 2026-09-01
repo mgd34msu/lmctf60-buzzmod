@@ -827,6 +827,38 @@ static sg_host_law_view_t Read(const sg_host_law_publication_t *publication)
 	return view;
 }
 
+static void TestNonzeroAirAcceleration(void)
+{
+	sg_host_static_identity_t identity = StaticIdentity();
+	sg_rune_physics_parameters_t physics;
+	sg_host_law_publication_t *publication = NULL;
+	sg_host_law_view_t view;
+	sg_host_law_result_t result;
+
+	airaccelerate_cvar.value = 1.5f;
+	identity.physics.air_acceleration = SG_HOST_ENGINE_GROUND_ACCELERATION;
+	CHECK(SG_HostEnginePhysicsLaw(&physics));
+	CHECK(physics.air_acceleration == SG_HOST_ENGINE_GROUND_ACCELERATION);
+	result = SG_HostLawPublicationOwnerIssueStatic(&identity, &publication);
+	CHECK(result.status == SG_HOST_LAW_OK && publication != NULL);
+	if (publication != NULL) {
+		view = Read(publication);
+		CHECK(view.airaccelerate == 1.0f &&
+			view.static_identity.physics.air_acceleration ==
+				SG_HOST_ENGINE_GROUND_ACCELERATION);
+		airaccelerate_cvar.value = 100.0f;
+		result = SG_HostLawPublicationRevalidateProduction(publication);
+		CHECK(result.status == SG_HOST_LAW_OK);
+		SG_HostLawPublicationOwnerDestroy(publication);
+	}
+	airaccelerate_cvar.value = -2.0f;
+	CHECK(SG_HostEnginePhysicsLaw(&physics));
+	CHECK(physics.air_acceleration == SG_HOST_ENGINE_GROUND_ACCELERATION);
+	airaccelerate_cvar.value = 0.0f;
+	CHECK(SG_HostEnginePhysicsLaw(&physics));
+	CHECK(physics.air_acceleration == SG_HOST_ENGINE_AIR_ACCELERATION);
+}
+
 static void TestEngineBindingAndParity(void)
 {
 	sg_host_engine_pmove_abi_t abi;
@@ -1268,12 +1300,33 @@ static void TestHookDamagePolicy(void)
 	SG_HostLawPublicationOwnerDestroy(publication);
 }
 
+typedef struct mechanism_frame_record_s
+{
+	float values[8];
+	uint32_t count;
+} mechanism_frame_record_t;
+
+static int RecordMechanismFrame(void *opaque, float distance)
+{
+	mechanism_frame_record_t *record = opaque;
+
+	if (record == NULL || record->count >=
+		(uint32_t)(sizeof(record->values) / sizeof(record->values[0])))
+		return 0;
+	record->values[record->count++] = distance;
+	return 1;
+}
+
 static void TestMechanismEquations(void)
 {
 	sg_host_law_publication_t *publication = Issue();
 	sg_host_mechanism_move_result_t move;
 	sg_host_mechanism_transition_t transition;
 	sg_host_law_result_t result;
+	mechanism_frame_record_t frames;
+	sg_host_law_view_t mechanism_view;
+	float angular_delta[3] = { 0.0f, 90.0f, 0.0f };
+	float push;
 
 	result = SG_HostLawPublicationMoveSchedule(publication, 25.0f, 100.0f,
 		100.0f, 100.0f, 0, &move);
@@ -1293,6 +1346,29 @@ static void TestMechanismEquations(void)
 		0.5f, 0.5f, 1, &move);
 	CHECK(result.status == SG_HOST_LAW_OK && move.valid && move.accelerated);
 	CHECK(move.first_think_ms == 100U && move.completion_ms > 100U);
+	memset(&frames, 0, sizeof(frames));
+	mechanism_view = Read(publication);
+	CHECK(SG_HostMechanismMoveFrames(&mechanism_view.mechanism, 25.0f,
+		100.0f, 100.0f, 100.0f, 0, RecordMechanismFrame, &frames,
+		&move));
+	CHECK(frames.count == 3U && frames.values[0] == 10.0f &&
+		frames.values[1] == 10.0f && frames.values[2] == 5.0f);
+	CHECK(move.completion_ms == 400U);
+	CHECK(SG_HostMechanismPushDisplacement(0.0625f, &push) &&
+		push == 0.125f);
+	CHECK(SG_HostMechanismPushDisplacement(-0.0625f, &push) &&
+		push == -0.125f);
+	CHECK(SG_HostMechanismPushDisplacement(-0.0f, &push) && push == 0.0f &&
+		!signbit(push));
+	CHECK(SG_HostMechanismAngleMoveSchedule(&mechanism_view.mechanism,
+		angular_delta, 100.0f, 1, &move) && move.valid &&
+		move.first_think_ms == 0U && move.full_speed_frames == 9U &&
+		move.residual_distance > 0.0f && move.completion_ms == 1000U);
+	angular_delta[1] = 95.0f;
+	CHECK(SG_HostMechanismAngleMoveSchedule(&mechanism_view.mechanism,
+		angular_delta, 100.0f, 0, &move) && move.valid &&
+		move.first_think_ms == 100U && move.full_speed_frames == 9U &&
+		move.completion_ms == 1100U);
 	result = SG_HostLawPublicationDoorStep(publication,
 		SG_HOST_MECHANISM_DOOR_TOP, 0U, SG_HOST_MECHANISM_STATE_TOP, 0.0f,
 		1000U, 0U, &transition);
@@ -1660,6 +1736,11 @@ static void TestStaticPublicationRevalidation(void)
 		ConstructionAuthority(caller_world);
 	sg_host_collision_authority_t forged_authority;
 	sg_host_collision_authority_t non_ibsp_authority = Authority();
+	sg_host_collision_authority_t missing_world_authority;
+	sg_host_collision_authority_t mismatched_identity_authority;
+	sg_host_collision_authority_t mismatched_world_authority;
+	sg_bsp_world_t mismatched_world;
+	sg_host_law_pmove_evaluator_t *pmove_evaluator = NULL;
 	sg_host_pmove_request_t request;
 	sg_host_pmove_result_t pmove_result;
 	sg_host_pmove_error_t pmove_error = SG_HOST_PMOVE_ERROR_NONE;
@@ -1886,6 +1967,39 @@ static void TestStaticPublicationRevalidation(void)
 	request.state.origin[2] = -512;
 	request.state.gravity = 800;
 	request.previous_state = request.state;
+	result = SG_HostLawConstructionOwnerPmoveEvaluatorAcquire(construction,
+		&pmove_evaluator);
+	CHECK(result.status == SG_HOST_LAW_OK && pmove_evaluator != NULL);
+	missing_world_authority = authority;
+	missing_world_authority.world = NULL;
+	result = SG_HostLawPmoveEvaluatorRun(pmove_evaluator,
+		&missing_world_authority, NULL, &request, &pmove_result, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_INVALID_ARGUMENT &&
+		result.field == SG_HOST_LAW_FIELD_COLLISION_LAW);
+	mismatched_identity_authority = authority;
+	mismatched_identity_authority.content_identity.bytes[0] ^= UINT8_C(1);
+	result = SG_HostLawPmoveEvaluatorRun(pmove_evaluator,
+		&mismatched_identity_authority, NULL, &request, &pmove_result,
+		&pmove_error);
+	CHECK(result.status == SG_HOST_LAW_INVALID_ARGUMENT &&
+		result.field == SG_HOST_LAW_FIELD_COLLISION_LAW);
+	mismatched_world = *authority.world;
+	mismatched_world.content_identity.bytes[0] ^= UINT8_C(1);
+	mismatched_world_authority = authority;
+	mismatched_world_authority.world = &mismatched_world;
+	mismatched_world_authority.content_identity =
+		mismatched_world.content_identity;
+	result = SG_HostLawPmoveEvaluatorRun(pmove_evaluator,
+		&mismatched_world_authority, NULL, &request, &pmove_result,
+		&pmove_error);
+	CHECK(result.status == SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW &&
+		result.field == SG_HOST_LAW_FIELD_BSP_CONTENT);
+	result = SG_HostLawPmoveEvaluatorRun(pmove_evaluator, &authority, NULL,
+		&request, &pmove_result, &pmove_error);
+	CHECK(result.status == SG_HOST_LAW_OK &&
+		pmove_error == SG_HOST_PMOVE_ERROR_NONE);
+	SG_HostLawPmoveEvaluatorDestroy(pmove_evaluator);
+	pmove_evaluator = NULL;
 	result = SG_HostLawConstructionPmove(construction, NULL, &request,
 		&pmove_result, &pmove_error);
 	CHECK(result.status == SG_HOST_LAW_OK &&
@@ -2092,6 +2206,7 @@ int main(void)
 	gi.cvar = TestCvar;
 	InitializeWorld();
 	TestEngineChecksumVectors();
+	TestNonzeroAirAcceleration();
 
 	TestEngineBindingAndParity();
 	TestEngineRuntimeOwnerBinding();

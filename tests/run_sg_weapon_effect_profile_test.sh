@@ -11,8 +11,6 @@ correction_sources='tests/sg_weapon_effect_profile_correction_test.c slipgate/sg
 
 cd "$repo_dir"
 
-python3 -B tests/test_weapon_effect_profile_source_parity.py
-
 gcc $strict -I. $sources -lm -o "$tmp_dir/weapon-profile-gcc"
 "$tmp_dir/weapon-profile-gcc"
 

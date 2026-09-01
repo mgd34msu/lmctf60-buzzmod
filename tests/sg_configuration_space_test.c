@@ -167,6 +167,21 @@ static void DestroyFixture(fixture_t *fixture)
 	memset(fixture, 0, sizeof(*fixture));
 }
 
+static void SetReferencedBrushes(fixture_t *fixture,
+	const uint32_t *brushes, uint32_t brush_count)
+{
+	uint32_t leaf, brush;
+
+	for (leaf = 0U; leaf < fixture->world.leaf_count; leaf++)
+	{
+		fixture->leaves[leaf].first_leaf_brush = leaf * brush_count;
+		fixture->leaves[leaf].leaf_brush_count = brush_count;
+		for (brush = 0U; brush < brush_count; brush++)
+			fixture->leaf_brushes[leaf * brush_count + brush] = brushes[brush];
+	}
+	fixture->world.leaf_brush_count = fixture->world.leaf_count * brush_count;
+}
+
 static sg_rune_model_identity_t Identity(void)
 {
 	sg_rune_model_identity_t identity;
@@ -228,6 +243,78 @@ static uint32_t CountPortalStance(const sg_configuration_space_t *space,
 		if (space->portals[portal].stance == stance)
 			count++;
 	return count;
+}
+
+static int SameConfigurationGeometry(const sg_configuration_space_t *left,
+	const sg_configuration_space_t *right)
+{
+	return left->cell_count == right->cell_count &&
+		left->face_count == right->face_count &&
+		left->vertex_count == right->vertex_count &&
+		left->portal_count == right->portal_count &&
+		left->stance_overlap_count == right->stance_overlap_count &&
+		left->certificate_node_count == right->certificate_node_count &&
+		memcmp(left->certificate_roots, right->certificate_roots,
+			sizeof(left->certificate_roots)) == 0 &&
+		memcmp(left->cells, right->cells,
+			(size_t)left->cell_count * sizeof(*left->cells)) == 0 &&
+		memcmp(left->faces, right->faces,
+			(size_t)left->face_count * sizeof(*left->faces)) == 0 &&
+		memcmp(left->vertices, right->vertices,
+			(size_t)left->vertex_count * sizeof(*left->vertices)) == 0 &&
+		memcmp(left->portals, right->portals,
+			(size_t)left->portal_count * sizeof(*left->portals)) == 0 &&
+		memcmp(left->stance_overlaps, right->stance_overlaps,
+			(size_t)left->stance_overlap_count *
+				sizeof(*left->stance_overlaps)) == 0 &&
+		memcmp(left->certificate_nodes, right->certificate_nodes,
+			(size_t)left->certificate_node_count *
+				sizeof(*left->certificate_nodes)) == 0;
+}
+
+static void CheckTopologyIndex(const sg_configuration_space_t *space)
+{
+	sg_rune_compact_spatial_error_t error;
+	uint32_t *cells = malloc((size_t)space->cell_count * sizeof(*cells));
+	uint32_t cell, portal;
+
+	CHECK(space->topology_index != NULL);
+	CHECK(cells != NULL || space->cell_count == 0U);
+	if (!space->topology_index || (!cells && space->cell_count))
+		goto done;
+	for (cell = 0U; cell < space->cell_count; cell++)
+	{
+		uint32_t count = 0U, found = 0U, index;
+
+		CHECK(SG_RuneCompactSpatialIndexQueryCells(space->topology_index,
+			&space->cells[cell].interior_witness, cells, space->cell_count,
+			&count, &error));
+		for (index = 0U; index < count; index++)
+			found |= cells[index] == cell;
+		CHECK(found);
+	}
+	for (portal = 0U; portal < space->portal_count; portal++)
+	{
+		const sg_configuration_portal_t *record = &space->portals[portal];
+		sg_rune_vec3_t center = { { 0.0f, 0.0f, 0.0f } };
+		uint32_t count = 0U, index, endpoint_count = 0U, axis, vertex;
+
+		for (vertex = 0U; vertex < record->vertex_count; vertex++)
+			for (axis = 0U; axis < 3U; axis++)
+				center.value[axis] += space->vertices[
+					record->first_vertex + vertex].value[axis];
+		for (axis = 0U; axis < 3U; axis++)
+			center.value[axis] /= (float)record->vertex_count;
+		CHECK(SG_RuneCompactSpatialIndexQueryCells(space->topology_index,
+			&center, cells, space->cell_count, &count, &error));
+		for (index = 0U; index < count; index++)
+			endpoint_count += cells[index] == record->from_cell ||
+				cells[index] == record->to_cell;
+		CHECK(endpoint_count == 1U);
+	}
+
+done:
+	free(cells);
 }
 
 static int ReplaceBoundaryWithInteriorTriangle(sg_configuration_space_t *space,
@@ -600,6 +687,103 @@ static void TestEquivalentBspAndScaledBrushPlane(void)
 	}
 	SG_ConfigurationDestroy(space);
 	DestroyFixture(&fixture);
+}
+
+static void TestIndexedBrushPruningAndOrder(void)
+{
+	test_box_t boxes[33];
+	fixture_t indexed_fixture;
+	fixture_t permuted_fixture;
+	sg_configuration_space_t *indexed = NULL;
+	sg_configuration_space_t *permuted = NULL;
+	sg_configuration_audit_result_t audit = { 0 };
+	uint32_t brush, leaf;
+
+	memset(boxes, 0, sizeof(boxes));
+	SetVector(boxes[0].mins, -8.0f, -64.0f, -64.0f);
+	SetVector(boxes[0].maxs, 8.0f, 64.0f, 64.0f);
+	boxes[0].contents = SG_HOST_CONTENTS_SOLID;
+	for (brush = 1U; brush < 33U; brush++)
+	{
+		float x = -3600.0f + (float)brush * 210.0f;
+
+		SetVector(boxes[brush].mins, x, 512.0f, -8.0f);
+		SetVector(boxes[brush].maxs, x + 4.0f, 516.0f, 8.0f);
+		boxes[brush].contents = SG_HOST_CONTENTS_WATER;
+	}
+	indexed_fixture = Fixture(boxes, 33U, 0, 0);
+	permuted_fixture = Fixture(boxes, 33U, 0, 0);
+	for (leaf = 0U; leaf < 2U; leaf++)
+		for (brush = 0U; brush < 33U / 2U; brush++)
+		{
+			uint32_t left = leaf * 33U + brush;
+			uint32_t right = leaf * 33U + 32U - brush;
+			uint32_t temporary = permuted_fixture.leaf_brushes[left];
+
+			permuted_fixture.leaf_brushes[left] =
+				permuted_fixture.leaf_brushes[right];
+			permuted_fixture.leaf_brushes[right] = temporary;
+		}
+	CHECK(Build(&indexed_fixture, NULL, &indexed, &audit));
+	CHECK(Build(&permuted_fixture, NULL, &permuted, &audit));
+	if (indexed && permuted)
+	{
+		CHECK(indexed->brush_index_queries > 0U);
+		CHECK(indexed->brush_index_minimum_tested_entries <
+			indexed_fixture.world.brush_count);
+		CHECK(indexed->brush_index_tested_entries <
+			indexed->brush_index_queries * indexed_fixture.world.brush_count);
+		CHECK(SameConfigurationGeometry(indexed, permuted));
+		CHECK(indexed->topology_split_count > 0U);
+		CHECK(indexed->topology_carried_portal_count > 0U);
+		CheckTopologyIndex(indexed);
+		CheckTopologyIndex(permuted);
+	}
+	SG_ConfigurationDestroy(permuted);
+	SG_ConfigurationDestroy(indexed);
+	DestroyFixture(&permuted_fixture);
+	DestroyFixture(&indexed_fixture);
+}
+
+static void TestBrushIndexAdmissionDomain(void)
+{
+	test_box_t boxes[4];
+	uint32_t referenced[2] = { 0U, 1U };
+	fixture_t expected_fixture;
+	fixture_t irrelevant_fixture;
+	sg_configuration_space_t *expected = NULL;
+	sg_configuration_space_t *irrelevant = NULL;
+	sg_configuration_audit_result_t audit = { 0 };
+
+	memset(boxes, 0, sizeof(boxes));
+	SetVector(boxes[0].mins, -8.0f, -64.0f, -64.0f);
+	SetVector(boxes[0].maxs, 8.0f, 64.0f, 64.0f);
+	boxes[0].contents = SG_HOST_CONTENTS_SOLID;
+	SetVector(boxes[1].mins, 24.0f, -8.0f, -8.0f);
+	SetVector(boxes[1].maxs, 32.0f, 8.0f, 8.0f);
+	boxes[1].contents = SG_HOST_CONTENTS_WATER;
+	SetVector(boxes[2].mins, 40.0f, -8.0f, -8.0f);
+	SetVector(boxes[2].maxs, 48.0f, 8.0f, 8.0f);
+	boxes[2].contents = SG_HOST_CONTENTS_SOLID;
+	SetVector(boxes[3].mins, 56.0f, -8.0f, -8.0f);
+	SetVector(boxes[3].maxs, 64.0f, 8.0f, 8.0f);
+	boxes[3].contents = SG_HOST_CONTENTS_SOLID;
+	expected_fixture = Fixture(boxes, 2U, 0, 0);
+	irrelevant_fixture = Fixture(boxes, 4U, 0, 0);
+	SetReferencedBrushes(&irrelevant_fixture, referenced, 2U);
+	irrelevant_fixture.brushes[3].side_count = 0U;
+	CHECK(Build(&expected_fixture, NULL, &expected, &audit));
+	CHECK(Build(&irrelevant_fixture, NULL, &irrelevant, &audit));
+	if (expected && irrelevant)
+	{
+		CHECK(expected->brush_index_entry_count == 1U);
+		CHECK(irrelevant->brush_index_entry_count == 1U);
+		CHECK(SameConfigurationGeometry(expected, irrelevant));
+	}
+	SG_ConfigurationDestroy(irrelevant);
+	SG_ConfigurationDestroy(expected);
+	DestroyFixture(&irrelevant_fixture);
+	DestroyFixture(&expected_fixture);
 }
 
 static void TestExactLatticeBoundaries(void)
@@ -1065,6 +1249,7 @@ int main(void)
 	CHECK(SG_ConfigurationTestConstraintFacetWinding());
 	CHECK(SG_ConfigurationTestCompleteFinalIncidence());
 	CHECK(SG_ConfigurationTestFinalRepresentationBounds());
+	CHECK(SG_ConfigurationTestTopologyMappingValidation());
 	TestExactLatticeBoundaries();
 	TestHostFloatBoundaryLocalization();
 	TestConstraintOnlyPortal();
@@ -1074,6 +1259,8 @@ int main(void)
 	TestCrouchDoorwayAndWindow();
 	TestRampLedgeAndOverflowAtomicity();
 	TestEquivalentBspAndScaledBrushPlane();
+	TestIndexedBrushPruningAndOrder();
+	TestBrushIndexAdmissionDomain();
 	TestProtocolSliverAndOutsideModelBounds();
 	if (failures)
 	{

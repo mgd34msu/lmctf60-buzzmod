@@ -26,6 +26,22 @@ int SG_HostEngineRuntimeOwnerReplayFrame(
 	const sg_host_pmove_request_t *request,
 	const sg_host_pmove_replay_workspace_t *workspace,
 	sg_host_pmove_replay_t *replay_out, sg_host_pmove_error_t *error_out);
+/* A corridor potential gradient is not an action.  This owner authenticates
+ * the exact current ClientThink seed, derives its stack-local walk input, and
+ * replays it without accepting caller PMove state or input bytes. */
+typedef struct sg_host_engine_walk_gradient_s
+{
+	int64_t longitudinal;
+	int64_t lateral_position;
+	int64_t reversal_velocity;
+	int64_t lateral_velocity;
+} sg_host_engine_walk_gradient_t;
+int SG_HostEngineRuntimeOwnerReplayLiveWalkGradient(
+	const sg_host_engine_runtime_t *runtime,
+	const sg_host_engine_subject_identity_t *subject,
+	const sg_host_engine_walk_gradient_t *gradient,
+	const sg_host_pmove_replay_workspace_t *workspace,
+	sg_host_pmove_replay_t *replay_out, sg_host_pmove_error_t *error_out);
 int SG_HostEngineRuntimeOwnerTrace(
 	const sg_host_engine_runtime_t *runtime,
 	const sg_host_engine_subject_identity_t *subject,

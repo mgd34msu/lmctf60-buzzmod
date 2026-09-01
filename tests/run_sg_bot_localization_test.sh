@@ -18,4 +18,3 @@ ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
 
 clang --analyze $strict -I. slipgate/sg_bot_localization.c \
 	-o "$tmp_dir/analyzer.plist"
-python3 -B tests/test_bot_localization_integration.py

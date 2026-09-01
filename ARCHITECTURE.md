@@ -24,6 +24,11 @@ The project has three distinct artifact classes:
   corpora, reports, and retained run receipts. These do not belong in the game
   directory merely because they are tracked by Git.
 
+The compact RUNE builder is an unshipped Linux-only generator game module. It
+may link the offline configuration solver; the public and server runtime game
+modules only load accepted RUNEs and remain solver-free. Corpus staging uses
+the generator module for `sv rune`, then the runtime module for cold load.
+
 Code that moves an artifact across one of these boundaries must name the exact
 source and destination, verify content identity, and fail without partially
 publishing a replacement.
@@ -111,9 +116,10 @@ performs reverse Dijkstra over those links, and `Think_PickLink`/`sg_move.c`
 allow the selected link action to own execution.
 
 That implementation remains present only as migration input. Fixed-grid and
-face-anchor coverage, objective pruning, `complete`/`local_only` wire validity,
-action-owned traversal, and production late-path Dijkstra are not target
-architecture.
+face-anchor coverage, objective-driven pruning, objective-gated artifact
+validity, action-owned traversal, and production late-path Dijkstra are not
+target architecture. Objective reachability is a runtime diagnostic only;
+configuration-space structure owns artifact validity.
 
 ### Target static model
 
@@ -223,10 +229,11 @@ finite-value, checksum, and load checks. Same-directory staged writes,
 revalidation, sync, and rename preserve atomic publication. Failure does not
 replace the current artifact or expose mixed sidecar state.
 
-The frozen GNU C reader, Make C reader, Python reader, linter, and separate
-fresh-process bot load must independently agree on those linear rules. Deep BSP
-and host comparison is development-only for one ordinary RUNE and `tomb05`.
-Flag reachability is a gameplay query, not artifact validity.
+The runtime loader and the command-line reader call one frozen C wire inspector.
+GNU and Make compile that source but do not define separate parser contracts.
+Every artifact passes the inspector and a fresh-process bot load. Deep BSP and
+host comparison is development-only for one ordinary RUNE and `tomb05`. Flag
+reachability is a gameplay query, not artifact validity.
 `tools/rune-corpus-maps.txt` remains the 175-map conversion authority;
 `tools/topmaps.txt` remains an ordinary schedule.
 
@@ -259,10 +266,10 @@ authority and a separately completed file receipt.
 
 ## Build and verification
 
-`GNUmakefile` and `Makefile` are independent supported build/test dialects.
-Both aggregate the C host tests and Python/tool tests. GitHub Actions adds GCC
-and Clang host matrices, Linux module/link checks, Windows x86/x64 builds, and
-warning rejection.
+`GNUmakefile` and `Makefile` are independent supported build and test dialects.
+Both aggregate the C host tests and shell integration checks. GitHub Actions
+adds GCC and Clang host matrices, Linux module and link checks, Windows x86 and
+x64 builds, and warning rejection. The project does not require Python.
 
 Tests have three different scopes and must not be confused:
 

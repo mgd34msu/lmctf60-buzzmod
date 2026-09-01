@@ -84,6 +84,63 @@ static void TestLearningTransactionIdentity(void)
 	CHECK(!SG_LearningTransactionMayRollback(&foreign, &transaction));
 }
 
+static sg_tactic_frame_capability_t tactic_frame = {
+	.subject = { .client_id = 3U, .spawn_generation = 4U },
+	.model_identity = 5U,
+	.rune_identity = 99U,
+	.topology_revision = 7U,
+	.field_handle = {
+		.service_identity = 8U,
+		.service_generation = 9U,
+		.rune_identity = 99U,
+		.topology_revision = 7U,
+		.target_id = 10U,
+		.target_generation = 11U,
+		.field_generation = 3U
+	},
+	.frame_sequence = 4U,
+	.observed_at_ms = 500U,
+	.localized = {
+		.cell = { 1U },
+		.stance = SG_RUNE_COMPACT_FIELD_STANDING,
+		.hook_phase = SG_HOST_HOOK_IDLE
+	},
+	.owner_epoch = 12U,
+	.token = 13U
+};
+
+static int ValidateTacticFrame(const void *context,
+	const sg_tactic_request_t *request,
+	const sg_tactic_frame_capability_t *frame)
+{
+	(void)context;
+	return request != NULL && frame == &tactic_frame && frame->token == 13U;
+}
+
+static int ValidateTacticModifier(const void *context,
+	const sg_tactic_request_t *request, const sg_tactic_modifier_t *modifier)
+{
+	(void)context;
+	return request != NULL && modifier != NULL && modifier->source_id != 0U;
+}
+
+static int ValidateTacticProbe(const void *context,
+	const sg_tactic_request_t *request,
+	const sg_tactic_capability_descriptor_t *descriptor,
+	const sg_tactic_candidate_t *candidate,
+	sg_rune_compact_field_cost_t nominal_cost)
+{
+	(void)context;
+	return request != NULL && descriptor != NULL && candidate != NULL &&
+		nominal_cost.units != SG_RUNE_COMPACT_FIELD_COST_UNAVAILABLE;
+}
+
+static const sg_tactic_authority_t tactic_authority = {
+	.validate_frame = ValidateTacticFrame,
+	.validate_modifier = ValidateTacticModifier,
+	.validate_probe = ValidateTacticProbe
+};
+
 static sg_tactic_request_t TacticRequest(void)
 {
 	return (sg_tactic_request_t){
@@ -91,32 +148,37 @@ static sg_tactic_request_t TacticRequest(void)
 			.rune_identity = 99U,
 			.pose_revision = 4U,
 			.now_ms = 500U,
-			.phase_coordinate = { 1U, 0U },
+			.cell = { 1U },
 			.phase = SG_TACTIC_PHASE_GROUND,
-			.supported = 1U
+			.stance = SG_RUNE_STANCE_VALID_STANDING,
+			.supported = 1U,
+			.hook_phase = SG_HOST_HOOK_IDLE
 		},
 		.gradient = {
-			.rune_identity = 99U,
 			.field_generation = 3U,
 			.pose_revision = 4U,
 			.sampled_at_ms = 500U,
-			.phase_coordinate = { 1U, 0U },
-			.next_phase_coordinate = { 2U, 1U },
-			.phase = SG_TACTIC_PHASE_GROUND,
-			.cost_ms = 50U,
-			.field_capability_families = {
-				SG_FIELD_CAPABILITY_FAMILY_BIT(
-					SG_RUNE_CAPABILITY_CONTINUOUS_SUPPORT).bits
+			.current_cell = { 1U },
+			.transition = {
+				.v12 = {
+					.kind = SG_RUNE_COMPACT_FIELD_TRANSITION_PORTAL,
+					.cost_to_go = { .units = UINT64_C(205) },
+					.next_cost_to_go = { .units = UINT64_C(82) },
+					.target_stance = SG_RUNE_COMPACT_FIELD_STANDING,
+					.value.portal = {
+						.local_cost = 1.0f,
+						.next_cell = { 2U },
+						.next_portal = { 3U }
+					}
+				},
+				.target_hook_phase = SG_HOST_HOOK_IDLE
 			},
-			.field_transition_kind = SG_RUNE_PHASE_TRANSITION_NONE,
-			.capability_mask = SG_TACTIC_CAPABILITY_BIT(
-				SG_TACTIC_CAPABILITY_WALK),
-			.direction = { 1.0f, 0.0f, 0.0f },
-			.velocity_direction = { 0.0f, 1.0f, 0.0f },
-			.finite = 1U
+			.descent_direction = { 1.0f, 0.0f, 0.0f }
 		},
+		.frame = &tactic_frame,
 		.legal_capability_mask = SG_TACTIC_CAPABILITY_BIT(
-			SG_TACTIC_CAPABILITY_WALK)
+			SG_TACTIC_CAPABILITY_WALK),
+		.authority = &tactic_authority
 	};
 }
 
@@ -126,10 +188,14 @@ static void TestTacticBindingsAndResults(void)
 	sg_tactic_modifier_t modifiers[17];
 	sg_tactic_result_t result = {
 		.status = SG_TACTIC_RESULT_PROGRESS,
-		.failure = SG_TACTIC_FAILURE_NONE,
 		.capability = SG_TACTIC_CAPABILITY_WALK,
-		.target_phase = { 2U, 1U },
-		.expected_cost_ms = 60U,
+		.successor = {
+			.cell = { 2U },
+			.stance = SG_RUNE_COMPACT_FIELD_STANDING,
+			.hook_phase = SG_HOST_HOOK_IDLE
+		},
+		.target_phase = SG_TACTIC_PHASE_GROUND,
+		.nominal_cost = { .units = UINT64_C(246) },
 		.progress = 0.5f
 	};
 	size_t modifier;
@@ -141,6 +207,11 @@ static void TestTacticBindingsAndResults(void)
 		modifiers[modifier].kind = (sg_tactic_modifier_kind_t)
 			(modifier % (size_t)SG_TACTIC_MODIFIER_KIND_COUNT);
 		modifiers[modifier].source_id = (uint32_t)modifier + 1U;
+		modifiers[modifier].capability_mask = SG_TACTIC_CAPABILITY_BIT(
+			SG_TACTIC_CAPABILITY_WALK);
+		modifiers[modifier].target_kind =
+			SG_TACTIC_MODIFIER_TARGET_EXACT_SUCCESSOR;
+		modifiers[modifier].target = result.successor;
 		modifiers[modifier].expires_at_ms = 501U;
 		modifiers[modifier].active = 1U;
 	}
@@ -155,26 +226,28 @@ static void TestTacticBindingsAndResults(void)
 	request.gradient.sampled_at_ms++;
 	CHECK(!SG_TacticRequestValid(&request));
 	request = TacticRequest();
-	request.gradient.phase = SG_TACTIC_PHASE_AIR;
+	request.gradient.current_cell.value++;
 	CHECK(!SG_TacticRequestValid(&request));
 	request = TacticRequest();
-	request.gradient.phase_coordinate.phase_id++;
-	CHECK(!SG_TacticRequestValid(&request));
-	request = TacticRequest();
-	request.gradient.field_capability_families.bits =
-		SG_FIELD_CAPABILITY_FAMILY_MASK + 1U;
+	request.gradient.transition.v12.value.portal.next_portal.value =
+		SG_RUNE_COMPACT_INDEX_NONE;
 	CHECK(!SG_TacticRequestValid(&request));
 	CHECK(SG_TacticResultValid(&result));
 	result.failure = SG_TACTIC_FAILURE_LIVE_STATE;
 	CHECK(!SG_TacticResultValid(&result));
 	result.status = SG_TACTIC_RESULT_RETRY;
-	result.expected_cost_ms = SG_DESTINATION_COST_INFINITE;
+	result.successor.cell.value = SG_RUNE_COMPACT_INDEX_NONE;
+	result.successor.stance = SG_RUNE_COMPACT_FIELD_STANCE_COUNT;
+	result.successor.hook_phase =
+		(sg_host_hook_phase_t)(SG_HOST_HOOK_COAST + 1);
+	result.target_phase = SG_TACTIC_PHASE_COUNT;
+	result.nominal_cost.units = 0U;
 	result.progress = 0.0f;
 	CHECK(SG_TacticResultValid(&result));
 	result.failure = SG_TACTIC_FAILURE_NONE;
 	CHECK(!SG_TacticResultValid(&result));
 	result.failure = SG_TACTIC_FAILURE_LIVE_STATE;
-	result.expected_cost_ms = 10U;
+	result.nominal_cost.units = 1U;
 	CHECK(!SG_TacticResultValid(&result));
 }
 

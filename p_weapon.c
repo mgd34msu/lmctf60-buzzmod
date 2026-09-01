@@ -2147,6 +2147,10 @@ static edict_t *LMCTF_FireHumanHook(edict_t *self, vec3_t start,
 	if (tr.fraction < 1.0)
 	{
 		VectorMA(bolt->s.origin, -10, dir, bolt->s.origin);
+		/* Base LMCTF passed NULL here, but hook_touch dereferences the plane
+		 * when this launch trace hits a damageable target. Supplying this
+		 * trace's plane is limited to the immediate-obstruction branch;
+		 * ordinary missile flight still uses the engine's touch callback. */
 		bolt->touch(bolt, tr.ent, &tr.plane, NULL);
 	}
 	return bolt;

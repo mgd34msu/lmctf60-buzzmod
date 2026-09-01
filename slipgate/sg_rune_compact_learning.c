@@ -1,3 +1,5 @@
+#include "sg_human_trace.h"
+
 #define SG_RUNE_COMPACT_LEARNING_OWNER_PRIVATE 1
 #include "sg_rune_compact_learning_owner.h"
 #undef SG_RUNE_COMPACT_LEARNING_OWNER_PRIVATE
@@ -34,6 +36,7 @@ struct sg_rune_compact_learning_observation_s
 	sg_rune_compact_learning_key_t key;
 	uint64_t value_q16;
 	learning_source_t source;
+	uint8_t consumed;
 };
 
 static int CompareU32(uint32_t left, uint32_t right)
@@ -52,19 +55,27 @@ static int ReservedZero(const uint8_t reserved[3])
 	return reserved[0] == 0U && reserved[1] == 0U && reserved[2] == 0U;
 }
 
-static int TraversalCompare(const sg_rune_compact_learning_traversal_ref_t *left,
-	const sg_rune_compact_learning_traversal_ref_t *right)
+static int CostCompare(
+	const sg_rune_compact_learning_stable_cell_capability_cost_ref_t *left,
+	const sg_rune_compact_learning_stable_cell_capability_cost_ref_t *right)
 {
-	int comparison = CompareU32(left->source_cell.value,
-		right->source_cell.value);
+	int comparison = CompareU32(left->cell.value, right->cell.value);
 
 	if (comparison == 0)
-		comparison = CompareU32(left->target_cell.value,
-			right->target_cell.value);
+		comparison = CompareU32(left->capability.value,
+			right->capability.value);
 	if (comparison == 0)
-		comparison = CompareU32(left->portal.value, right->portal.value);
-	if (comparison == 0)
-		comparison = CompareU32(left->movement_field, right->movement_field);
+		comparison = CompareU32((uint32_t)left->stance,
+			(uint32_t)right->stance);
+	return comparison;
+}
+
+static int LandingCompare(
+	const sg_rune_compact_learning_landing_preference_ref_t *left,
+	const sg_rune_compact_learning_landing_preference_ref_t *right)
+{
+	int comparison = CompareU32(left->cell.value, right->cell.value);
+
 	if (comparison == 0)
 		comparison = CompareU32((uint32_t)left->stance,
 			(uint32_t)right->stance);
@@ -81,16 +92,16 @@ static int CanonicalizeKey(const sg_rune_compact_learning_key_t *input,
 	memset(output, 0, sizeof(*output));
 	output->kind = input->kind;
 	switch (input->kind) {
-	case SG_RUNE_COMPACT_LEARNING_LOCAL_TRAVERSAL:
-		output->value.traversal = input->value.traversal;
+	case SG_RUNE_COMPACT_LEARNING_STABLE_CELL_CAPABILITY_COST:
+		output->value.cost = input->value.cost;
 		return 1;
-	case SG_RUNE_COMPACT_LEARNING_LANDING:
+	case SG_RUNE_COMPACT_LEARNING_LANDING_PREFERENCE:
 		output->value.landing = input->value.landing;
 		return 1;
-	case SG_RUNE_COMPACT_LEARNING_TACTIC:
-		output->value.tactic = input->value.tactic;
+	case SG_RUNE_COMPACT_LEARNING_TACTICAL_PRIOR:
+		output->value.tactical = input->value.tactical;
 		return 1;
-	case SG_RUNE_COMPACT_LEARNING_STRATEGY:
+	case SG_RUNE_COMPACT_LEARNING_STRATEGY_OUTCOME:
 		output->value.strategy = input->value.strategy;
 		return 1;
 	case SG_RUNE_COMPACT_LEARNING_KIND_COUNT:
@@ -107,23 +118,23 @@ static int KeyCompare(const sg_rune_compact_learning_key_t *left,
 	if (comparison != 0)
 		return comparison;
 	switch (left->kind) {
-	case SG_RUNE_COMPACT_LEARNING_LOCAL_TRAVERSAL:
-		return TraversalCompare(&left->value.traversal,
-			&right->value.traversal);
-	case SG_RUNE_COMPACT_LEARNING_LANDING:
-		return TraversalCompare(&left->value.landing, &right->value.landing);
-	case SG_RUNE_COMPACT_LEARNING_TACTIC:
-		comparison = CompareU32(left->value.tactic.cell.value,
-			right->value.tactic.cell.value);
+	case SG_RUNE_COMPACT_LEARNING_STABLE_CELL_CAPABILITY_COST:
+		return CostCompare(&left->value.cost, &right->value.cost);
+	case SG_RUNE_COMPACT_LEARNING_LANDING_PREFERENCE:
+		return LandingCompare(&left->value.landing, &right->value.landing);
+	case SG_RUNE_COMPACT_LEARNING_TACTICAL_PRIOR:
+		comparison = CompareU32(left->value.tactical.cell.value,
+			right->value.tactical.cell.value);
 		return comparison != 0 ? comparison : CompareU32(
-			left->value.tactic.weapon_kernel,
-			right->value.tactic.weapon_kernel);
-	case SG_RUNE_COMPACT_LEARNING_STRATEGY:
-		comparison = CompareU32(left->value.strategy.cell.value,
-			right->value.strategy.cell.value);
-		return comparison != 0 ? comparison : CompareU32(
+			left->value.tactical.weapon_kernel,
+			right->value.tactical.weapon_kernel);
+	case SG_RUNE_COMPACT_LEARNING_STRATEGY_OUTCOME:
+		comparison = CompareU32(
 			left->value.strategy.landmark.value,
 			right->value.strategy.landmark.value);
+		return comparison != 0 ? comparison : CompareU32(
+			(uint32_t)left->value.strategy.outcome,
+			(uint32_t)right->value.strategy.outcome);
 	case SG_RUNE_COMPACT_LEARNING_KIND_COUNT:
 		break;
 	}
@@ -142,79 +153,137 @@ static int Current(const sg_rune_compact_learning_t *learning)
 			&learning->expected_identity);
 }
 
-static int PortalConnects(const sg_rune_compact_model_t *model,
-	uint32_t portal_index, uint32_t source_cell, uint32_t target_cell)
+static int CostValid(const sg_rune_compact_model_t *model,
+	const sg_rune_compact_learning_stable_cell_capability_cost_ref_t *reference)
 {
-	const sg_rune_compact_portal_t *portal;
-	uint32_t negative;
-	uint32_t positive;
+	const sg_rune_movement_capability_t *capability;
 
-	if (portal_index >= model->portal_count || source_cell >= model->cell_count ||
-		target_cell >= model->cell_count)
+	if (model == NULL || reference == NULL ||
+		!ReservedZero(reference->reserved) || !StanceValid(reference->stance) ||
+		reference->cell.value >= model->cell_count ||
+		reference->capability.value >= model->movement_capability_count)
 		return 0;
-	portal = &model->portals[portal_index];
-	negative = model->incidences[portal->negative_incidence.value].cell.value;
-	positive = model->incidences[portal->positive_incidence.value].cell.value;
-	return (source_cell == negative && target_cell == positive &&
-		(portal->direction == SG_RUNE_PORTAL_CONTINUITY_BOTH ||
-		 portal->direction == SG_RUNE_PORTAL_CONTINUITY_NEGATIVE_TO_POSITIVE)) ||
-		(source_cell == positive && target_cell == negative &&
-		(portal->direction == SG_RUNE_PORTAL_CONTINUITY_BOTH ||
-		 portal->direction == SG_RUNE_PORTAL_CONTINUITY_POSITIVE_TO_NEGATIVE));
-}
-
-static int TraversalValid(const sg_rune_compact_model_t *model,
-	const sg_rune_compact_learning_traversal_ref_t *reference)
-{
-	const sg_rune_movement_field_attachment_t *field;
-
-	if (!ReservedZero(reference->reserved) || !StanceValid(reference->stance) ||
-		reference->movement_field >= model->movement_field_count ||
-		!PortalConnects(model, reference->portal.value,
-			reference->source_cell.value, reference->target_cell.value))
-		return 0;
-	field = &model->movement_fields[reference->movement_field];
-	return field->cell.value == reference->source_cell.value &&
-		field->boundary_portal.value == reference->portal.value &&
-		(field->valid_stances & reference->stance) != 0U &&
-		(model->cells[reference->source_cell.value].valid_stances &
-			reference->stance) != 0U &&
-		(model->cells[reference->target_cell.value].valid_stances &
-			reference->stance) != 0U &&
-		(model->portals[reference->portal.value].valid_stances &
+	capability = &model->movement_capabilities[reference->capability.value];
+	return capability->cell.value == reference->cell.value &&
+		(capability->source_stances & reference->stance) != 0U &&
+		(model->cells[reference->cell.value].valid_stances &
 			reference->stance) != 0U;
 }
 
-static int TacticValid(const sg_rune_compact_model_t *model,
-	const sg_rune_compact_learning_tactic_ref_t *reference)
+static int LandingValid(const sg_rune_compact_model_t *model,
+	const sg_rune_compact_learning_landing_preference_ref_t *reference)
 {
-	const sg_rune_weapon_response_kernel_t *kernel;
-
-	if (reference->cell.value >= model->cell_count ||
-		reference->weapon_kernel >= model->weapon_kernel_count)
-		return 0;
-	kernel = &model->weapon_kernels[reference->weapon_kernel];
-	return kernel->region.value < model->weapon_region_count &&
-		model->weapon_regions[kernel->region.value].cell.value ==
-			reference->cell.value;
+	return model != NULL && reference != NULL &&
+		ReservedZero(reference->reserved) && StanceValid(reference->stance) &&
+		reference->cell.value < model->cell_count &&
+		(model->cells[reference->cell.value].valid_stances &
+			reference->stance) != 0U;
 }
 
-static int StrategyValid(const sg_rune_compact_model_t *model,
-	const sg_rune_compact_learning_strategy_ref_t *reference)
+static int SpanWithin(uint32_t first, uint32_t count, uint32_t limit)
 {
-	const sg_rune_compact_static_t *static_data = model->static_data;
-	const sg_rune_compact_landmark_t *landmark;
-	uint32_t index;
+	return first <= limit && count <= limit - first;
+}
 
-	if (reference->cell.value >= model->cell_count || static_data == NULL ||
-		reference->landmark.value >= static_data->landmark_count)
+static int WeaponKernelValid(const sg_rune_compact_model_t *model,
+	uint32_t kernel_index)
+{
+	const sg_rune_weapon_response_kernel_t *kernel;
+	const sg_rune_weapon_profile_t *profile;
+	sg_rune_weapon_event_law_t expected_law;
+	uint32_t expected_count;
+	uint32_t ordinal;
+
+	if (model == NULL || model->weapon_profiles == NULL ||
+		model->weapon_kernels == NULL || model->weapon_function_refs == NULL ||
+		model->analytic == NULL || kernel_index >= model->weapon_kernel_count)
 		return 0;
-	landmark = &static_data->landmarks[reference->landmark.value];
-	for (index = landmark->cells.first;
-		index < landmark->cells.first + landmark->cells.count; index++)
-		if (static_data->landmark_cells[index].value == reference->cell.value)
+	kernel = &model->weapon_kernels[kernel_index];
+	if (kernel->profile >= model->weapon_profile_count ||
+		(uint32_t)kernel->family >=
+			(uint32_t)SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT)
+		return 0;
+	profile = &model->weapon_profiles[kernel->profile];
+	if (profile->source_profile != kernel->profile + 1U ||
+		(profile->response_families &
+			SG_RUNE_WEAPON_RESPONSE_FAMILY_BIT(kernel->family)) == 0U ||
+		!SG_RuneCompactWeaponCanonicalEventLaw(profile->source_profile,
+			kernel->family, &expected_law) ||
+		kernel->event_law.kind != expected_law.kind ||
+		kernel->event_law.requirements != expected_law.requirements ||
+		!SG_RuneCompactWeaponKernelReferenceCount(profile, kernel->family,
+			&expected_count) || kernel->functions.count != expected_count ||
+		!SpanWithin(kernel->functions.first, kernel->functions.count,
+			model->weapon_function_ref_count))
+		return 0;
+	for (ordinal = 0U; ordinal < kernel->functions.count; ordinal++) {
+		const sg_rune_weapon_function_ref_t *function =
+			&model->weapon_function_refs[kernel->functions.first + ordinal];
+		sg_rune_weapon_effect_channel_t expected_channel;
+		uint32_t expected_instance;
+		sg_rune_analytic_output_meaning_t expected_output;
+
+		if (function->function.value >= model->analytic->function_count ||
+			!SG_RuneCompactWeaponFunctionRefExpected(profile, kernel->family,
+				ordinal, &expected_channel, &expected_instance, &expected_output) ||
+			function->channel != expected_channel ||
+			function->instance != expected_instance ||
+			model->analytic->functions[function->function.value].output !=
+				expected_output)
+			return 0;
+	}
+	return 1;
+}
+
+static int CertifiedResponseForCell(const sg_rune_compact_model_t *model,
+	uint32_t cell_index)
+{
+	uint32_t fragment_index;
+
+	if (model == NULL || cell_index >= model->cell_count ||
+		model->response.source_fragments == NULL ||
+		model->response.source_fragment_count == 0U)
+		return 0;
+	for (fragment_index = 0U;
+		fragment_index < model->response.source_fragment_count;
+		fragment_index++) {
+		const sg_rune_compact_response_fragment_t *fragment =
+			&model->response.source_fragments[fragment_index];
+
+		/* Source fragments are the normalized response authority.  A tactic
+		 * may be learned in any response-bearing cell; it does not need a
+		 * HOOK movement attachment. */
+		if (fragment->parent_cell.value == cell_index &&
+			fragment->valid_stances != 0U &&
+			SpanWithin(fragment->boundary_incidences.first,
+				fragment->boundary_incidences.count,
+				model->cell_incidence_count))
 			return 1;
+	}
 	return 0;
+}
+
+static int TacticalPriorValid(const sg_rune_compact_model_t *model,
+	const sg_rune_compact_learning_tactical_prior_ref_t *reference)
+{
+	return reference != NULL && model != NULL &&
+		reference->cell.value < model->cell_count &&
+		WeaponKernelValid(model, reference->weapon_kernel) &&
+		CertifiedResponseForCell(model, reference->cell.value);
+}
+
+static int StrategyOutcomeValid(const sg_rune_compact_model_t *model,
+	const sg_rune_compact_learning_strategy_outcome_ref_t *reference)
+{
+	const sg_rune_compact_static_t *static_data;
+
+	if (model == NULL || reference == NULL)
+		return 0;
+	static_data = model->static_data;
+	return static_data != NULL &&
+		reference->landmark.value < static_data->landmark_count &&
+		(uint32_t)reference->outcome <
+			(uint32_t)SG_RUNE_COMPACT_LEARNING_STRATEGY_OUTCOME_COUNT;
 }
 
 static int KeyValid(const sg_rune_compact_model_t *model,
@@ -223,14 +292,14 @@ static int KeyValid(const sg_rune_compact_model_t *model,
 	if (key == NULL)
 		return 0;
 	switch (key->kind) {
-	case SG_RUNE_COMPACT_LEARNING_LOCAL_TRAVERSAL:
-		return TraversalValid(model, &key->value.traversal);
-	case SG_RUNE_COMPACT_LEARNING_LANDING:
-		return TraversalValid(model, &key->value.landing);
-	case SG_RUNE_COMPACT_LEARNING_TACTIC:
-		return TacticValid(model, &key->value.tactic);
-	case SG_RUNE_COMPACT_LEARNING_STRATEGY:
-		return StrategyValid(model, &key->value.strategy);
+	case SG_RUNE_COMPACT_LEARNING_STABLE_CELL_CAPABILITY_COST:
+		return CostValid(model, &key->value.cost);
+	case SG_RUNE_COMPACT_LEARNING_LANDING_PREFERENCE:
+		return LandingValid(model, &key->value.landing);
+	case SG_RUNE_COMPACT_LEARNING_TACTICAL_PRIOR:
+		return TacticalPriorValid(model, &key->value.tactical);
+	case SG_RUNE_COMPACT_LEARNING_STRATEGY_OUTCOME:
+		return StrategyOutcomeValid(model, &key->value.strategy);
 	case SG_RUNE_COMPACT_LEARNING_KIND_COUNT:
 		break;
 	}
@@ -323,9 +392,31 @@ struct sg_rune_compact_learning_issuer_s
 	const sg_rune_compact_model_t *model;
 	sg_rune_compact_identity_t expected_identity;
 	learning_source_t source;
+	const sg_human_trace_v3_scope_acceptance_t *human_scope;
+	uint32_t human_client_id;
+	uint64_t human_spawn_generation;
 };
 
-static int IssuerCurrent(const sg_rune_compact_learning_issuer_t *issuer)
+static int HumanScopeCurrent(
+	const sg_human_trace_v3_scope_acceptance_t *scope,
+	uint32_t *client_id_out, uint64_t *spawn_generation_out)
+{
+	const sg_human_trace_v3_spool_ref_t *root = NULL;
+	uint32_t client_id = 0U;
+	uint64_t spawn_generation = 0U;
+
+	if (scope == NULL || !SG_HumanTraceAcceptedV3ScopeView(scope, &root,
+		&client_id, &spawn_generation) || root == NULL || client_id == 0U ||
+		spawn_generation == 0U)
+		return 0;
+	if (client_id_out != NULL)
+		*client_id_out = client_id;
+	if (spawn_generation_out != NULL)
+		*spawn_generation_out = spawn_generation;
+	return 1;
+}
+
+static int IssuerModelCurrent(const sg_rune_compact_learning_issuer_t *issuer)
 {
 	return issuer != NULL && issuer->model != NULL &&
 		(uint32_t)issuer->source < (uint32_t)LEARNING_SOURCE_COUNT &&
@@ -333,10 +424,25 @@ static int IssuerCurrent(const sg_rune_compact_learning_issuer_t *issuer)
 			&issuer->expected_identity);
 }
 
+static int IssuerCurrent(const sg_rune_compact_learning_issuer_t *issuer)
+{
+	uint32_t client_id;
+	uint64_t spawn_generation;
+
+	if (!IssuerModelCurrent(issuer))
+		return 0;
+	if (issuer->source != LEARNING_SOURCE_HUMAN)
+		return 1;
+	return HumanScopeCurrent(issuer->human_scope, &client_id,
+		&spawn_generation) && client_id == issuer->human_client_id &&
+		spawn_generation == issuer->human_spawn_generation;
+}
+
 static sg_rune_compact_learning_status_t IssuerAcquire(
 	const sg_rune_compact_model_t *model,
 	const sg_rune_compact_identity_t *expected_identity,
 	learning_source_t source,
+	const sg_human_trace_v3_scope_acceptance_t *human_scope,
 	sg_rune_compact_learning_issuer_t **issuer_out,
 	sg_rune_compact_error_t *model_error_out)
 {
@@ -344,13 +450,24 @@ static sg_rune_compact_learning_status_t IssuerAcquire(
 	sg_rune_compact_error_t local_error;
 	sg_rune_compact_error_t *error = model_error_out != NULL ? model_error_out :
 		&local_error;
+	uint32_t human_client_id = 0U;
+	uint64_t human_spawn_generation = 0U;
 
 	if (model == NULL || expected_identity == NULL || issuer_out == NULL ||
 		(uint32_t)source >= (uint32_t)LEARNING_SOURCE_COUNT)
 		return SG_RUNE_COMPACT_LEARNING_INVALID_ARGUMENT;
+	if (source == LEARNING_SOURCE_HUMAN) {
+		if (!HumanScopeCurrent(human_scope, &human_client_id,
+			&human_spawn_generation))
+			return SG_RUNE_COMPACT_LEARNING_UNAUTHENTICATED;
+	} else if (human_scope != NULL) {
+		return SG_RUNE_COMPACT_LEARNING_INVALID_ARGUMENT;
+	}
 	if (!SG_RuneCompactModelValidateBound(model, expected_identity, error))
 		return error->code == SG_RUNE_COMPACT_ERROR_IDENTITY_MISMATCH ?
 			SG_RUNE_COMPACT_LEARNING_IDENTITY_MISMATCH :
+			error->code == SG_RUNE_COMPACT_ERROR_OUT_OF_MEMORY ?
+			SG_RUNE_COMPACT_LEARNING_ALLOCATION_FAILED :
 			SG_RUNE_COMPACT_LEARNING_INVALID_MODEL;
 	issuer = calloc(1U, sizeof(*issuer));
 	if (issuer == NULL)
@@ -358,6 +475,9 @@ static sg_rune_compact_learning_status_t IssuerAcquire(
 	issuer->model = model;
 	issuer->expected_identity = *expected_identity;
 	issuer->source = source;
+	issuer->human_scope = human_scope;
+	issuer->human_client_id = human_client_id;
+	issuer->human_spawn_generation = human_spawn_generation;
 	*issuer_out = issuer;
 	return SG_RUNE_COMPACT_LEARNING_OK;
 }
@@ -365,11 +485,12 @@ static sg_rune_compact_learning_status_t IssuerAcquire(
 sg_rune_compact_learning_status_t SG_RuneCompactLearningIssuerAcquireHuman(
 	const sg_rune_compact_model_t *model,
 	const sg_rune_compact_identity_t *expected_identity,
+	const sg_human_trace_v3_scope_acceptance_t *accepted_scope,
 	sg_rune_compact_learning_issuer_t **issuer_out,
 	sg_rune_compact_error_t *model_error_out)
 {
 	return IssuerAcquire(model, expected_identity, LEARNING_SOURCE_HUMAN,
-		issuer_out, model_error_out);
+		accepted_scope, issuer_out, model_error_out);
 }
 
 sg_rune_compact_learning_status_t SG_RuneCompactLearningIssuerAcquireBot(
@@ -379,7 +500,7 @@ sg_rune_compact_learning_status_t SG_RuneCompactLearningIssuerAcquireBot(
 	sg_rune_compact_error_t *model_error_out)
 {
 	return IssuerAcquire(model, expected_identity, LEARNING_SOURCE_BOT,
-		issuer_out, model_error_out);
+		NULL, issuer_out, model_error_out);
 }
 
 void SG_RuneCompactLearningIssuerDestroy(
@@ -399,8 +520,10 @@ sg_rune_compact_learning_status_t SG_RuneCompactLearningIssuerIssue(
 
 	if (issuer == NULL || claim == NULL || observation_out == NULL)
 		return SG_RUNE_COMPACT_LEARNING_INVALID_ARGUMENT;
-	if (!IssuerCurrent(issuer))
+	if (!IssuerModelCurrent(issuer))
 		return SG_RUNE_COMPACT_LEARNING_IDENTITY_MISMATCH;
+	if (issuer->source == LEARNING_SOURCE_HUMAN && !IssuerCurrent(issuer))
+		return SG_RUNE_COMPACT_LEARNING_UNAUTHENTICATED;
 	if (!CanonicalizeKey(&claim->key, &key))
 		return SG_RUNE_COMPACT_LEARNING_INVALID_OBSERVATION;
 	if (!KeyValid(issuer->model, &key))
@@ -415,6 +538,7 @@ sg_rune_compact_learning_status_t SG_RuneCompactLearningIssuerIssue(
 	memcpy(&observation->key, &key, sizeof(observation->key));
 	observation->value_q16 = value_q16;
 	observation->source = issuer->source;
+	observation->consumed = 0U;
 	*observation_out = observation;
 	return SG_RUNE_COMPACT_LEARNING_OK;
 }
@@ -435,6 +559,8 @@ sg_rune_compact_learning_status_t SG_RuneCompactLearningCreate(
 	if (!SG_RuneCompactModelValidateBound(model, expected_identity, error))
 		return error->code == SG_RUNE_COMPACT_ERROR_IDENTITY_MISMATCH ?
 			SG_RUNE_COMPACT_LEARNING_IDENTITY_MISMATCH :
+			error->code == SG_RUNE_COMPACT_ERROR_OUT_OF_MEMORY ?
+			SG_RUNE_COMPACT_LEARNING_ALLOCATION_FAILED :
 			SG_RUNE_COMPACT_LEARNING_INVALID_MODEL;
 	learning = calloc(1U, sizeof(*learning));
 	if (learning == NULL)
@@ -461,7 +587,7 @@ void SG_RuneCompactLearningObservationDestroy(
 
 sg_rune_compact_learning_status_t SG_RuneCompactLearningApply(
 	sg_rune_compact_learning_t *learning,
-	const sg_rune_compact_learning_observation_t *observation,
+	sg_rune_compact_learning_observation_t *observation,
 	sg_rune_compact_learning_prior_t *prior_out)
 {
 	uint32_t index;
@@ -477,6 +603,8 @@ sg_rune_compact_learning_status_t SG_RuneCompactLearningApply(
 	if (observation->magic != SG_RUNE_COMPACT_LEARNING_OBSERVATION_MAGIC ||
 		(uint32_t)observation->source >= (uint32_t)LEARNING_SOURCE_COUNT)
 		return SG_RUNE_COMPACT_LEARNING_UNAUTHENTICATED;
+	if (observation->consumed != 0U)
+		return SG_RUNE_COMPACT_LEARNING_INVALID_OBSERVATION;
 	if (!CanonicalizeKey(&observation->key, &canonical_key) ||
 		memcmp(&canonical_key, &observation->key, sizeof(canonical_key)) != 0)
 		return SG_RUNE_COMPACT_LEARNING_INVALID_OBSERVATION;
@@ -498,6 +626,7 @@ sg_rune_compact_learning_status_t SG_RuneCompactLearningApply(
 	AddObservation(&learning->priors[index], observation->source,
 		observation->value_q16);
 	memcpy(prior_out, &learning->priors[index], sizeof(*prior_out));
+	observation->consumed = 1U;
 	return SG_RUNE_COMPACT_LEARNING_OK;
 }
 

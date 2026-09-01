@@ -21,11 +21,12 @@ publication out of scope.
 
 | Area | Current state |
 |---|---|
-| Architectural state | Compact model, analytics, localization, destination fields, wire, readers, exact geometry materialization, artifact publication, learning priors, and the source-bound BSP builder are accepted. Static semantics, movement, weapons, composition, production cutover, and legacy deletion remain. |
+| Dependency graph | 13 of 54 execution nodes are complete; 20 are under active integration; 21 are waiting on dependencies. Phases 7-9 have not started. |
+| Architectural state | The canonical C reader, compact artifact runner, exact fixed-point directional field, spatial index, localization and sparse-belief production wiring, weapon-field unit, movement-field unit, corrected mechanism unit, and corrected tactic selector exist and pass focused checks. Exact spatial integration, v12 model/composer/wire integration, producer adaptation, and live strategy/tactic caller cutover remain before the partial graph nodes can close. |
 | Generation | Stopped: no corpus controller, generator, acceptor, or finalizer runs; the repository has zero `.rune` files and zero obsolete repair sidecars. Retained demos and human-derived analysis are evidence only. |
 | Source refs | Local `slipgate` contains the contract freeze and is ahead of local `main` and both remotes. Do not push or start remote CI. Reunify local `main` only after the final source gates pass. |
-| Existing strengths | Map/physics identity, host collision and Pmove, mechanisms, entities, weapon laws, human capture, atomic publication, readers, corpus control, installation, and fleet tooling require review. |
-| Invalidated work | Objective-core pruning, `complete`/`local_only` wire validity, route-only acceptance, action-labelled route ownership, production Dijkstra repair, fixed-grid/face-anchor coverage, and old RUNE/corpus evidence are superseded. |
+| Existing strengths | Map/physics identity, host collision and Pmove, mechanisms, entities, weapon laws, human capture, and atomic publication require review. Existing Python corpus, finalizer, bundle, fleet, analysis, and test tooling is not an implementation contract. Delete it unless the final path needs the behavior, then implement the smallest required C or shell operation. |
+| Invalidated work | Objective-core pruning, objective-gated wire validity, special release acceptance, action-labelled route ownership, production Dijkstra repair, fixed-grid/face-anchor coverage, and old RUNE/corpus evidence are superseded. |
 | Freeze and release | Not started; no present-source artifact is eligible for the final corpus. |
 
 ## Non-negotiable design and operating rules
@@ -69,6 +70,9 @@ publication out of scope.
   as authority to invent a connection absent from BSP and physics.
 - Commit coherent units locally. Do not push or freeze while source, tests,
   documentation, or wire contracts change.
+- The repository contains no Python source, tests, build hooks, runtime, or
+  documentation. Game, generator, reader, and bot behavior is C. Build and
+  release orchestration is shell and Make.
 - `tools/rune-corpus-maps.txt` is the sole 175-map authority;
   `tools/topmaps.txt` is only an ordinary map schedule. Of 180 durable BSPs,
   unsuffixed `lmctf05`, `smap31`, `xmap07`, `xmap11`, and `xmap14` are excluded
@@ -139,7 +143,7 @@ Disposition terms are strict:
 | COM-4 | Preserve family-specific effects: rail penetration and lanes; automatic-weapon exposure/spread; shotgun cone occupancy; bolt arrival; rocket impact-surface and occluded splash choice; grenade arc/bounce/fuse/area denial; BFG behavior. | Several cases exist in `sg_combat.c` and host weapons. **Thoroughly review/reshape.** | Static affordance queries and live shots agree with host behavior for each family, including wall/floor shots that outperform aiming at a belief mean. |
 | LRN-1 | Human traces capture lossless command/Pmove and hook lifecycle data without changing player behavior. | Exact source-bound passive capture, hook lifecycle coverage, rotation, recovery, and fail-closed write handling are accepted. Learning consumers remain a separate migration. | Two independent playthroughs can be isolated by client and frame range, replayed in order, and shown not to alter human input or hook behavior. |
 | LRN-2 | Human evidence may refine runtime tactic priors, costs, landing preferences, and strategy. It may not create geometry or bypass host collision. Post-match learning is required; live learning is optional after transactional safety is checked. | Compact identity-bound priors are accepted. **Migrate callers; delete edge nomination.** | A learned update is exact-bound, engine-checked, atomic, rollback-safe, and cannot connect physically disconnected cells. |
-| VIS-1 | A client visualization of cells, gradients, beliefs, visibility, or weapon affordances is optional demonstration work, never a freeze blocker. | `tools/runeview.py` may provide a starting point. **Defer and review if scheduled.** | When implemented, visualization is read-only and matches the loaded artifact; absence cannot block release. |
+| VIS-1 | A client visualization of cells, gradients, beliefs, visibility, or weapon affordances is optional demonstration work, never a freeze blocker. | No retained implementation is required. If scheduled later, implement it through the game client and the loaded C model. | When implemented, visualization is read-only and matches the loaded artifact; absence cannot block release. |
 
 ### Wire format, validation, tooling, and release
 
@@ -147,12 +151,12 @@ Disposition terms are strict:
 |---|---|---|---|
 | ART-1 | Define a versioned little-endian wire format for cells, portals, movement fields, weapon-response regions and kernels, mechanism references, costs, identities, and checksums. | Codec/file/stream/loader/writer code is a **review/reshape** candidate; the seed/link schema is **delete**. | Truncation, overflow, unknown versions, invalid references, CRC drift, and hostile counts fail before publication. |
 | ART-2 | Publication remains fail-closed and atomic. A rejected candidate never replaces the published artifact, and mixed RUNE/sidecar state is impossible. | Compact publication is accepted. **Migrate callers; review installer and sidecars.** | Fault injection at every write, sync, rename, validation, and restart point converges to old-complete or new-complete state. |
-| ART-3 | Replace objective-centric `complete`/`local_only` wire validity with configuration-space completeness. Objective reachability is a gameplay diagnostic derived from destinations, not artifact truth. | `sg_rune_contract.h`, controller policy, finalizer, validators, and plan tests are **replace**. | A complete disconnected BSP remains faithfully represented; a missing valid cell/portal fails even if both flags are mutually reachable. |
-| ART-4 | Maintain independent GNU C, Make C, and Python readers, linear semantic validation, exact-bound sidecars where applicable, and fresh-process cold load. | The readers and loader probe are **review/keep**. Delete the complete-model proof catalog, proof provider, required proof masks, and duplicate expected-model arrays. | Readers agree on malformed and valid artifacts using identity, format, count, span, reference, order, finite-value, checksum, and load rules without importing generation logic. |
+| ART-3 | Use configuration-space completeness as the sole artifact validity rule. Objective reachability is a gameplay diagnostic derived from destinations, not artifact truth. | `sg_rune_contract.h`, controller policy, finalizer, validators, and plan tests are **replace**. | A complete disconnected BSP remains faithfully represented; a missing valid cell/portal fails even if both objectives are mutually reachable. |
+| ART-4 | Use one canonical C wire inspector for runtime loading, the command-line reader, and release acceptance. Keep validation linear and retain fresh-process cold load. | Replace the independent command-line parser with a thin caller of the production inspector. Delete Python readers, duplicate C parsers, lint passes that restate wire rules, the complete-model proof catalog, the proof provider, required proof masks, and duplicate expected-model arrays. GNU and Make compile the same canonical source; they do not define separate reader contracts. | The production inspector rejects malformed artifacts and accepts valid artifacts using identity, format, count, span, reference, order, finite-value, checksum, and load rules without importing generation logic. The command-line reader and fresh bot process exercise that same implementation. |
 | ART-5 | Delete the obsolete seed/link repair sidecar rather than migrating its route-repair format. | Runtime ownership, producers, controller state, release transport, iteration and POV callers, build entries, tests, and documentation are deleted. Standalone authenticated stall evidence remains diagnostic input only. | No legacy repair-sidecar import, caller, build entry, or operational-document reference remains. Any future learned-cost sidecar is a new stable-cell or capability-kernel contract that cannot alter geometry or connectivity. |
-| ART-6 | Controller, finalizer, bundle, installer, and fleet tooling remain crash-resumable, content-addressed, and provenance-bound without generation/review deadlines. | These tools are extensive **review/reshape** candidates. | Crash/restart, stale process, partial line, duplicate worker, artifact replacement, and rollback tests pass with the new schema. |
+| ART-6 | Use the smallest C, shell, and Make release path that generates, checks, finalizes, installs, and rolls back the corpus without generation or review deadlines. | Existing Python controller, finalizer, bundle, fleet, analysis, and test programs are **delete**, not automatic C-port candidates. Keep a behavior only when a final generation, installation, match, or release step requires it. Collapse required orchestration into the existing shell and build entry points. Fleet remains optional unless selected for ordinary-match execution. | The retained path handles crash/restart, stale processes, partial lines, duplicate workers, artifact replacement, and rollback. No Python interpreter or duplicate artifact parser is required. |
 | ART-7 | Filesystem preflight verifies stable file identity portably. Linux `/proc` checks are conditional; ext4, XFS, Btrfs, ZFS, NTFS, and exFAT mounts are not rejected merely for inode semantics. Native Windows and macOS use supported platform checks or skip Linux-only diagnostics without blocking game execution. | Exact content identity now follows retained handles and mapped bytes. POSIX component walks, Windows handle paths, Linux readable mappings, relocation-backed mappings, and file-size-bounded ELF tables fail closed under independently reviewed platform fixtures. | Platform fixtures distinguish required content identity from optional OS-specific process/file diagnostics. |
-| ART-8 | Parallel generation uses 12 isolated workers with no shared writable artifact path. Hard regression maps run after the ordinary set. Worker count changes performance, not bytes. | Corpus controller already supports bounded jobs and scheduling. **Review/reshape.** | Runs with 1 test worker and 12 production workers produce byte-identical per-map output; interruption/resume is idempotent. |
+| ART-8 | Parallel generation uses 12 isolated workers with no shared writable artifact path. Hard regression maps run after the ordinary set. Worker count changes performance, not bytes. | Collapse required scheduling, resume, inspection, cold load, publication, and finalization into `tools/runegen.sh`. Delete the separate Python controller, pair runner, and finalizer. | Runs with 1 test worker and 12 production workers produce byte-identical per-map output; interruption/resume is idempotent. |
 | ART-9 | Measure construction wall time, CPU time, peak memory, cell/portal counts, and movement and weapon field counts. | Existing logs expose action-generation progress. **Replace metrics.** | The ordinary and hard development maps have reviewed scaling; `tomb05` is no longer a pathological search and no hidden terminal budget exists. |
 | REL-1 | Build the frozen BSP set by iterating the 175-map manifest. Generate every RUNE fresh after the rewrite; do not adopt old artifacts. | Existing snapshot/controller flow can support this. **Review/reshape.** | Snapshot contains exactly 175 authoritative BSPs and zero pre-rewrite RUNEs; provenance proves every accepted artifact came from frozen bytes. |
 | REL-2 | Validate and finalize all 175, assemble and install one authenticated bundle, cold-load installed maps, run ordinary match evidence, then tag and verify the local release. | Finalizer, server bundle, fleet, and release tests exist. **Thorough review/reshape.** | Every manifest map has one accepted result and installed identity; match and clean-directory release receipts bind the unchanged commit. |
@@ -165,7 +169,7 @@ phase closes:
 1. State its target contract, authority, inputs, outputs, mutable state, and
    failure behavior.
 2. Read the implementation and every production caller. Search code, generated
-   tables, and tests for old seed, link, action, objective-root, route-only,
+   tables, and tests for old seed, link, action, objective-root, release-routing,
    fixed-gravity, and Dijkstra assumptions.
 3. Compare its behavior with the host engine or wire specification. Do not use
    its existing tests as the sole oracle.
@@ -211,7 +215,7 @@ phase closes:
 - [ ] Port and review walk, crouch, ramp, jump, drop, swim, air control, hook,
   mover, push, teleport, door, button, trigger, and dwell behavior.
 - [x] Pass the non-enumerative hook-visibility feasibility gate.
-- [ ] Partition hook and weapon visibility at first-hit and silhouette
+- [x] Partition hook and weapon visibility at first-hit and silhouette
   discontinuities, with sparse occlusion regions over the shared cells.
 - [ ] Build compact local state fibers over shared cells from BSP, entity,
   mechanism, and bound-physics evidence in the compact field builder.
@@ -229,7 +233,7 @@ phase closes:
 
 - [ ] Replace seed/link localization with configuration/phase-space localization.
 - [ ] Replace `Field_Flood` with the reviewed directional field solver.
-- [ ] Add static-field caching, incremental moving-target updates, and a coarse
+- [x] Add static-field caching, incremental moving-target updates, and a coarse
   region hierarchy without changing final field values.
 - [ ] Finish the typed strategy migration. The queue and role, strike, item,
   supply, escort, intercept, carry, recovery, and human-order callers are in
@@ -246,7 +250,7 @@ phase closes:
   prediction over valid configuration space.
 - [x] Build shared static visibility and occlusion queries.
 - [x] Build host-parity weapon profiles.
-- [ ] Integrate probabilistic weapon effect with exact live pre-fire validation.
+- [x] Integrate probabilistic weapon effect with exact live pre-fire validation.
 - [ ] Bound tactical threat/opportunity deformation so it cannot replace a
   strategy or create a persistent local minimum.
 - [ ] Retarget human learning to verified costs/tactic priors and remove graph
@@ -255,9 +259,12 @@ phase closes:
 ### 6. Replace artifacts and audit all retained subsystems
 
 - [ ] Implement the new wire format and migrate loader, writer, stream,
-  publication, sidecars, independent readers, lint, and cold load.
-- [ ] Replace route-only/objective validity throughout controller, finalizer,
-  bundle, match configuration, tests, and documentation.
+  publication, the canonical C inspector, and cold load. Delete duplicate
+  parsers and validators instead of porting them.
+- [ ] Remove objective-derived validity from retained generation,
+  installation, match configuration, tests, and documentation. Delete separate
+  controller, finalizer, bundle, and fleet programs that the final path does
+  not need.
 - [ ] Complete the mandatory reusable-code review for identities, mechanisms,
   oracles, combat, perception hooks, human capture, publication, controller,
   finalizer, bundle, fleet, and platform preflight.
@@ -282,7 +289,8 @@ phase closes:
 
 ### 8. Freeze and generate all 175 RUNEs
 
-- [ ] Build warning-clean GNU and Make modules and the private Python runtime.
+- [ ] Build warning-clean GNU and Make modules and the canonical C reader. The
+  frozen toolchain contains no Python runtime or Python program.
 - [ ] Snapshot the final commit, tools, runtimes, configuration, and exactly 175
   manifest-selected BSPs. Confirm no pre-rewrite RUNE is present, then make the
   snapshot immutable.
@@ -290,8 +298,9 @@ phase closes:
   the hard regression set scheduled after the ordinary maps. Report progress
   when a map finishes or five minutes pass, including construction stage,
   coverage, capability counts, weapon-field counts, time, memory, and load state.
-- [ ] Run the fast linear checks, both C readers, Python reader, exact-bound
-  sidecar checks, and fresh-process bot load for every map. Do not rebuild map geometry or run per-map proof catalogs.
+- [ ] Run the canonical C inspector, exact-bound sidecar checks where retained,
+  and fresh-process bot load for every map. Do not rebuild map geometry, run a
+  second parser, or run per-map proof catalogs.
 - [ ] Finalize one immutable content-addressed 175-map corpus after all 175
   artifacts pass the fast checks and load successfully.
 
@@ -311,8 +320,8 @@ phase closes:
 
 ## Invalidation rules
 
-- A source, schema, tool, module, configuration, engine, Python runtime, reader,
-  linter, semantic validator, BSP, or identity-law change invalidates the
+- A source, schema, retained tool, module, configuration, engine, canonical
+  reader, BSP, or identity-law change invalidates the
   snapshot and every downstream artifact.
 - A RUNE change invalidates its derived fields, sidecars, cold load,
   bundle, and match evidence.

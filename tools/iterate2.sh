@@ -102,8 +102,15 @@ for map_slot in 0 1 2 3 4 5 6 7 8 9; do
         exit 2
     fi
 done
-/usr/bin/python3 -B "$SCRIPT_DIR/rune_pair_preflight.py" \
-    --maps-dir "$GAMEDIR_ROOT/$GAME/maps" "${MAPS[@]}" || exit 2
+RUNE_COMPACT_READER="${RUNE_COMPACT_READER:-$SCRIPT_DIR/../runecompactread.gnu}"
+if [[ ! -x $RUNE_COMPACT_READER ]]; then
+    echo "canonical RUNE reader is not executable: $RUNE_COMPACT_READER" >&2
+    exit 2
+fi
+for map in "${MAPS[@]}"; do
+    "$RUNE_COMPACT_READER" "$GAMEDIR_ROOT/$GAME/maps/$map.rune" \
+        >/dev/null || exit 2
+done
 module_sha256() {
     local path="$1" digest remainder
     [ -f "$path" ] || return 1

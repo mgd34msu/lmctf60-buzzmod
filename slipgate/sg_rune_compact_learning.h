@@ -13,44 +13,59 @@ typedef struct sg_rune_compact_learning_observation_s
 
 typedef enum sg_rune_compact_learning_kind_e
 {
-	SG_RUNE_COMPACT_LEARNING_LOCAL_TRAVERSAL = 0,
-	SG_RUNE_COMPACT_LEARNING_LANDING,
-	SG_RUNE_COMPACT_LEARNING_TACTIC,
-	SG_RUNE_COMPACT_LEARNING_STRATEGY,
+	/* Retained evidence only tunes existing compact facts.  It never nominates
+	 * an edge, creates a cell, or changes connectivity. */
+	SG_RUNE_COMPACT_LEARNING_STABLE_CELL_CAPABILITY_COST = 0,
+	SG_RUNE_COMPACT_LEARNING_LANDING_PREFERENCE,
+	SG_RUNE_COMPACT_LEARNING_TACTICAL_PRIOR,
+	SG_RUNE_COMPACT_LEARNING_STRATEGY_OUTCOME,
 	SG_RUNE_COMPACT_LEARNING_KIND_COUNT
 } sg_rune_compact_learning_kind_t;
 
-typedef struct sg_rune_compact_learning_traversal_ref_s
+typedef struct sg_rune_compact_learning_stable_cell_capability_cost_ref_s
 {
-	sg_rune_compact_cell_index_t source_cell;
-	sg_rune_compact_cell_index_t target_cell;
-	sg_rune_compact_portal_index_t portal;
-	uint32_t movement_field;
+	/* The capability's immutable source cell must equal cell. */
+	sg_rune_compact_cell_index_t cell;
+	sg_rune_movement_capability_index_t capability;
 	sg_rune_stance_validity_t stance;
 	uint8_t reserved[3];
-} sg_rune_compact_learning_traversal_ref_t;
+} sg_rune_compact_learning_stable_cell_capability_cost_ref_t;
 
-typedef struct sg_rune_compact_learning_tactic_ref_s
+typedef struct sg_rune_compact_learning_landing_preference_ref_s
+{
+	sg_rune_compact_cell_index_t cell;
+	sg_rune_stance_validity_t stance;
+	uint8_t reserved[3];
+} sg_rune_compact_learning_landing_preference_ref_t;
+
+typedef struct sg_rune_compact_learning_tactical_prior_ref_s
 {
 	sg_rune_compact_cell_index_t cell;
 	uint32_t weapon_kernel;
-} sg_rune_compact_learning_tactic_ref_t;
+} sg_rune_compact_learning_tactical_prior_ref_t;
 
-typedef struct sg_rune_compact_learning_strategy_ref_s
+typedef enum sg_rune_compact_learning_strategy_outcome_e
 {
-	sg_rune_compact_cell_index_t cell;
+	SG_RUNE_COMPACT_LEARNING_STRATEGY_SUCCEEDED = 0,
+	SG_RUNE_COMPACT_LEARNING_STRATEGY_FAILED,
+	SG_RUNE_COMPACT_LEARNING_STRATEGY_OUTCOME_COUNT
+} sg_rune_compact_learning_strategy_outcome_t;
+
+typedef struct sg_rune_compact_learning_strategy_outcome_ref_s
+{
 	sg_rune_compact_landmark_index_t landmark;
-} sg_rune_compact_learning_strategy_ref_t;
+	sg_rune_compact_learning_strategy_outcome_t outcome;
+} sg_rune_compact_learning_strategy_outcome_ref_t;
 
 typedef struct sg_rune_compact_learning_key_s
 {
 	sg_rune_compact_learning_kind_t kind;
 	union
 	{
-		sg_rune_compact_learning_traversal_ref_t traversal;
-		sg_rune_compact_learning_traversal_ref_t landing;
-		sg_rune_compact_learning_tactic_ref_t tactic;
-		sg_rune_compact_learning_strategy_ref_t strategy;
+		sg_rune_compact_learning_stable_cell_capability_cost_ref_t cost;
+		sg_rune_compact_learning_landing_preference_ref_t landing;
+		sg_rune_compact_learning_tactical_prior_ref_t tactical;
+		sg_rune_compact_learning_strategy_outcome_ref_t strategy;
 	} value;
 } sg_rune_compact_learning_key_t;
 
@@ -97,7 +112,7 @@ void SG_RuneCompactLearningObservationDestroy(
  * state and prior_out remain unchanged. */
 sg_rune_compact_learning_status_t SG_RuneCompactLearningApply(
 	sg_rune_compact_learning_t *learning,
-	const sg_rune_compact_learning_observation_t *observation,
+	sg_rune_compact_learning_observation_t *observation,
 	sg_rune_compact_learning_prior_t *prior_out);
 
 /* Merges independent evidence in canonical key order. Both states must bind

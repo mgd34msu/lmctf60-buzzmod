@@ -7,7 +7,7 @@ trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 
 strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align'
 test_defines='-DSG_CONFIGURATION_SEMANTICS_TESTING'
-sources='tests/sg_static_visibility_test.c slipgate/sg_static_visibility.c slipgate/sg_configuration_semantics.c slipgate/sg_configuration_lattice.c slipgate/sg_configuration_space.c slipgate/sg_configuration_audit.c slipgate/sg_host_collision.c slipgate/sg_bsp_world.c slipgate/sg_rune_model.c'
+sources='tests/sg_static_visibility_test.c slipgate/sg_static_visibility.c slipgate/sg_configuration_semantics.c slipgate/sg_configuration_lattice.c slipgate/sg_configuration_space.c slipgate/sg_configuration_audit.c slipgate/sg_host_collision.c slipgate/sg_bsp_world.c slipgate/sg_rune_model.c slipgate/sg_rune_compact_spatial_index.c'
 wrap_alloc='-Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc'
 isl_cflags=$(pkg-config --cflags isl)
 isl_libs=$(pkg-config --libs isl)

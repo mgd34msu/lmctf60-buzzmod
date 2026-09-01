@@ -7,8 +7,6 @@ trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 
 cd "$repo_dir"
 
-python3 -m unittest tests.test_sg_rune_source_authority_integration
-
 strict='-std=c11 -Wall -Wextra -Werror -Wpedantic'
 sources='tests/sg_rune_source_authority_test.c slipgate/sg_rune_source_authority.c slipgate/sg_crc32.c'
 wrap='-Wl,--wrap=malloc -Wl,--wrap=realloc'

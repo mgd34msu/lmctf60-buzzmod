@@ -948,6 +948,7 @@ edict_t	*PlayerTrail_LastSpot (void);
 //
 void respawn (edict_t *ent);
 void BeginIntermission (edict_t *targ);
+void SG_LevelTransitionSaveOutgoingState (void);
 void PutClientInServer (edict_t *ent);
 void InitClientPersistent (gclient_t *client);
 void InitClientResp (gclient_t *client);

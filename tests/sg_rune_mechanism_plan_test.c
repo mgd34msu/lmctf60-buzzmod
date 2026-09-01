@@ -743,7 +743,7 @@ static sg_rune_codec_diagnostic_t CodecValidationDiagnostic(
 	workspace.edge_next_capacity = TEST_EDGES;
 	workspace.string_marks = string_marks;
 	workspace.string_mark_capacity = TEST_STRINGS;
-	return SG_RuneCodecValidate(RUNE_ROUTE_CONTRACT_COMPLETE,
+	return SG_RuneCodecValidate(
 		seeds, 2U, links, 2U, nodes,
 		fixture->num_nodes, edges, fixture->result.num_edges, plans, 1U,
 		fixture->strings, fixture->string_bytes, &workspace);

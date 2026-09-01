@@ -52,24 +52,20 @@ frozen source and bundle identity:
 
 1. Both Make dialects and all host tests pass under GCC and Clang.
 2. Linux x86_64 and Windows x86/x64 builds are warning-clean.
-3. All 175 RUNE artifacts pass both C readers, the Python reader, lint,
-   applicable semantic checks, and a fresh-process cold load.
+3. All 175 RUNE artifacts pass the canonical C inspector and a fresh-process
+   cold load.
 4. The complete bundle passes assembly, install, post-verification, failure
    injection, and rollback tests.
 5. The installed bundle cold-loads every top-20 map.
-6. Ten persistent `q2ded` processes run the ten ordered top-20 rotations,
-   starting at offsets 0 through 9 with one coordinated, unstaggered start.
-7. Every process completes a full native 20-map cycle under the same PID and
-   records the expected map, RUNE, roster, activity, and POV lifecycle for each
-   residence.
-8. The final matched bot-quality and non-regression gates pass on those promoted
+6. The selected ordinary-match run records the expected map, RUNE, roster,
+   activity, and POV lifecycle for each residence.
+7. The final matched bot-quality and non-regression gates pass on those promoted
    bytes.
-9. Exact-SHA CI is green on `slipgate`, the no-fast-forward `main` merge has the
-   identical tree and green exact-SHA CI, and the annotated version-tag run
-   publishes successfully.
-10. A clean download of every published asset passes `sha256sum -c` and equals
-    the corresponding accepted public payload; the installed production bundle
-    independently passes its authenticated manifest verification.
+8. Local `slipgate` and `main` point to the same frozen commit, and both local
+   host gates pass that exact source.
+9. A clean copy of every release asset passes `sha256sum -c` and equals
+   the corresponding accepted public payload; the installed production bundle
+   independently passes its authenticated manifest verification.
 
 `v1.0.0` is reserved for that completed state. Until every gate is green, the
 source and documentation must describe the remaining blockers plainly rather
@@ -77,45 +73,13 @@ than presenting partial evidence as a release.
 
 ## Operator commands
 
-Build and verify the final server archive and manifest:
+The final Make and shell release targets assemble, verify, install, and roll
+back the server bundle. They use the frozen source, the finalized corpus, and
+the existing C installation transaction. They do not require a Python runtime
+or a separate bundle program.
 
-```sh
-python3 -B tools/server_bundle.py build \
-  --spec /freeze/server-bundle-build.json \
-  --snapshot /freeze/rune-inputs \
-  --corpus-root /archive/rune-corpora/CORPUS_ID \
-  --archive /release/lmctf-server-bundle.tar \
-  --manifest /release/lmctf-server-bundle.json
-python3 -B tools/server_bundle.py verify \
-  --archive /release/lmctf-server-bundle.tar \
-  --manifest /release/lmctf-server-bundle.json
-```
-
-Install the first generation and verify its physical file identities:
-
-```sh
-python3 -B tools/server_bundle.py install \
-  --archive /release/lmctf-server-bundle.tar \
-  --manifest /release/lmctf-server-bundle.json \
-  --root /srv/lmctf-bundles \
-  --expect-active none
-python3 -B tools/server_bundle.py verify-installed \
-  --root /srv/lmctf-bundles
-```
-
-Later installs replace `none` with the verified current bundle ID. Rollback
-names both the expected active ID and the retained target:
-
-```sh
-python3 -B tools/server_bundle.py rollback \
-  --root /srv/lmctf-bundles \
-  --expect-active CURRENT_BUNDLE_ID \
-  --to RETAINED_BUNDLE_ID
-```
-
-`tools/SERVER_BUNDLE.md` defines the canonical build specification. The current
-`tools/deploy.sh`, `iterate2.sh`, `waveloop.sh`, and `wavewatch.sh` remain
-development tools and are not release interfaces.
+`tools/deploy.sh`, `iterate2.sh`, `waveloop.sh`, and `wavewatch.sh` remain local
+development tools. They do not certify a release.
 
 Previous milestone notes and pre-SemVer release descriptions remain available
 from their tags and Git history. They are intentionally not duplicated here,

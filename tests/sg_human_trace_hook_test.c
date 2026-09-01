@@ -135,6 +135,14 @@ void SG_CvarsInit(void)
 	sg_cv.humantracedir = &trace_directory;
 }
 
+static void TraceBspSHA256(uint8_t bytes[SG_LEVEL_BSP_SHA256_BYTES])
+{
+	uint32_t index;
+
+	for (index = 0U; index < SG_LEVEL_BSP_SHA256_BYTES; index++)
+		bytes[index] = (uint8_t)(index + 1U);
+}
+
 sg_identity_status_t SG_LevelIdentitySnapshot(const char *mapname,
 	sg_level_identity_t *out)
 {
@@ -144,6 +152,8 @@ sg_identity_status_t SG_LevelIdentitySnapshot(const char *mapname,
 	out->bsp_checksum = 101;
 	out->entity_crc32 = 202;
 	out->host_physics_id = 1;
+	out->bsp_bytes = UINT64_C(4096);
+	TraceBspSHA256(out->bsp_sha256);
 	strcpy(out->mapname, mapname);
 	return SG_IDENTITY_OK;
 }
@@ -253,6 +263,8 @@ static int TraceIdentity(sg_level_identity_t *identity)
 	identity->bsp_checksum = 101U;
 	identity->entity_crc32 = 202U;
 	identity->host_physics_id = 1U;
+	identity->bsp_bytes = UINT64_C(4096);
+	TraceBspSHA256(identity->bsp_sha256);
 	strcpy(identity->mapname, "tracehook");
 	return 1;
 }
@@ -264,12 +276,15 @@ typedef struct spool_scan_s
 	uint64_t scope_generation[64];
 	uint32_t segment_number[64];
 	uint32_t segment_gravity_bits[64];
+	uint64_t segment_bsp_bytes[64];
+	uint8_t segment_bsp_sha256[64][SG_LEVEL_BSP_SHA256_BYTES];
 	const sg_human_trace_v3_scope_acceptance_t *saved_scope;
 	uint32_t previous_root;
 	uint32_t previous_segment;
 	uint64_t count;
 	uint64_t event_count;
 	uint64_t last_event_order;
+	uint32_t step_count;
 	size_t root_scope_start;
 	size_t scope_count;
 	size_t segment_count;
@@ -277,6 +292,8 @@ typedef struct spool_scan_s
 	uint8_t have_previous_segment;
 	uint8_t valid_order;
 	uint8_t forged_scope_accepted;
+	uint8_t first_step_evidence;
+	uint8_t first_step_grounded;
 } spool_scan_t;
 
 typedef struct scope_search_s
@@ -336,6 +353,9 @@ static int ScanCollectionSegment(void *opaque,
 	{
 		scan->segment_number[scan->segment_count] = segment->segment;
 		scan->segment_gravity_bits[scan->segment_count] = segment->gravity_bits;
+		scan->segment_bsp_bytes[scan->segment_count] = segment->identity.bsp_bytes;
+		memcpy(scan->segment_bsp_sha256[scan->segment_count],
+			segment->identity.bsp_sha256, SG_LEVEL_BSP_SHA256_BYTES);
 	}
 	scan->segment_count++;
 	return 1;
@@ -361,6 +381,13 @@ static int ScanCollectionEvent(void *opaque,
 		return 0;
 	scan->last_event_order = event->order;
 	scan->event_count++;
+	if (event->kind == SG_HUMAN_TRACE_V3_EVENT_STEP) {
+		if (scan->step_count == 0U) {
+			scan->first_step_evidence = event->step_evidence;
+			scan->first_step_grounded = event->grounded;
+		}
+		scan->step_count++;
+	}
 	return 1;
 }
 
@@ -1016,15 +1043,141 @@ static int RunSegmentNames(const char *directory)
 	return 0;
 }
 
+static int RemoveJsonField(char *line, const char *field)
+{
+	char *start;
+	char *after;
+
+	if (!line || !field || !(start = strstr(line, field)) ||
+		!(after = strchr(start, ',')))
+		return 0;
+	memmove(start, after + 1U, strlen(after + 1U) + 1U);
+	return 1;
+}
+
+static int ReplaceJsonFieldValue(char *line, const char *field,
+	const char *replacement)
+{
+	char *start;
+	char *value;
+	char *after;
+	size_t replacement_bytes;
+	size_t existing_bytes;
+
+	if (!line || !field || !replacement ||
+		!(start = strstr(line, field)))
+		return 0;
+	value = start + strlen(field);
+	if (!(after = strchr(value, ',')))
+		return 0;
+	replacement_bytes = strlen(replacement);
+	existing_bytes = (size_t)(after - value);
+	if (replacement_bytes > existing_bytes)
+		return 0;
+	memmove(value + replacement_bytes, after,
+		strlen(after) + 1U);
+	memcpy(value, replacement, replacement_bytes);
+	return 1;
+}
+
+static int CorruptJsonFieldFirstByte(char *line, const char *field,
+	char replacement)
+{
+	char *start;
+	char *value;
+
+	if (!line || !field || !(start = strstr(line, field)))
+		return 0;
+	value = start + strlen(field);
+	if (*value == '\0' || *value == '"')
+		return 0;
+	*value = replacement;
+	return 1;
+}
+
+static int RunJsonIdentityFields(const char *directory)
+{
+	char path[1024];
+	char line[16384];
+	char missing_bytes[16384];
+	char missing_sha[16384];
+	char zero_bytes[16384];
+	char zero_sha[16384];
+	char malformed_sha[16384];
+	sg_level_identity_t expected;
+	sg_level_identity_t parsed;
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	FILE *file;
+
+	if (!TracePath(path, sizeof(path), directory, 0U) ||
+		!TraceIdentity(&expected))
+		return 116;
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	level.framenum = 1;
+	SG_HumanTraceNewLevel();
+	SG_HumanTracePmove(player, &before, &after);
+	SG_HumanTraceMatchEnd();
+	file = fopen(path, "rb");
+	if (!file)
+	{
+		RemoveTraceArtifact(directory, 0U);
+		return 117;
+	}
+	if (!fgets(line, sizeof(line), file) || fclose(file) != 0)
+	{
+		RemoveTraceArtifact(directory, 0U);
+		return 117;
+	}
+	if (!SG_HumanTraceTestJsonHeaderIdentity(line, &parsed) ||
+		memcmp(&parsed, &expected, sizeof(parsed)) != 0)
+	{
+		RemoveTraceArtifact(directory, 0U);
+		return 118;
+	}
+	strcpy(missing_bytes, line);
+	strcpy(missing_sha, line);
+	strcpy(zero_bytes, line);
+	strcpy(zero_sha, line);
+	strcpy(malformed_sha, line);
+	if (!RemoveJsonField(missing_bytes, "\"bsp_bytes\":") ||
+		!RemoveJsonField(missing_sha, "\"bsp_sha256\":\"") ||
+		!ReplaceJsonFieldValue(zero_bytes, "\"bsp_bytes\":", "0") ||
+		!ReplaceJsonFieldValue(zero_sha, "\"bsp_sha256\":\"",
+			"0000000000000000000000000000000000000000000000000000000000000000") ||
+		!CorruptJsonFieldFirstByte(malformed_sha, "\"bsp_sha256\":\"", 'g') ||
+		SG_HumanTraceTestJsonHeaderIdentity(missing_bytes, &parsed) ||
+		SG_HumanTraceTestJsonHeaderIdentity(missing_sha, &parsed) ||
+		SG_HumanTraceTestJsonHeaderIdentity(zero_bytes, &parsed) ||
+		SG_HumanTraceTestJsonHeaderIdentity(zero_sha, &parsed) ||
+		SG_HumanTraceTestJsonHeaderIdentity(malformed_sha, &parsed))
+	{
+		RemoveTraceArtifact(directory, 0U);
+		return 119;
+	}
+	RemoveTraceArtifact(directory, 0U);
+	return 0;
+}
+
 static int RunStoredSpoolCoverage(void)
 {
 	spool_scan_t scan;
+	uint8_t expected_sha[SG_LEVEL_BSP_SHA256_BYTES];
 
+	TraceBspSHA256(expected_sha);
 	if (!ScanCompletedSpools(&scan) || scan.count != 1U ||
 		!scan.valid_order || scan.first.root_segment != 0U ||
 		scan.event_count != 12U || scan.scope_count != 2U ||
 		scan.scope_client[0] != 1U || scan.scope_generation[0] != UINT64_C(11) ||
-		scan.scope_client[1] != 2U || scan.scope_generation[1] != UINT64_C(22))
+		scan.scope_client[1] != 2U || scan.scope_generation[1] != UINT64_C(22) ||
+		scan.segment_bsp_bytes[0] != UINT64_C(4096) ||
+		memcmp(scan.segment_bsp_sha256[0], expected_sha,
+			SG_LEVEL_BSP_SHA256_BYTES) != 0 ||
+		scan.first.completion.bsp_bytes != UINT64_C(4096) ||
+		memcmp(scan.first.completion.bsp_sha256, expected_sha,
+			SG_LEVEL_BSP_SHA256_BYTES) != 0)
 		return 39;
 	return 0;
 }
@@ -1107,6 +1260,50 @@ static int RunScopeAllocatorReuse(const char *directory)
 	(void)directory;
 	return 130;
 #endif
+}
+
+static int RunCollectionAllocationFailure(const char *directory)
+{
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	sg_level_identity_t identity;
+	sg_human_trace_v3_collection_visitor_t visitor;
+	spool_scan_t scan;
+	sg_human_trace_visit_status_t status;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	level.framenum = 1;
+	SG_HumanTraceNewLevel();
+	SG_HumanTracePmove(player, &before, &after);
+	SG_HumanTraceMatchEnd();
+	if (!TraceIdentity(&identity))
+		return 132;
+	memset(&visitor, 0, sizeof(visitor));
+	visitor.begin_root = ScanSpool;
+	visitor.segment = ScanCollectionSegment;
+	visitor.scope = ScanCollectionScope;
+	visitor.event = ScanCollectionEvent;
+	visitor.finish_root = ScanCollectionFinish;
+	memset(&scan, 0, sizeof(scan));
+	scan.valid_order = 1U;
+	SG_HumanTraceTestFailCollectionAllocation(1);
+	status = SG_HumanTraceVisitAcceptedV3CollectionStatus(&identity, &visitor,
+		&scan);
+	SG_HumanTraceTestFailCollectionAllocation(0);
+	if (status != SG_HUMAN_TRACE_VISIT_ALLOCATION_FAILED)
+	{
+		RemoveTraceArtifact(directory, 0U);
+		return 133;
+	}
+	if (!ScanCompletedSpools(&scan) || scan.count != 1U)
+	{
+		RemoveTraceArtifact(directory, 0U);
+		return 134;
+	}
+	RemoveTraceArtifact(directory, 0U);
+	return 0;
 }
 
 static int RunThreeRootCollisionRead(const char *directory)
@@ -1317,6 +1514,38 @@ static int RunConcurrentCollision(const char *directory)
 }
 #endif
 
+static int RunOrdinaryWalkEvidence(const char *directory)
+{
+	edict_t *player = &entities[1];
+	pmove_state_t before;
+	pmove_t after;
+	spool_scan_t scan;
+
+	SetupPlayer(player, &clients[0], 11UL);
+	SetupPmove(&before, &after);
+	before.pm_flags = PMF_ON_GROUND;
+	after.s.pm_flags = PMF_ON_GROUND;
+	after.groundentity = &entities[0];
+	after.waterlevel = 0;
+	after.watertype = 0;
+	after.numtouch = 0;
+	after.cmd.forwardmove = 400;
+	after.cmd.sidemove = 0;
+	after.cmd.upmove = 0;
+	level.framenum = 41;
+	SG_HumanTraceNewLevel();
+	SG_HumanTracePmove(player, &before, &after);
+	SG_HumanTraceMatchEnd();
+	if (!ScanCompletedSpools(&scan) || scan.count != 1U ||
+		scan.event_count != 1U || scan.step_count != 1U ||
+		scan.first_step_grounded != 1U ||
+		scan.first_step_evidence !=
+			SG_HUMAN_TRACE_V3_STEP_EVIDENCE_ORDINARY_DRY_WALK)
+		return 75;
+	RemoveTraceArtifact(directory, scan.first.root_segment);
+	return 0;
+}
+
 int main(int argc, char **argv)
 {
 	char path0[1024], path1[1024], path2[1024];
@@ -1387,10 +1616,14 @@ int main(int argc, char **argv)
 		return RunSpoolQuarantine(argv[1]);
 	if (argc == 3 && strcmp(argv[2], "segment-names") == 0)
 		return RunSegmentNames(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "json-identity") == 0)
+		return RunJsonIdentityFields(argv[1]);
 	if (argc == 3 && strcmp(argv[2], "consumer-scope-isolation") == 0)
 		return RunScopeIsolation(argv[1]);
 	if (argc == 3 && strcmp(argv[2], "consumer-scope-reuse") == 0)
 		return RunScopeAllocatorReuse(argv[1]);
+	if (argc == 3 && strcmp(argv[2], "collection-alloc") == 0)
+		return RunCollectionAllocationFailure(argv[1]);
 	if (argc == 3 && strcmp(argv[2], "consumer-three-root-collision-read") == 0)
 		return RunThreeRootCollisionRead(argv[1]);
 #ifndef _WIN32
@@ -1484,12 +1717,16 @@ int main(int argc, char **argv)
 	    CountRecords(path0, "\"kind\":\"hook-release\"") != 2 ||
 	    CountRecords(path0, "\"kind\":\"hook-reset\"") != 1 ||
 	    CountRecords(path0, "\"sha256\":") != 14 ||
+	    !FileContains(path0, "\"bsp_bytes\":4096") ||
+	    !FileContains(path0,
+		"\"bsp_sha256\":\"0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20\"") ||
 	    !FileContains(path0, "\"client\":1,\"spawn_generation\":11") ||
 	    !FileContains(path0, "\"frame\":20") ||
 	    !FileContains(path0, "\"client\":2,\"spawn_generation\":22") ||
 	    !FileContains(path0, "\"frame\":27") ||
 	    !FileContains(path0, "\"order\":1,\"command\":1") ||
 	    !FileContains(path0, "\"order\":6,\"hook_event\":4") ||
+	    !FileContains(path0, "\"walk_evidence\":64") ||
 	    !FileContains(path1, "\"client\":2,\"spawn_generation\":22") ||
 	    !FileContains(path1, "\"frame\":31"))
 		result = 6;
@@ -1511,6 +1748,8 @@ int main(int argc, char **argv)
 		RemoveTraceArtifact(argv[1], 1U);
 		RemoveTraceArtifact(argv[1], 2U);
 	}
+	if (!result && RunOrdinaryWalkEvidence(argv[1]) != 0)
+		result = 75;
 	if (result)
 		return result;
 	puts("sg_human_trace_hook_test: ok");

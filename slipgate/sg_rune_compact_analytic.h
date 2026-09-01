@@ -79,6 +79,11 @@ typedef enum sg_rune_analytic_output_meaning_e
 	SG_RUNE_ANALYTIC_OUTPUT_CLEARANCE,
 	SG_RUNE_ANALYTIC_OUTPUT_REACHABILITY_MARGIN,
 	SG_RUNE_ANALYTIC_OUTPUT_FUSE_REMAINING_SECONDS,
+	/* Static maximum radius; the event law applies live damage and occlusion. */
+	SG_RUNE_ANALYTIC_OUTPUT_EFFECT_RADIUS,
+	/* A zero-arity sealed weapon-law scalar. Its typed weapon-function
+	 * channel/instance identifies the concrete immutable host-law field. */
+	SG_RUNE_ANALYTIC_OUTPUT_STATIC_WEAPON_LAW_VALUE,
 	SG_RUNE_ANALYTIC_OUTPUT_MEANING_COUNT
 } sg_rune_analytic_output_meaning_t;
 

@@ -45,6 +45,7 @@ typedef struct sg_host_law_currentness_s
 
 #define SG_HOST_LAW_CURRENTNESS_STATE UINT64_C(0x43555252454e5431)
 #define SG_HOST_LAW_CONSTRUCTION_STATE UINT64_C(0x434f4e53544c4157)
+#define SG_HOST_LAW_PMOVE_EVALUATOR_STATE UINT64_C(0x504d4556414c3031)
 
 static uint64_t sg_host_law_next_generation = UINT64_C(1);
 
@@ -77,6 +78,16 @@ struct sg_host_law_construction_s
 	sg_host_mechanism_live_capture_function_t mechanism_live_capture;
 	sg_host_law_currentness_t *currentness;
 	sg_host_law_view_t laws;
+};
+
+struct sg_host_law_pmove_evaluator_s
+{
+	uint64_t state;
+	uint64_t state_inverse;
+	const struct sg_host_law_pmove_evaluator_s *self;
+	sg_host_static_identity_t static_identity;
+	sg_host_engine_pmove_binding_t pmove_binding;
+	sg_host_law_currentness_t *currentness;
 };
 
 #define SG_HOST_LAW_FNV_OFFSET UINT64_C(1469598103934665603)
@@ -163,6 +174,16 @@ static uint32_t FloatBits(float value)
 static int SameFloat(float left, float right)
 {
 	return FloatBits(left) == FloatBits(right);
+}
+
+static int EffectiveAirAcceleration(float airaccelerate, float *value_out)
+{
+	if (!value_out || !isfinite(airaccelerate))
+		return 0;
+	*value_out = airaccelerate == 0.0f ?
+		SG_HOST_ENGINE_AIR_ACCELERATION :
+		SG_HOST_ENGINE_GROUND_ACCELERATION;
+	return 1;
 }
 
 static int FiniteVector(const float value[3])
@@ -537,6 +558,10 @@ static sg_host_law_result_t CompareMechanism(
 	if (result.status != SG_HOST_LAW_OK) return result;
 	SG_COMPARE_MECH_FLOAT(door_default_speed);
 	SG_COMPARE_MECH_FLOAT(door_rotating_default_speed);
+	SG_COMPARE_MECH_FLOAT(button_default_speed);
+	SG_COMPARE_MECH_FLOAT(door_default_lip);
+	SG_COMPARE_MECH_FLOAT(button_default_lip);
+	SG_COMPARE_MECH_FLOAT(platform_default_lip);
 	SG_COMPARE_MECH_FLOAT(platform_default_speed);
 	SG_COMPARE_MECH_FLOAT(platform_default_accel);
 	SG_COMPARE_MECH_FLOAT(platform_default_decel);
@@ -669,6 +694,7 @@ static int ABIShapeValid(const sg_host_engine_pmove_abi_t *abi)
 static int ViewShapeValid(const sg_host_law_view_t *view)
 {
 	const sg_rune_physics_parameters_t *physics;
+	float air_acceleration;
 	int static_identity;
 	int model_identity;
 
@@ -689,7 +715,8 @@ static int ViewShapeValid(const sg_host_law_view_t *view)
 		ContentIdentityValid(&view->bsp_identity) && view->bsp_bytes != 0U &&
 		ABIShapeValid(&view->pmove_abi) &&
 		view->pmove_behavior_fingerprint &&
-		SameFloat(view->airaccelerate, 0.0f) &&
+		EffectiveAirAcceleration(view->airaccelerate, &air_acceleration) &&
+		SameFloat(physics->air_acceleration, air_acceleration) &&
 		SameFloat(view->maxvelocity, physics->max_velocity) &&
 		view->movement_flags == 0U && view->physics_flags ==
 		SG_HOST_ENGINE_PHYSICS_FLAGS &&
@@ -825,9 +852,9 @@ static sg_host_law_result_t CaptureLive(
 		return Result(SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW,
 			SG_HOST_LAW_FIELD_GRAVITY, SG_HOST_LAW_ELEMENT_NONE,
 			FloatBits(expected_physics->gravity), FloatBits(gravity));
-	if (!SameFloat(airaccelerate->value, 0.0f))
+	if (!isfinite(airaccelerate->value))
 		return Result(SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW,
-			SG_HOST_LAW_FIELD_AIRACCELERATE, SG_HOST_LAW_ELEMENT_NONE, 0U,
+			SG_HOST_LAW_FIELD_AIRACCELERATE, SG_HOST_LAW_ELEMENT_NONE, 1U,
 			FloatBits(airaccelerate->value));
 	if (!isfinite(maxvelocity) || maxvelocity <= 0.0f ||
 		!SameFloat(maxvelocity, expected_physics->max_velocity))
@@ -874,7 +901,7 @@ static sg_host_law_result_t CaptureLive(
 	 * callback equality plus per-call level and subject revalidation; parity
 	 * tests provide regression coverage only. */
 	view_out->pmove_behavior_fingerprint = abi.identity;
-	view_out->airaccelerate = airaccelerate->value;
+	view_out->airaccelerate = airaccelerate->value == 0.0f ? 0.0f : 1.0f;
 	view_out->maxvelocity = maxvelocity;
 	view_out->physics_flags = SG_HOST_ENGINE_PHYSICS_FLAGS;
 	view_out->hook = hook;
@@ -1418,8 +1445,14 @@ static sg_host_law_result_t ConstructionAuthorityMatch(
 {
 	sg_host_static_identity_t observed;
 
+	if (!expected || !authority || !authority->world ||
+		memcmp(&authority->content_identity,
+			&authority->world->content_identity,
+			sizeof(authority->content_identity)) != 0)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
 	memset(&observed, 0, sizeof(observed));
-	observed.bsp_identity = authority->content_identity;
+	observed.bsp_identity = authority->world->content_identity;
 	observed.bsp_bytes = (uint64_t)authority->world->source_size;
 	observed.engine_checksum = authority->world->engine_checksum;
 	observed.entity_crc32 = expected->entity_crc32;
@@ -1634,6 +1667,183 @@ sg_host_law_result_t SG_HostLawConstructionOwnerCopyBsp(
 	if (identity_out)
 		*identity_out = construction->static_identity;
 	return Ok();
+}
+
+static int PmoveEvaluatorValid(
+	const sg_host_law_pmove_evaluator_t *evaluator)
+{
+	return evaluator != NULL &&
+		evaluator->state == SG_HOST_LAW_PMOVE_EVALUATOR_STATE &&
+		evaluator->state_inverse == ~SG_HOST_LAW_PMOVE_EVALUATOR_STATE &&
+		evaluator->self == evaluator &&
+		StaticIdentityValid(&evaluator->static_identity) &&
+		evaluator->pmove_binding.entry != NULL &&
+		evaluator->pmove_binding.owner != NULL &&
+		CurrentnessValid(evaluator->currentness);
+}
+
+static sg_host_law_result_t PmoveEvaluatorRevalidate(
+	const sg_host_law_pmove_evaluator_t *evaluator)
+{
+	sg_host_engine_pmove_binding_t current_binding;
+	sg_host_law_view_t current;
+	sg_host_law_result_t result;
+
+	if (!PmoveEvaluatorValid(evaluator))
+		return InvalidPublication(SG_HOST_LAW_FIELD_PMOVE_LAW);
+	if (evaluator->currentness->active != 1U)
+		return Result(SG_HOST_LAW_PRODUCTION_DRIFT,
+			SG_HOST_LAW_FIELD_BSP_CONTENT, SG_HOST_LAW_ELEMENT_NONE,
+			evaluator->currentness->generation, 0U);
+	if (!SG_HostEnginePmoveBindingCurrent(&evaluator->pmove_binding))
+		return Result(SG_HOST_LAW_PRODUCTION_DRIFT,
+			SG_HOST_LAW_FIELD_PMOVE_BEHAVIOR, SG_HOST_LAW_ELEMENT_NONE,
+			1U, 0U);
+	result = CaptureLive(NULL, &evaluator->static_identity, &current,
+		&current_binding);
+	if (result.status != SG_HOST_LAW_OK)
+	{
+		if (result.status == SG_HOST_LAW_HOST_UNAVAILABLE ||
+			result.status == SG_HOST_LAW_UNSUPPORTED_PRODUCTION_LAW)
+			result.status = SG_HOST_LAW_PRODUCTION_DRIFT;
+		return result;
+	}
+	if (current_binding.entry != evaluator->pmove_binding.entry ||
+		current_binding.owner != evaluator->pmove_binding.owner)
+		return Result(SG_HOST_LAW_PRODUCTION_DRIFT,
+			SG_HOST_LAW_FIELD_PMOVE_BEHAVIOR, SG_HOST_LAW_ELEMENT_NONE,
+			1U, 0U);
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawPmoveEvaluatorCurrent(
+	const sg_host_law_pmove_evaluator_t *evaluator)
+{
+	return PmoveEvaluatorRevalidate(evaluator);
+}
+
+sg_host_law_result_t SG_HostLawConstructionOwnerPmoveEvaluatorAcquire(
+	const sg_host_law_construction_t *construction,
+	sg_host_law_pmove_evaluator_t **evaluator_out)
+{
+	sg_host_law_pmove_evaluator_t *evaluator;
+	sg_host_law_result_t result;
+
+	if (evaluator_out == NULL || *evaluator_out != NULL)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	result = ConstructionRevalidate(construction);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	evaluator = calloc(1U, sizeof(*evaluator));
+	if (evaluator == NULL)
+		return Result(SG_HOST_LAW_ALLOCATION_FAILED,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	if (!CurrentnessRetain(construction->currentness))
+	{
+		free(evaluator);
+		return Result(SG_HOST_LAW_ALLOCATION_FAILED,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	}
+	evaluator->static_identity = construction->static_identity;
+	evaluator->pmove_binding = construction->pmove_binding;
+	evaluator->currentness = construction->currentness;
+	evaluator->state = SG_HOST_LAW_PMOVE_EVALUATOR_STATE;
+	evaluator->state_inverse = ~SG_HOST_LAW_PMOVE_EVALUATOR_STATE;
+	evaluator->self = evaluator;
+	if (!PmoveEvaluatorValid(evaluator))
+	{
+		SG_HostLawPmoveEvaluatorDestroy(evaluator);
+		return InvalidPublication(SG_HOST_LAW_FIELD_PMOVE_LAW);
+	}
+	*evaluator_out = evaluator;
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawPmoveEvaluatorRun(
+	const sg_host_law_pmove_evaluator_t *evaluator,
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	sg_host_pmove_result_t *result_out,
+	sg_host_pmove_error_t *error_out)
+{
+	sg_host_pmove_error_t error = SG_HOST_PMOVE_ERROR_NONE;
+	sg_host_law_result_t result;
+
+	if (authority == NULL || request == NULL || result_out == NULL)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	result = SG_HostLawPmoveEvaluatorCurrent(evaluator);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	result = ConstructionAuthorityMatch(&evaluator->static_identity, authority);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!SG_HostPmoveEvaluateFrame(authority, scene,
+			evaluator->pmove_binding.entry, request, result_out, &error))
+	{
+		if (error_out != NULL)
+			*error_out = error;
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 0U,
+			(uint64_t)error);
+	}
+	if (error_out != NULL)
+		*error_out = SG_HOST_PMOVE_ERROR_NONE;
+	return Ok();
+}
+
+sg_host_law_result_t SG_HostLawPmoveEvaluatorReplayFrame(
+	const sg_host_law_pmove_evaluator_t *evaluator,
+	const sg_host_collision_authority_t *authority,
+	const sg_host_collision_scene_t *scene,
+	const sg_host_pmove_request_t *request,
+	const sg_host_pmove_replay_workspace_t *workspace,
+	sg_host_pmove_replay_t *replay_out,
+	sg_host_pmove_error_t *error_out)
+{
+	sg_host_pmove_error_t error = SG_HOST_PMOVE_ERROR_NONE;
+	sg_host_law_result_t result;
+
+	if (authority == NULL || request == NULL || workspace == NULL ||
+		replay_out == NULL)
+		return Result(SG_HOST_LAW_INVALID_ARGUMENT,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
+	result = SG_HostLawPmoveEvaluatorCurrent(evaluator);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	result = ConstructionAuthorityMatch(&evaluator->static_identity, authority);
+	if (result.status != SG_HOST_LAW_OK)
+		return result;
+	if (!SG_HostPmoveReplayFrame(authority, scene,
+			evaluator->pmove_binding.entry, request, workspace, replay_out,
+			&error)) {
+		if (error_out != NULL)
+			*error_out = error;
+		return Result(SG_HOST_LAW_EVALUATION_FAILED,
+			SG_HOST_LAW_FIELD_PMOVE_LAW, SG_HOST_LAW_ELEMENT_NONE, 0U,
+			(uint64_t)error);
+	}
+	if (error_out != NULL)
+		*error_out = SG_HOST_PMOVE_ERROR_NONE;
+	return Ok();
+}
+
+void SG_HostLawPmoveEvaluatorDestroy(
+	sg_host_law_pmove_evaluator_t *evaluator)
+{
+	if (!PmoveEvaluatorValid(evaluator))
+		return;
+	evaluator->state = 0U;
+	evaluator->state_inverse = 0U;
+	evaluator->self = NULL;
+	CurrentnessRelease(evaluator->currentness);
+	evaluator->currentness = NULL;
+	memset(&evaluator->static_identity, 0,
+		sizeof(evaluator->static_identity));
+	memset(&evaluator->pmove_binding, 0, sizeof(evaluator->pmove_binding));
+	free(evaluator);
 }
 
 static int ConstructionTransformValid(

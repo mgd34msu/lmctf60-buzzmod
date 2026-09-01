@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -196,6 +197,121 @@ static void TestEffectiveAuditUsesSelectedAuthority(void)
 			SG_BSP_ENTITY_SPAWNFLAGS_DEFINED;
 		CHECK(SG_BspEntitySemanticsAuditEffective(&fixture.authority,
 			&binding, &source, mutable_candidate, &audit));
+	}
+	SG_BspEntitySemanticsDestroy(candidate);
+	DestroyFixture(&fixture);
+}
+
+static void TestAngularMoverAuditIntegrity(void)
+{
+	static const char text[] =
+		"{ \"classname\" \"worldspawn\" }\n"
+		"{ \"classname\" \"func_door_rotating\" \"model\" \"*1\" "
+			"\"distance\" \"45\" \"speed\" \"120\" "
+			"\"spawnflags\" \"3\" }\n"
+		"{ \"classname\" \"func_rotating\" \"model\" \"*2\" "
+			"\"angles\" \"1 2 3\" \"speed\" \"120\" "
+			"\"spawnflags\" \"55\" }\n"
+		"{ \"classname\" \"func_wall\" \"model\" \"*3\" }\n";
+	fixture_t fixture;
+	sg_bsp_entity_semantics_t *candidate;
+	sg_bsp_entity_semantics_audit_result_t audit;
+	sg_bsp_entity_angular_mover_t door_saved;
+	sg_bsp_entity_angular_mover_t rotator_saved;
+	sg_bsp_entity_angular_mover_t ordinary_saved;
+	sg_bsp_entity_semantic_t *door;
+	sg_bsp_entity_semantic_t *rotator;
+	sg_bsp_entity_semantic_t *ordinary;
+
+	InitFixture(&fixture, text);
+	candidate = Build(&fixture);
+	CHECK(candidate != NULL);
+	CHECK(candidate && candidate->entity_count == 3U);
+	door = candidate && candidate->entity_count == 3U ?
+		&candidate->entities[0] : NULL;
+	rotator = candidate && candidate->entity_count == 3U ?
+		&candidate->entities[1] : NULL;
+	ordinary = candidate && candidate->entity_count == 3U ?
+		&candidate->entities[2] : NULL;
+	CHECK(door && door->angular_mover.kind ==
+		SG_BSP_ENTITY_ANGULAR_MOVER_FINITE_DOOR);
+	CHECK(rotator && rotator->angular_mover.kind ==
+		SG_BSP_ENTITY_ANGULAR_MOVER_CONTINUOUS_ROTATOR);
+	CHECK(ordinary && ordinary->angular_mover.kind ==
+		SG_BSP_ENTITY_ANGULAR_MOVER_NONE);
+	CHECK(candidate && SG_BspEntitySemanticsAudit(&fixture.authority,
+		&binding, candidate, &audit));
+	if (candidate && door && rotator && ordinary)
+	{
+		size_t schedule_size = sizeof(ordinary->angular_mover.schedule);
+		unsigned char *ordinary_schedule =
+			(unsigned char *)&ordinary->angular_mover.schedule;
+		size_t continuous_size =
+			sizeof(rotator->angular_mover.schedule.continuous_rotator);
+		size_t rotator_schedule_size =
+			sizeof(rotator->angular_mover.schedule);
+		unsigned char *rotator_schedule =
+			(unsigned char *)&rotator->angular_mover.schedule;
+
+		ordinary_saved = ordinary->angular_mover;
+		CHECK(schedule_size > 0U);
+		if (schedule_size > 0U)
+		{
+			/* A NONE tag has no active arm; every union byte is reserved. */
+			ordinary_schedule[schedule_size - 1U] = 1U;
+			CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+				candidate, &audit));
+			CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT);
+		}
+		ordinary->angular_mover = ordinary_saved;
+
+		rotator_saved = rotator->angular_mover;
+		CHECK(rotator_schedule_size > continuous_size);
+		CHECK(rotator_schedule_size - continuous_size == sizeof(uint64_t));
+		if (rotator_schedule_size > continuous_size)
+		{
+			rotator_schedule[rotator_schedule_size - 1U] = 1U;
+			CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+				candidate, &audit));
+			CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT);
+		}
+		rotator->angular_mover = rotator_saved;
+
+		door_saved = door->angular_mover;
+		door->angular_mover.schedule.finite_door.active_angles.value[1] +=
+			1.0f;
+		CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+			candidate, &audit));
+		CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_FACT_DISAGREEMENT);
+		CHECK(audit.domain == SG_BSP_ENTITY_SEMANTICS_FACT_MECHANISM);
+		door->angular_mover = door_saved;
+
+		rotator_saved = rotator->angular_mover;
+		rotator->angular_mover.schedule.continuous_rotator
+			.frame_angular_delta.value[2] += 1.0f;
+		CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+			candidate, &audit));
+		CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_FACT_DISAGREEMENT);
+		CHECK(audit.domain == SG_BSP_ENTITY_SEMANTICS_FACT_MECHANISM);
+		rotator->angular_mover = rotator_saved;
+
+		door->angular_mover.kind = SG_BSP_ENTITY_ANGULAR_MOVER_KIND_COUNT;
+		CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+			candidate, &audit));
+		CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT);
+		door->angular_mover = door_saved;
+
+		door->angular_mover.flags |= SG_BSP_ENTITY_ANGULAR_MOVER_START_ON;
+		CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+			candidate, &audit));
+		CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT);
+		door->angular_mover = door_saved;
+
+		door->angular_mover.schedule.finite_door.speed = NAN;
+		CHECK(!SG_BspEntitySemanticsAudit(&fixture.authority, &binding,
+			candidate, &audit));
+		CHECK(audit.code == SG_BSP_ENTITY_SEMANTICS_AUDIT_INVALID_FACT);
+		door->angular_mover = door_saved;
 	}
 	SG_BspEntitySemanticsDestroy(candidate);
 	DestroyFixture(&fixture);
@@ -748,6 +864,7 @@ int main(void)
 {
 	InitBinding();
 	TestEffectiveAuditUsesSelectedAuthority();
+	TestAngularMoverAuditIntegrity();
 	TestCompleteAuditAndOwnedPublication();
 	TestProvenEmpty();
 	TestHostileStringExtent();

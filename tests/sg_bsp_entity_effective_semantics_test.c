@@ -15,12 +15,24 @@ static int failures;
 	} \
 } while (0)
 
+static uint32_t FloatBits(float value)
+{
+	uint32_t bits;
+
+	memcpy(&bits, &value, sizeof(bits));
+	return bits;
+}
+
 typedef struct fixture_s
 {
 	sg_bsp_world_t world;
 	uint8_t *embedded_text;
 	sg_bsp_model_t models[4];
 } fixture_t;
+
+static void ExpectFailure(fixture_t *fixture, const char *text,
+	size_t text_bytes, const sg_rune_source_entity_record_t *survivors,
+	size_t survivor_count, sg_bsp_entity_semantics_error_code_t code);
 
 static void InitFixture(fixture_t *fixture, const char *embedded_text)
 {
@@ -176,6 +188,115 @@ static void TestAppendedDeclarationAndInhibitedGapKeepSourceOrdinals(void)
 	DestroyFixture(&fixture);
 }
 
+static void TestEffectiveAngularMoverSchedules(void)
+{
+	static const char embedded[] =
+		"{ \"classname\" \"worldspawn\" }\n";
+	static const char selected[] =
+		"{ \"classname\" \"worldspawn\" }\n"
+		"{ \"classname\" \"func_door_rotating\" \"model\" \"*1\" "
+			"\"angles\" \"10 20 30\" \"distance\" \"45\" "
+			"\"speed\" \"120\" \"accel\" \"0\" \"decel\" \"7\" "
+			"\"spawnflags\" \"0\" }\n"
+		"{ \"classname\" \"func_rotating\" \"model\" \"*2\" "
+			"\"angles\" \"1 2 3\" \"spawnflags\" \"0\" }\n"
+		"{ \"classname\" \"func_door_rotating\" \"model\" \"*3\" "
+			"\"distance\" \"90\" }\n";
+	static const sg_rune_source_entity_record_t survivors[] = {
+		{ 0U, 0 }, { 1U, 231 }, { 2U, 55 }
+	};
+	fixture_t fixture;
+	sg_bsp_entity_semantics_error_t error;
+	sg_bsp_entity_semantics_t *semantics;
+	const sg_bsp_entity_semantic_t *door;
+	const sg_bsp_entity_semantic_t *rotator;
+	const sg_bsp_entity_angular_mover_t *mover;
+
+	InitFixture(&fixture, embedded);
+	semantics = BuildEffective(&fixture, selected, sizeof(selected), survivors,
+		sizeof(survivors) / sizeof(survivors[0]), &error);
+	CHECK(semantics != NULL);
+	CHECK(semantics && semantics->entity_count == 2U);
+	door = semantics ? FindEntity(semantics, "func_door_rotating") : NULL;
+	rotator = semantics ? FindEntity(semantics, "func_rotating") : NULL;
+	CHECK(door != NULL);
+	CHECK(rotator != NULL);
+	mover = door ? SG_BspEntitySemanticsAngularMover(semantics,
+		door->canonical_ordinal) : NULL;
+	CHECK(mover == (door ? &door->angular_mover : NULL));
+	CHECK(mover && mover->kind == SG_BSP_ENTITY_ANGULAR_MOVER_FINITE_DOOR);
+	CHECK(mover && mover->flags == (SG_BSP_ENTITY_ANGULAR_MOVER_START_OPEN |
+		SG_BSP_ENTITY_ANGULAR_MOVER_REVERSE |
+		SG_BSP_ENTITY_ANGULAR_MOVER_TOGGLE |
+		SG_BSP_ENTITY_ANGULAR_MOVER_CRUSHER));
+	CHECK(mover && mover->schedule.finite_door.frame_ms == 100U);
+	CHECK(mover && FloatBits(mover->schedule.finite_door.axis.value[2]) ==
+		UINT32_C(0x3f800000));
+	CHECK(mover && FloatBits(mover->schedule.finite_door.inactive_angles.value[0]) ==
+		UINT32_C(0));
+	CHECK(mover && FloatBits(mover->schedule.finite_door.inactive_angles.value[1]) ==
+		UINT32_C(0));
+	CHECK(mover && FloatBits(mover->schedule.finite_door.active_angles.value[0]) ==
+		UINT32_C(0));
+	CHECK(mover && FloatBits(mover->schedule.finite_door.active_angles.value[1]) ==
+		UINT32_C(0));
+	CHECK(mover && FloatBits(mover->schedule.finite_door.inactive_angles.value[2]) ==
+		UINT32_C(0xc2340000));
+	CHECK(mover && FloatBits(mover->schedule.finite_door.active_angles.value[2]) ==
+		UINT32_C(0));
+	CHECK(mover && FloatBits(mover->schedule.finite_door.angular_displacement.value[2]) ==
+		UINT32_C(0x42340000));
+	CHECK(mover && FloatBits(mover->schedule.finite_door.speed) ==
+		UINT32_C(0x42f00000));
+	CHECK(mover && FloatBits(mover->schedule.finite_door.acceleration) ==
+		UINT32_C(0x42f00000));
+	CHECK(mover && FloatBits(mover->schedule.finite_door.deceleration) ==
+		UINT32_C(0x40e00000));
+	mover = rotator ? SG_BspEntitySemanticsAngularMover(semantics,
+		rotator->canonical_ordinal) : NULL;
+	CHECK(mover == (rotator ? &rotator->angular_mover : NULL));
+	CHECK(mover && mover->kind ==
+		SG_BSP_ENTITY_ANGULAR_MOVER_CONTINUOUS_ROTATOR);
+	CHECK(mover && mover->flags == (SG_BSP_ENTITY_ANGULAR_MOVER_START_ON |
+		SG_BSP_ENTITY_ANGULAR_MOVER_REVERSE |
+		SG_BSP_ENTITY_ANGULAR_MOVER_STOP_ON_BLOCK |
+		SG_BSP_ENTITY_ANGULAR_MOVER_TOUCH_DAMAGE));
+	CHECK(mover && mover->schedule.continuous_rotator.frame_ms == 100U);
+	CHECK(mover && FloatBits(mover->schedule.continuous_rotator.speed) ==
+		UINT32_C(0x42c80000));
+	CHECK(mover && FloatBits(mover->schedule.continuous_rotator.initial_angles.value[0]) ==
+		UINT32_C(0x3f800000));
+	CHECK(mover && FloatBits(mover->schedule.continuous_rotator.axis.value[2]) ==
+		UINT32_C(0xbf800000));
+	CHECK(mover && FloatBits(mover->schedule.continuous_rotator.angular_velocity.value[2]) ==
+		UINT32_C(0xc2c80000));
+	CHECK(mover && FloatBits(mover->schedule.continuous_rotator.frame_angular_delta.value[2]) ==
+		UINT32_C(0xc1200000));
+	CHECK(SG_BspEntitySemanticsAngularMover(semantics, UINT32_MAX) == NULL);
+	SG_BspEntitySemanticsDestroy(semantics);
+	DestroyFixture(&fixture);
+}
+
+static void TestMalformedEffectiveAngularMoverFailsTransactionally(void)
+{
+	static const char embedded[] =
+		"{ \"classname\" \"worldspawn\" }\n";
+	static const char selected[] =
+		"{ \"classname\" \"worldspawn\" }\n"
+		"{ \"classname\" \"func_rotating\" \"model\" \"*1\" "
+			"\"speed\" \"1e9999\" }\n";
+	static const sg_rune_source_entity_record_t survivors[] = {
+		{ 0U, 0 }, { 1U, 0 }
+	};
+	fixture_t fixture;
+
+	InitFixture(&fixture, embedded);
+	ExpectFailure(&fixture, selected, sizeof(selected), survivors,
+		sizeof(survivors) / sizeof(survivors[0]),
+		SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_VALUE);
+	DestroyFixture(&fixture);
+}
+
 static void ExpectFailure(fixture_t *fixture, const char *text,
 	size_t text_bytes, const sg_rune_source_entity_record_t *survivors,
 	size_t survivor_count, sg_bsp_entity_semantics_error_code_t code)
@@ -257,6 +378,8 @@ int main(void)
 {
 	TestSelectedTextAndOverlayAreTheOnlyEntitySource();
 	TestAppendedDeclarationAndInhibitedGapKeepSourceOrdinals();
+	TestEffectiveAngularMoverSchedules();
+	TestMalformedEffectiveAngularMoverFailsTransactionally();
 	TestMalformedEffectiveSourceFailsTransactionally();
 	if (failures)
 	{

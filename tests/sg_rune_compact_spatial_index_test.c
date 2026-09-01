@@ -387,6 +387,7 @@ static void TestRealMapDifferential(const char *path)
 		sg_rune_compact_spatial_query_t query;
 		uint32_t candidate_count = 0U;
 		uint32_t expected;
+		uint32_t expected_count = 0U;
 		uint32_t offset;
 		int has_point = BrushInteriorPoint(world, brush, point);
 
@@ -403,11 +404,13 @@ static void TestRealMapDifferential(const char *path)
 		for (offset = 1U; offset < candidate_count; offset++)
 			CHECK(candidates[offset - 1U] < candidates[offset]);
 		for (expected = 0U; expected < world->brush_count; expected++)
-			if (PointInsideBrush(world, expected, rounded_point, 0.00001))
+			if (PointInsideBrush(world, expected, rounded_point, 0.0))
 			{
 				CHECK(SortedContains(candidates, candidate_count, expected));
+				expected_count++;
 				exact_matches++;
 			}
+		CHECK(candidate_count == expected_count);
 		query_count++;
 	}
 	CHECK(query_count == world->brush_count);
@@ -472,18 +475,30 @@ static void TestLeafQueries(void)
 		(uint32_t)ARRAY_COUNT(boundary_leaves));
 
 	query = PointQuery(-20.00005f);
-	CheckQuery(index, &query, first_leaf, (uint32_t)ARRAY_COUNT(first_leaf));
+	CheckQuery(index, &query, no_brushes, 0U);
 	query = PointQuery(-20.001f);
 	CheckQuery(index, &query, no_brushes, 0U);
 	query = PointQuery(50.0f);
 	CheckQuery(index, &query, no_brushes, 0U);
+	{
+		sg_rune_compact_spatial_query_statistics_t statistics;
+		uint32_t brushes[16];
+		uint32_t count = 0U;
+
+		query = PointQuery(-5.0f);
+		CHECK(SG_RuneCompactSpatialIndexQueryWithStatistics(index, &query,
+			brushes, (uint32_t)ARRAY_COUNT(brushes), &count, &statistics,
+			&error));
+		CHECK(count == 3U);
+		CHECK(statistics.tested_entries < fixture.world.brush_count);
+	}
 	SG_RuneCompactSpatialIndexDestroy(index);
 }
 
 static void TestPlaneBoundsAndOverflow(void)
 {
-	static const uint32_t negative_brushes[] = { 2U, 7U, 9U, 11U };
-	static const uint32_t overflow_only[] = { 11U };
+	static const uint32_t negative_brushes[] = { 2U, 7U, 9U };
+	static const uint32_t no_brushes[] = { UINT32_MAX };
 	static const float oblique = 0.577350269f;
 	spatial_fixture_t fixture;
 	sg_rune_compact_spatial_index_t *index = NULL;
@@ -518,8 +533,7 @@ static void TestPlaneBoundsAndOverflow(void)
 	CheckQuery(index, &query, negative_brushes,
 		(uint32_t)ARRAY_COUNT(negative_brushes));
 	query = PointQuery(50.0f);
-	CheckQuery(index, &query, overflow_only,
-		(uint32_t)ARRAY_COUNT(overflow_only));
+	CheckQuery(index, &query, no_brushes, 0U);
 	query = PointQuery(0.0f);
 	CHECK(QueryContains(index, &query, 11U));
 	SG_RuneCompactSpatialIndexDestroy(index);
@@ -535,6 +549,172 @@ static void TestPlaneBoundsAndOverflow(void)
 	CHECK(QueryContains(index, &query, 7U));
 	CHECK(QueryContains(index, &query, 9U));
 	SG_RuneCompactSpatialIndexDestroy(index);
+}
+
+static void SetTopologyCell(sg_rune_compact_spatial_cell_input_t *cell,
+	uint32_t first_face, uint32_t face_count, float minimum_x, float maximum_x)
+{
+	uint32_t axis;
+
+	memset(cell, 0, sizeof(*cell));
+	cell->first_face = first_face;
+	cell->face_count = face_count;
+	cell->bounds.mins.value[0] = minimum_x;
+	cell->bounds.maxs.value[0] = maximum_x;
+	for (axis = 1U; axis < 3U; axis++)
+	{
+		cell->bounds.mins.value[axis] = -1.0f;
+		cell->bounds.maxs.value[axis] = 1.0f;
+	}
+}
+
+static void SetTopologyFaces(sg_rune_compact_spatial_face_input_t *faces,
+	const sg_rune_compact_spatial_cell_input_t *cell, uint32_t source_base)
+{
+	uint32_t axis;
+
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		sg_rune_compact_spatial_face_input_t *upper = &faces[axis * 2U];
+		sg_rune_compact_spatial_face_input_t *lower = upper + 1;
+
+		memset(upper, 0, sizeof(*upper));
+		memset(lower, 0, sizeof(*lower));
+		upper->bounds = cell->bounds;
+		lower->bounds = cell->bounds;
+		upper->normal[axis] = 1.0f;
+		upper->distance = cell->bounds.maxs.value[axis];
+		upper->source_boundary = source_base + axis * 2U;
+		upper->ownership = SG_RUNE_BOUNDARY_CLOSED;
+		lower->normal[axis] = -1.0f;
+		lower->distance = -cell->bounds.mins.value[axis];
+		lower->source_boundary = source_base + axis * 2U + 1U;
+		lower->ownership = SG_RUNE_BOUNDARY_CLOSED;
+	}
+}
+
+static void CheckTopologyCell(const sg_rune_compact_spatial_index_t *index,
+	float x, uint32_t wanted)
+{
+	sg_rune_compact_spatial_error_t error;
+	sg_rune_vec3_t point = { { x, 0.0f, 0.0f } };
+	uint32_t actual[2];
+	uint32_t count = 0U;
+
+	CHECK(SG_RuneCompactSpatialIndexQueryCells(index, &point, actual,
+		(uint32_t)ARRAY_COUNT(actual), &count, &error));
+	CHECK(error.code == SG_RUNE_COMPACT_SPATIAL_ERROR_NONE);
+	CHECK(count == 1U);
+	if (count == 1U)
+		CHECK(actual[0] == wanted);
+}
+
+static void TestTopologyIndex(void)
+{
+	sg_rune_compact_spatial_cell_input_t cells[5];
+	sg_rune_compact_spatial_face_input_t faces[24];
+	sg_rune_compact_spatial_portal_input_t portals[5];
+	sg_rune_compact_spatial_carried_portal_t carried[2] = {
+		{ 0U, 2U }, { 1U, 3U }
+	};
+	sg_rune_compact_spatial_split_input_t split;
+	sg_rune_compact_spatial_topology_input_t topology;
+	sg_rune_compact_spatial_index_t *first = NULL;
+	sg_rune_compact_spatial_index_t *second = NULL;
+	sg_rune_compact_spatial_index_t *invalid = NULL;
+	sg_rune_compact_spatial_error_t error;
+	sg_rune_compact_spatial_counts_t counts;
+	const uint32_t *boundary_faces = NULL;
+	const uint32_t *boundary_portals = NULL;
+	sg_rune_compact_spatial_span_t face_span;
+	sg_rune_compact_spatial_span_t portal_span;
+
+	SetTopologyCell(&cells[0], 0U, 0U, -2.0f, 2.0f);
+	SetTopologyCell(&cells[1], 0U, 6U, -2.0f, 0.0f);
+	SetTopologyCell(&cells[2], 6U, 6U, 0.0f, 2.0f);
+	SetTopologyCell(&cells[3], 12U, 6U, 2.0f, 4.0f);
+	SetTopologyCell(&cells[4], 18U, 6U, -4.0f, -2.0f);
+	SetTopologyFaces(&faces[0], &cells[1], 100U);
+	SetTopologyFaces(&faces[6], &cells[2], 110U);
+	SetTopologyFaces(&faces[12], &cells[3], 120U);
+	SetTopologyFaces(&faces[18], &cells[4], 130U);
+	/* Each shared plane is owned by exactly one closed cell. */
+	faces[0].ownership = SG_RUNE_BOUNDARY_OPEN;
+	faces[7].ownership = SG_RUNE_BOUNDARY_CLOSED;
+	faces[6].ownership = SG_RUNE_BOUNDARY_OPEN;
+	faces[13].ownership = SG_RUNE_BOUNDARY_CLOSED;
+	faces[1].ownership = SG_RUNE_BOUNDARY_OPEN;
+	faces[18].ownership = SG_RUNE_BOUNDARY_CLOSED;
+	memset(portals, 0, sizeof(portals));
+	portals[0].source_boundary = 20U;
+	portals[0].negative_cell = 0U;
+	portals[0].positive_cell = 3U;
+	portals[1].source_boundary = 10U;
+	portals[1].negative_cell = 4U;
+	portals[1].positive_cell = 0U;
+	portals[2].source_boundary = 20U;
+	portals[2].negative_cell = 2U;
+	portals[2].positive_cell = 3U;
+	portals[3].source_boundary = 10U;
+	portals[3].negative_cell = 4U;
+	portals[3].positive_cell = 1U;
+	portals[4].source_boundary = 30U;
+	portals[4].negative_cell = 1U;
+	portals[4].positive_cell = 2U;
+	memset(&split, 0, sizeof(split));
+	split.parent_cell = 0U;
+	split.negative_cell = 1U;
+	split.positive_cell = 2U;
+	split.source_boundary = 30U;
+	split.interior_portal = 4U;
+	split.carried_portal_count = (uint32_t)ARRAY_COUNT(carried);
+	memset(&topology, 0, sizeof(topology));
+	topology.cells = cells;
+	topology.cell_count = (uint32_t)ARRAY_COUNT(cells);
+	topology.faces = faces;
+	topology.face_count = (uint32_t)ARRAY_COUNT(faces);
+	topology.portals = portals;
+	topology.portal_count = (uint32_t)ARRAY_COUNT(portals);
+	topology.splits = &split;
+	topology.split_count = 1U;
+	topology.carried_portals = carried;
+	topology.carried_portal_count = (uint32_t)ARRAY_COUNT(carried);
+	CHECK(SG_RuneCompactSpatialIndexBuildTopology(&topology, NULL, &first,
+		&error));
+	CHECK(SG_RuneCompactSpatialIndexBuildTopology(&topology, NULL, &second,
+		&error));
+	CHECK(SG_RuneCompactSpatialIndexCounts(first, &counts, &error));
+	CHECK(counts.brush_count == 0U);
+	CHECK(counts.cell_count == 4U);
+	CHECK(counts.face_count == 24U);
+	CHECK(counts.portal_count == 3U);
+	CHECK(counts.source_boundary_count == 27U);
+	CheckTopologyCell(first, -3.0f, 4U);
+	CheckTopologyCell(first, -2.0f, 4U);
+	CheckTopologyCell(first, -1.0f, 1U);
+	CheckTopologyCell(first, 0.0f, 2U);
+	CheckTopologyCell(first, 2.0f, 3U);
+	CHECK(SG_RuneCompactSpatialIndexBoundaryRead(first, 20U,
+		&boundary_faces, &face_span, &boundary_portals, &portal_span, &error));
+	CHECK(face_span.count == 0U);
+	CHECK(boundary_faces == NULL);
+	CHECK(portal_span.count == 1U);
+	CHECK(boundary_portals != NULL && boundary_portals[0] == 2U);
+	CHECK(SG_RuneCompactSpatialIndexBoundaryRead(first, 30U,
+		&boundary_faces, &face_span, &boundary_portals, &portal_span, &error));
+	CHECK(portal_span.count == 1U);
+	CHECK(boundary_portals != NULL && boundary_portals[0] == 4U);
+	CHECK(!SG_RuneCompactSpatialIndexBoundaryRead(first, 999U,
+		&boundary_faces, &face_span, &boundary_portals, &portal_span, &error));
+	CHECK(error.code == SG_RUNE_COMPACT_SPATIAL_ERROR_NOT_FOUND);
+	split.carried_portal_count = 1U;
+	CHECK(!SG_RuneCompactSpatialIndexBuildTopology(&topology, NULL, &invalid,
+		&error));
+	CHECK(error.code == SG_RUNE_COMPACT_SPATIAL_ERROR_INVALID_TOPOLOGY);
+	CHECK(invalid == NULL);
+	CheckTopologyCell(second, 0.0f, 2U);
+	SG_RuneCompactSpatialIndexDestroy(second);
+	SG_RuneCompactSpatialIndexDestroy(first);
 }
 
 static void TestCapacityAndArguments(void)
@@ -741,6 +921,7 @@ int main(int argc, char **argv)
 
 	TestLeafQueries();
 	TestPlaneBoundsAndOverflow();
+	TestTopologyIndex();
 	TestCapacityAndArguments();
 	TestWorldFailures();
 	TestAllocationFailures();

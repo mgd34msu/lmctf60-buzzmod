@@ -330,8 +330,23 @@ static int BuildFixtureModelAndContext(built_fixture_t *built)
 				&built->semantics->regions[region_index];
 			sg_rune_phase_basis_t *phase;
 			sg_rune_order_key_t phase_order;
+			uint32_t local;
+			int represented = 0;
 
 			if (region->cell != index)
+				continue;
+			/* The static model carries phase bases, while the configuration
+			 * partition may split one basis into many geometric regions. Keep a
+			 * single canonical phase for equivalent state semantics so fixture
+			 * growth cannot exceed the model's representation limit. */
+			for (local = 0U; local < cell->phases.count; local++)
+				if (FixturePhaseMatchesRegion(&built->model_phases[
+					cell->phases.first + local],
+					&built->configuration->cells[index], region)) {
+					represented = 1;
+					break;
+				}
+			if (represented)
 				continue;
 			if (cell->phases.count >= SG_RUNE_MODEL_MAX_CELL_PHASES)
 			{

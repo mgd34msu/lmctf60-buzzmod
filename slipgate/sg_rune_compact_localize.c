@@ -2,10 +2,15 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <math.h>
 #include <string.h>
 
-#define SG_RUNE_DYADIC_LIMBS 5U
-#define SG_RUNE_BINARY32_MIN_EXPONENT (-149)
+/* A binary32 rider coordinate multiplied by a binary32 facet coefficient can
+ * reach 2^-298.  Keep the common exact accumulator wide enough for that
+ * product as well as the Q8 path below. */
+#define SG_RUNE_DYADIC_LIMBS 10U
+#define SG_RUNE_BINARY32_SIGNIFICAND_MIN_EXPONENT (-149)
+#define SG_RUNE_DYADIC_PRODUCT_MIN_EXPONENT (-298)
 
 typedef struct sg_rune_signed_dyadic_s
 {
@@ -57,7 +62,7 @@ static int Binary32Exponent(uint32_t bits)
 {
 	const uint32_t exponent = (bits >> 23U) & UINT32_C(0xff);
 
-	return exponent == 0U ? SG_RUNE_BINARY32_MIN_EXPONENT :
+	return exponent == 0U ? SG_RUNE_BINARY32_SIGNIFICAND_MIN_EXPONENT :
 		(int)exponent - 150;
 }
 
@@ -158,7 +163,22 @@ static void AddNormalTerm(sg_rune_signed_dyadic_t *sum, uint32_t bits,
 	const int exponent = Binary32Exponent(bits);
 
 	DyadicAddTerm(sum, magnitude,
-		(uint32_t)(exponent - SG_RUNE_BINARY32_MIN_EXPONENT),
+		(uint32_t)(exponent - SG_RUNE_DYADIC_PRODUCT_MIN_EXPONENT),
+		negative ? -1 : 1);
+}
+
+static void AddBinary32ProductTerm(sg_rune_signed_dyadic_t *sum,
+	uint32_t left_bits, uint32_t right_bits)
+{
+	const uint64_t magnitude = (uint64_t)Binary32Significand(left_bits) *
+		(uint64_t)Binary32Significand(right_bits);
+	const int negative = ((left_bits >> 31U) != 0U) !=
+		((right_bits >> 31U) != 0U);
+	const int exponent = Binary32Exponent(left_bits) +
+		Binary32Exponent(right_bits);
+
+	DyadicAddTerm(sum, magnitude,
+		(uint32_t)(exponent - SG_RUNE_DYADIC_PRODUCT_MIN_EXPONENT),
 		negative ? -1 : 1);
 }
 
@@ -182,7 +202,37 @@ static int PlaneRelation(const sg_rune_binary32_plane_t *plane,
 		return 0;
 	DyadicAddTerm(&sum, Binary32Significand(plane->distance_bits),
 		(uint32_t)(Binary32Exponent(plane->distance_bits) + 3 -
-			SG_RUNE_BINARY32_MIN_EXPONENT),
+			SG_RUNE_DYADIC_PRODUCT_MIN_EXPONENT),
+		(plane->distance_bits >> 31U) != 0U ? 1 : -1);
+	*relation_out = sum.sign;
+	return 1;
+}
+
+static int PlaneRelationBinary32(const sg_rune_binary32_plane_t *plane,
+	const sg_rune_vec3_t *point, int *relation_out)
+{
+	sg_rune_signed_dyadic_t sum = { { 0U }, 0 };
+	uint32_t axis;
+	int has_normal = 0;
+
+	if (!Binary32FiniteCanonical(plane->distance_bits))
+		return 0;
+	for (axis = 0U; axis < 3U; axis++) {
+		uint32_t point_bits;
+
+		if (!Binary32FiniteCanonical(plane->normal_bits[axis]) ||
+			!isfinite(point->value[axis]))
+			return 0;
+		memcpy(&point_bits, &point->value[axis], sizeof(point_bits));
+		if (Binary32Significand(plane->normal_bits[axis]) != 0U)
+			has_normal = 1;
+		AddBinary32ProductTerm(&sum, plane->normal_bits[axis], point_bits);
+	}
+	if (!has_normal)
+		return 0;
+	DyadicAddTerm(&sum, Binary32Significand(plane->distance_bits),
+		(uint32_t)(Binary32Exponent(plane->distance_bits) -
+			SG_RUNE_DYADIC_PRODUCT_MIN_EXPONENT),
 		(plane->distance_bits >> 31U) != 0U ? 1 : -1);
 	*relation_out = sum.sign;
 	return 1;
@@ -295,6 +345,90 @@ sg_rune_compact_localize_status_t SG_RuneCompactLocalizeIndexed(
 		return SG_RUNE_COMPACT_LOCALIZE_INVALID_ARGUMENT;
 	return Localize(model, point, candidate_cells, candidate_count, 1,
 		location_out);
+}
+
+static int CellContainsBinary32(const sg_rune_compact_model_t *model,
+	uint32_t cell_index, const sg_rune_vec3_t *point, int *contains_out)
+{
+	const sg_rune_compact_cell_t *cell = &model->cells[cell_index];
+	uint32_t local;
+
+	*contains_out = 0;
+	if (cell->valid_stances == 0U ||
+		(cell->valid_stances & (sg_rune_stance_validity_t)
+			~SG_RUNE_STANCE_VALID_ALL) != 0U || cell->incidences.count == 0U ||
+		!SpanWithin(cell->incidences.first, cell->incidences.count,
+			model->cell_incidence_count) || !model->cell_incidences ||
+		!model->incidences || !model->facets)
+		return -1;
+	for (local = 0U; local < 3U; local++)
+		if (!isfinite(point->value[local]) ||
+			cell->bounds.mins.value[local] >= cell->bounds.maxs.value[local] ||
+			(double)point->value[local] <
+				(double)cell->bounds.mins.value[local] / 8.0 ||
+			(double)point->value[local] >
+				(double)cell->bounds.maxs.value[local] / 8.0)
+			return 0;
+	for (local = 0U; local < cell->incidences.count; local++) {
+		const uint32_t reference = cell->incidences.first + local;
+		const uint32_t incidence_index =
+			model->cell_incidences[reference].value;
+		const sg_rune_compact_incidence_t *incidence;
+		const sg_rune_binary32_plane_t *plane;
+		int relation;
+
+		if (incidence_index >= model->incidence_count)
+			return -1;
+		incidence = &model->incidences[incidence_index];
+		if (incidence->cell.value != cell_index ||
+			incidence->cell_ordinal != local ||
+			incidence->facet.value >= model->facet_count ||
+			incidence->side >= SG_RUNE_FACET_SIDE_COUNT ||
+			incidence->boundary >= SG_RUNE_BOUNDARY_OWNERSHIP_COUNT)
+			return -1;
+		plane = &model->facets[incidence->facet.value].plane;
+		if (!PlaneRelationBinary32(plane, point, &relation))
+			return -1;
+		if ((relation == 0 &&
+			incidence->boundary == SG_RUNE_BOUNDARY_OPEN) ||
+			(incidence->side == SG_RUNE_FACET_NEGATIVE_SIDE && relation > 0) ||
+			(incidence->side == SG_RUNE_FACET_POSITIVE_SIDE && relation < 0))
+			return 0;
+	}
+	*contains_out = 1;
+	return 1;
+}
+
+sg_rune_compact_localize_status_t SG_RuneCompactLocalizeBinary32(
+	const sg_rune_compact_model_t *model, const sg_rune_vec3_t *point,
+	sg_rune_compact_location_t *location_out)
+{
+	uint32_t selected = SG_RUNE_COMPACT_INDEX_NONE;
+	uint32_t cell_index;
+
+	if (!location_out)
+		return SG_RUNE_COMPACT_LOCALIZE_INVALID_ARGUMENT;
+	ClearLocation(location_out);
+	if (!model || !point)
+		return SG_RUNE_COMPACT_LOCALIZE_INVALID_ARGUMENT;
+	if (!model->cells || model->cell_count == 0U)
+		return SG_RUNE_COMPACT_LOCALIZE_INVALID_MODEL;
+	for (cell_index = 0U; cell_index < model->cell_count; cell_index++) {
+		int contains = 0;
+		const int valid = CellContainsBinary32(model, cell_index, point,
+			&contains);
+
+		if (valid < 0)
+			return SG_RUNE_COMPACT_LOCALIZE_INVALID_MODEL;
+		if (contains && (selected == SG_RUNE_COMPACT_INDEX_NONE ||
+			cell_index < selected))
+			selected = cell_index;
+	}
+	if (selected == SG_RUNE_COMPACT_INDEX_NONE)
+		return SG_RUNE_COMPACT_LOCALIZE_NOT_FOUND;
+	location_out->cell.value = selected;
+	location_out->valid_stances = model->cells[selected].valid_stances;
+	return SG_RUNE_COMPACT_LOCALIZE_OK;
 }
 
 const char *SG_RuneCompactLocalizeStatusString(

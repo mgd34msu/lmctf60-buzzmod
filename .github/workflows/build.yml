@@ -43,8 +43,18 @@ jobs:
 
       - name: Build
         run: |
-          make -f GNUmakefile 2>&1 | tee build.log
+          set -o pipefail
+          runtime_module="$(make -s -f GNUmakefile runtime-module-path)"
+          case "$runtime_module" in
+            *-rune-generator.so)
+              echo "::error::runtime module path selected the offline generator"
+              exit 1
+              ;;
+          esac
+          make -B -f GNUmakefile all 2>&1 | tee build.log
           test "${PIPESTATUS[0]}" -eq 0
+          test -f "$runtime_module"
+          printf 'RUNTIME_MODULE=%s\n' "$runtime_module" >> "$GITHUB_ENV"
 
       - name: Fail on warnings
         run: |
@@ -60,7 +70,15 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist
-          cp game*-lmctf-*.so dist/gamex86_64.so
+          : "${RUNTIME_MODULE:?missing exact runtime module path}"
+          case "$RUNTIME_MODULE" in
+            *-rune-generator.so)
+              echo "::error::refusing to package the offline generator"
+              exit 1
+              ;;
+          esac
+          test -f "$RUNTIME_MODULE"
+          cp -- "$RUNTIME_MODULE" dist/gamex86_64.so
           ls -l dist
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -93,27 +111,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.14"
-
-      - name: Install sheet test runtime
-        shell: bash
-        run: |
-          python3 -m venv "$RUNNER_TEMP/slipgate-film"
-          "$RUNNER_TEMP/slipgate-film/bin/pip" install -r tools/requirements.txt
-
       - name: Build module and run complete host suite
         shell: bash
         run: |
           set -o pipefail
-          FILM_PYTHON="$RUNNER_TEMP/slipgate-film/bin/python" \
-            make -B -f "${{ matrix.build_file }}" -j2 \
-            CC="${{ matrix.compiler }}" all host-test 2>&1 | tee host-test.log
-          module=$(find . -maxdepth 1 -type f -name 'game*-lmctf-*.so' \
-            -print -quit)
-          test -n "$module"
-          ldd -r "$module" 2>&1 | tee module-relocations.log
+          runtime_module="$(make -s -f "${{ matrix.build_file }}" runtime-module-path)"
+          case "$runtime_module" in
+            *-rune-generator.so)
+              echo "::error::runtime link guard selected the offline generator"
+              exit 1
+              ;;
+          esac
+          make -B -f "${{ matrix.build_file }}" -j2 \
+            CC="${{ matrix.compiler }}" all host-law-runtime-link-check host-test 2>&1 | tee host-test.log
+          test -f "$runtime_module"
+          sh tests/verify_sg_host_law_runtime_link.sh "$runtime_module"
+          ldd -r "$runtime_module" 2>&1 | tee module-relocations.log
           if grep -Eq 'lib(isl|gmp)\.so' module-relocations.log; then
             grep -E 'lib(isl|gmp)\.so' module-relocations.log
             echo "::error::runtime module links an offline solver dependency"
@@ -239,7 +252,7 @@ jobs:
           printf '%s\n' "${{ needs.version.outputs.version }}" > release/VERSION
           # SLIPGATE bots are compiled into the game modules; no separate
           # bot library or data download exists anymore (runes are generated
-          # server-side with `sv rune`).
+          # server-side by the unshipped generator module with `sv rune`).
           cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS
 
       - name: Publish release

@@ -6,23 +6,11 @@
 
 #include "sg_identity.h"
 
-/* RUNE has one byte layout. The authenticated u16 at byte offset four states
- * whether its proved graph closes the route between both objectives. */
+/* RUNE validity comes from its exact configuration-space structure.  Runtime
+ * objective reachability is a gameplay query, not an artifact contract. */
 #define RUNE_ARTIFACT_MAGIC UINT32_C(0x454e5552)
 #define RUNE_ARTIFACT_HEADER_BYTES UINT16_C(160)
 #define RUNE_MAP_NAME_BYTES SG_LEVEL_IDENTITY_MAPNAME_BYTES
-
-typedef enum rune_route_contract_e
-{
-	RUNE_ROUTE_CONTRACT_COMPLETE = 0,
-	RUNE_ROUTE_CONTRACT_LOCAL_ONLY = 1
-} rune_route_contract_t;
-
-static inline int SG_RuneRouteContractValid(uint16_t route_contract)
-{
-	return route_contract == RUNE_ROUTE_CONTRACT_COMPLETE ||
-	       route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY;
-}
 
 #define RUNE_MAX_SEEDS 32768
 #define RUNE_MAX_LINKS 262144

@@ -1,6 +1,14 @@
 #ifndef SG_BSP_ENTITY_SEMANTICS_H
 #define SG_BSP_ENTITY_SEMANTICS_H
 
+/* Quake II's g_local.h defines `world` as an edict expression.  This public
+ * schema historically exposes a world fact and accepts world parameters, so
+ * shield the declaration boundary instead of depending on include order. */
+#ifdef world
+#define SG_BSP_ENTITY_SEMANTICS_RESTORE_WORLD_MACRO
+#undef world
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -90,6 +98,69 @@ typedef enum sg_bsp_entity_physics_kind_e
 	SG_BSP_ENTITY_PHYSICS_DAMAGE_BEAM
 } sg_bsp_entity_physics_kind_t;
 
+/* These are spawn-resolved angular pusher facts. They describe transforms
+ * and frame motion only. The host remains the authority for live activation,
+ * blockers, and G_Push rollback. */
+typedef enum sg_bsp_entity_angular_mover_kind_e
+{
+	SG_BSP_ENTITY_ANGULAR_MOVER_NONE = 0,
+	SG_BSP_ENTITY_ANGULAR_MOVER_FINITE_DOOR,
+	SG_BSP_ENTITY_ANGULAR_MOVER_CONTINUOUS_ROTATOR,
+	SG_BSP_ENTITY_ANGULAR_MOVER_KIND_COUNT
+} sg_bsp_entity_angular_mover_kind_t;
+
+typedef uint32_t sg_bsp_entity_angular_mover_flags_t;
+enum
+{
+	SG_BSP_ENTITY_ANGULAR_MOVER_START_OPEN = UINT32_C(1) << 0,
+	SG_BSP_ENTITY_ANGULAR_MOVER_START_ON = UINT32_C(1) << 1,
+	SG_BSP_ENTITY_ANGULAR_MOVER_REVERSE = UINT32_C(1) << 2,
+	SG_BSP_ENTITY_ANGULAR_MOVER_TOGGLE = UINT32_C(1) << 3,
+	SG_BSP_ENTITY_ANGULAR_MOVER_CRUSHER = UINT32_C(1) << 4,
+	/* func_rotating bit 32: MOVETYPE_STOP retries after a blocked frame. */
+	SG_BSP_ENTITY_ANGULAR_MOVER_STOP_ON_BLOCK = UINT32_C(1) << 5,
+	SG_BSP_ENTITY_ANGULAR_MOVER_TOUCH_DAMAGE = UINT32_C(1) << 6
+};
+
+typedef struct sg_bsp_entity_angular_door_schedule_s
+{
+	/* The inactive and active transforms are the exact post-spawn door states. */
+	sg_rune_vec3_t inactive_angles;
+	sg_rune_vec3_t active_angles;
+	/* This is SP_func_door_rotating's post-START_OPEN signed movedir. */
+	sg_rune_vec3_t axis;
+	/* Active minus inactive, retained as binary32 values. */
+	sg_rune_vec3_t angular_displacement;
+	float speed;
+	/* Spawn-resolved moveinfo facts, retained though AngleMove uses speed only. */
+	float acceleration;
+	float deceleration;
+	uint32_t frame_ms;
+} sg_bsp_entity_angular_door_schedule_t;
+
+typedef struct sg_bsp_entity_continuous_angular_schedule_s
+{
+	/* The host advances this transform by frame_angular_delta while active.
+	 * It intentionally has no destination transform. */
+	sg_rune_vec3_t initial_angles;
+	sg_rune_vec3_t axis;
+	sg_rune_vec3_t angular_velocity;
+	sg_rune_vec3_t frame_angular_delta;
+	float speed;
+	uint32_t frame_ms;
+} sg_bsp_entity_continuous_angular_schedule_t;
+
+typedef struct sg_bsp_entity_angular_mover_s
+{
+	sg_bsp_entity_angular_mover_kind_t kind;
+	sg_bsp_entity_angular_mover_flags_t flags;
+	union
+	{
+		sg_bsp_entity_angular_door_schedule_t finite_door;
+		sg_bsp_entity_continuous_angular_schedule_t continuous_rotator;
+	} schedule;
+} sg_bsp_entity_angular_mover_t;
+
 typedef struct sg_bsp_world_entity_semantics_s
 {
 	uint64_t source_set_identity;
@@ -119,6 +190,7 @@ typedef struct sg_bsp_entity_semantic_s
 	sg_rune_vec3_t move_direction;
 	sg_rune_vec3_t move_origin;
 	sg_rune_vec3_t move_angles;
+	sg_bsp_entity_angular_mover_t angular_mover;
 	sg_rune_bounds_t bounds;
 	float delay_ms;
 	float dwell_ms;
@@ -137,6 +209,15 @@ typedef struct sg_bsp_entity_semantic_s
 	int32_t style;
 	uint32_t spawnflags;
 } sg_bsp_entity_semantic_t;
+
+static inline int SG_BspEntitySemanticHasFiniteAngularDoor(
+	const sg_bsp_entity_semantic_t *entity)
+{
+	return entity != NULL &&
+		entity->mechanism_kind == SG_RUNE_MECHANISM_ROTATOR &&
+		entity->angular_mover.kind ==
+		SG_BSP_ENTITY_ANGULAR_MOVER_FINITE_DOOR;
+}
 
 typedef struct sg_bsp_entity_semantic_edge_s
 {
@@ -176,9 +257,18 @@ int SG_BspEntitySemanticsBuildEffective(const sg_bsp_world_t *world,
 void SG_BspEntitySemanticsDestroy(sg_bsp_entity_semantics_t *semantics);
 const char *SG_BspEntitySemanticsString(
 	const sg_bsp_entity_semantics_t *semantics, uint32_t offset);
+/* Returns the builder-issued spawn-resolved schedule for a canonical entity
+ * ordinal. NONE and records without matching source provenance return NULL. */
+const sg_bsp_entity_angular_mover_t *SG_BspEntitySemanticsAngularMover(
+	const sg_bsp_entity_semantics_t *semantics, uint32_t canonical_ordinal);
 int SG_BspEntitySemanticsCountsRepresentable(size_t entity_count,
 	size_t edge_count, size_t string_bytes);
 const char *SG_BspEntitySemanticsErrorString(
 	sg_bsp_entity_semantics_error_code_t code);
+
+#ifdef SG_BSP_ENTITY_SEMANTICS_RESTORE_WORLD_MACRO
+#define world (&g_edicts[0])
+#undef SG_BSP_ENTITY_SEMANTICS_RESTORE_WORLD_MACRO
+#endif
 
 #endif

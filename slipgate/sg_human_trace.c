@@ -192,6 +192,9 @@ static qboolean sg_human_trace_event_failed;
 static char (*sg_human_trace_segment_paths)[SG_HUMAN_TRACE_SPOOL_PATH_BYTES];
 static size_t sg_human_trace_segment_path_count;
 static size_t sg_human_trace_segment_path_capacity;
+#ifdef SG_HUMAN_TRACE_TEST
+static qboolean sg_human_trace_test_fail_collection_allocation;
+#endif
 
 static qboolean HumanTraceSpoolAppendEvent(
 	const sg_human_trace_v3_event_t *event);
@@ -234,14 +237,15 @@ static qboolean HumanTraceEventValid(
 		event->kind >= SG_HUMAN_TRACE_V3_EVENT_KIND_COUNT ||
 		event->order == 0U || event->client_id == 0U ||
 		event->spawn_generation == 0U || event->grounded > 1U ||
-		event->reserved != 0U)
+		(event->step_evidence &
+			~SG_HUMAN_TRACE_V3_STEP_EVIDENCE_FLAGS_KNOWN) != 0U)
 		return false;
 	if (event->kind == SG_HUMAN_TRACE_V3_EVENT_STEP)
 		return event->command != 0U && event->hook_event == 0U &&
 			event->after_command == 0U && event->hook_entity == 0;
 	return event->command == 0U && event->hook_event != 0U &&
 		event->hook_entity > 0 &&
-		event->command_msec == 0U;
+		event->command_msec == 0U && event->step_evidence == 0U;
 }
 
 static qboolean HumanTraceEventPrepare(const sg_human_trace_v3_event_t *event)
@@ -293,6 +297,9 @@ static qboolean HumanTraceCompletionSet(uint64_t end_order,
 	completion.continuation = sg_human_trace_segment_continuation ? 1U : 0U;
 	completion.bsp_checksum = sg_human_trace_identity.bsp_checksum;
 	completion.entity_crc32 = sg_human_trace_identity.entity_crc32;
+	completion.bsp_bytes = sg_human_trace_identity.bsp_bytes;
+	memcpy(completion.bsp_sha256, sg_human_trace_identity.bsp_sha256,
+		sizeof(completion.bsp_sha256));
 	completion.host_physics_id = sg_human_trace_identity.host_physics_id;
 	completion.gravity_bits = sg_human_trace_physics.gravity_bits;
 	completion.airaccelerate_bits = sg_human_trace_physics.airaccelerate_bits;
@@ -314,6 +321,9 @@ static void HumanTraceBuilderBegin(human_trace_builder_t *builder)
 	builder->length = 0U;
 	builder->valid = true;
 }
+
+static void HumanTraceBuilderAppend(human_trace_builder_t *builder,
+	const char *format, ...) q_printf_fmt(2, 3);
 
 static void HumanTraceBuilderAppend(human_trace_builder_t *builder,
 	const char *format, ...)
@@ -557,6 +567,23 @@ static qboolean HumanTraceHexToBytes(const char hex[65],
 		bytes[index] = (uint8_t)((high << 4) | low);
 	}
 	return hex[64] == '\0';
+}
+
+static qboolean HumanTraceBytesToHex(
+	const uint8_t bytes[SG_HUMAN_TRACE_SHA256_BYTES], char hex[65])
+{
+	static const char digits[] = "0123456789abcdef";
+	uint32_t index;
+
+	if (!bytes || !hex)
+		return false;
+	for (index = 0U; index < SG_HUMAN_TRACE_SHA256_BYTES; index++)
+	{
+		hex[index * 2U] = digits[bytes[index] >> 4];
+		hex[index * 2U + 1U] = digits[bytes[index] & 15U];
+	}
+	hex[64] = '\0';
+	return true;
 }
 
 static qboolean HumanTraceBytesNonzero(const uint8_t *bytes, size_t length)
@@ -856,6 +883,8 @@ static qboolean HumanTraceSpoolCompletionValid(
 		completion->segment == UINT32_MAX || completion->continuation > 1U ||
 		completion->end_order == 0U || !completion->mapname[0] ||
 		!completion->module_version[0] || !completion->host_physics_id ||
+		completion->bsp_bytes == 0U || !HumanTraceBytesNonzero(
+			completion->bsp_sha256, SG_LEVEL_BSP_SHA256_BYTES) ||
 		!completion->pmove_substep_ms || !completion->server_frame_ms)
 		return false;
 	for (index = 0U; index < sizeof(completion->mapname); index++)
@@ -1080,6 +1109,7 @@ static qboolean HumanTraceJsonHeader(const char *line,
 {
 	char format[32];
 	char kind[16];
+	char bsp_sha256[65];
 	uint64_t value;
 
 	if (!line || !previous_sha256 || !sha256 || !header_out)
@@ -1106,6 +1136,11 @@ static qboolean HumanTraceJsonHeader(const char *line,
 			&header_out->identity.bsp_checksum) ||
 		!HumanTraceJsonU32(line, "\"entity_crc32\":",
 			&header_out->identity.entity_crc32) ||
+		!HumanTraceJsonUnsigned(line, "\"bsp_bytes\":",
+			&header_out->identity.bsp_bytes) ||
+		!HumanTraceJsonString(line, "\"bsp_sha256\":\"", bsp_sha256,
+			sizeof(bsp_sha256)) ||
+		!HumanTraceHexToBytes(bsp_sha256, header_out->identity.bsp_sha256) ||
 		!HumanTraceJsonUnsigned(line, "\"physics_id\":", &value) ||
 		value != 0U || !HumanTraceJsonU32(line, "\"host_physics_id\":",
 			&header_out->identity.host_physics_id) ||
@@ -1134,6 +1169,9 @@ static qboolean HumanTraceJsonHeader(const char *line,
 		header_out->start_command == 0U ||
 		header_out->start_hook_event == 0U ||
 		!header_out->identity.mapname[0] ||
+		header_out->identity.bsp_bytes == 0U ||
+		!HumanTraceBytesNonzero(header_out->identity.bsp_sha256,
+			SG_LEVEL_BSP_SHA256_BYTES) ||
 		!header_out->identity.host_physics_id ||
 		!header_out->module_version[0])
 		return false;
@@ -1153,6 +1191,7 @@ static qboolean HumanTraceJsonEvent(const char *line,
 	uint64_t unsigned_value;
 	uint64_t unsigned_values[3];
 	const char *after;
+	const char *walk_evidence;
 	uint32_t index;
 
 	if (!line || !event_out || !HumanTraceJsonString(line, "\"format\":\"",
@@ -1187,6 +1226,14 @@ static qboolean HumanTraceJsonEvent(const char *line,
 		}
 		event_out->command_msec = (uint16_t)unsigned_value;
 		event_out->grounded = signed_value >= 0 ? 1U : 0U;
+		walk_evidence = HumanTraceJsonValue(line, "\"walk_evidence\":");
+		if (walk_evidence != NULL &&
+			(!HumanTraceJsonUnsigned(line, "\"walk_evidence\":",
+				&unsigned_value) || unsigned_value > UINT8_MAX))
+			return false;
+		if (walk_evidence != NULL)
+			event_out->step_evidence =
+				(sg_human_trace_v3_step_evidence_t)unsigned_value;
 		return HumanTraceEventValid(event_out);
 	}
 	if (strcmp(kind, "hook-fire") == 0)
@@ -1468,6 +1515,23 @@ int SG_HumanTraceTestJsonNameSegment(const char *name,
 {
 	return HumanTraceJsonNameSegment(name, identity, segment_out);
 }
+
+int SG_HumanTraceTestJsonHeaderIdentity(const char *line,
+	sg_level_identity_t *identity_out)
+{
+	human_trace_json_header_t header;
+	uint8_t zero[SG_HUMAN_TRACE_SHA256_BYTES] = { 0U };
+
+	if (!identity_out || !HumanTraceJsonHeader(line, zero, zero, &header))
+		return 0;
+	*identity_out = header.identity;
+	return 1;
+}
+
+void SG_HumanTraceTestFailCollectionAllocation(int enabled)
+{
+	sg_human_trace_test_fail_collection_allocation = enabled != 0;
+}
 #endif
 
 static qboolean HumanTraceJsonStableIdentityEqual(
@@ -1477,7 +1541,10 @@ static qboolean HumanTraceJsonStableIdentityEqual(
 	return left && right && left->identity.bsp_checksum ==
 		right->identity.bsp_checksum && left->identity.entity_crc32 ==
 		right->identity.entity_crc32 && left->identity.host_physics_id ==
-		right->identity.host_physics_id && left->module_revision ==
+		right->identity.host_physics_id && left->identity.bsp_bytes ==
+		right->identity.bsp_bytes && memcmp(left->identity.bsp_sha256,
+		right->identity.bsp_sha256, SG_LEVEL_BSP_SHA256_BYTES) == 0 &&
+		left->module_revision ==
 		right->module_revision && strncmp(left->identity.mapname,
 		right->identity.mapname, sizeof(left->identity.mapname)) == 0 &&
 		strncmp(left->module_version, right->module_version,
@@ -1501,6 +1568,9 @@ static qboolean HumanTraceJsonFinalMatchesCompletion(
 			sizeof(header->identity.mapname)) == 0 &&
 		header->identity.bsp_checksum == completion->bsp_checksum &&
 		header->identity.entity_crc32 == completion->entity_crc32 &&
+		header->identity.bsp_bytes == completion->bsp_bytes &&
+		memcmp(header->identity.bsp_sha256, completion->bsp_sha256,
+			SG_LEVEL_BSP_SHA256_BYTES) == 0 &&
 		header->identity.host_physics_id == completion->host_physics_id &&
 		header->gravity_bits == completion->gravity_bits &&
 		header->airaccelerate_bits == completion->airaccelerate_bits &&
@@ -1611,6 +1681,7 @@ static qboolean HumanTraceOpenSegment(qboolean continuation)
 	FILE *candidate_file = NULL;
 	uint32_t candidate = sg_human_trace_segment;
 	uint32_t session;
+	char bsp_sha256[65];
 	size_t segment_bytes = 0U;
 
 	for (;;)
@@ -1631,6 +1702,12 @@ static qboolean HumanTraceOpenSegment(qboolean continuation)
 		candidate++;
 	}
 	session = continuation ? sg_human_trace_session : candidate;
+	if (!HumanTraceBytesToHex(sg_human_trace_identity.bsp_sha256,
+		bsp_sha256))
+	{
+		fclose(candidate_file);
+		return false;
+	}
 	HumanTraceBuilderBegin(&header);
 	HumanTraceBuilderAppend(&header,
 		"{\"format\":\"%s\",\"kind\":\"header\","
@@ -1639,7 +1716,8 @@ static qboolean HumanTraceOpenSegment(qboolean continuation)
 		"\"start_command\":%" PRIu64 ","
 		"\"start_hook_event\":%" PRIu64 ","
 		"\"map\":\"%s\",\"bsp_checksum\":%" PRIu32 ","
-		"\"entity_crc32\":%" PRIu32 ",\"physics_id\":0,"
+		"\"entity_crc32\":%" PRIu32 ",\"bsp_bytes\":%" PRIu64 ","
+		"\"bsp_sha256\":\"%s\",\"physics_id\":0,"
 		"\"host_physics_id\":%" PRIu32 ","
 		"\"gravity_bits\":%" PRIu32 ","
 		"\"airaccelerate_bits\":%" PRIu32 ","
@@ -1652,6 +1730,7 @@ static qboolean HumanTraceOpenSegment(qboolean continuation)
 		sg_human_trace_hook_event + 1U, sg_human_trace_identity.mapname,
 		sg_human_trace_identity.bsp_checksum,
 		sg_human_trace_identity.entity_crc32,
+		sg_human_trace_identity.bsp_bytes, bsp_sha256,
 		sg_human_trace_identity.host_physics_id,
 		sg_human_trace_physics.gravity_bits,
 		sg_human_trace_physics.airaccelerate_bits,
@@ -1803,6 +1882,38 @@ static void HumanTraceState(human_trace_builder_t *builder,
 		(unsigned int)state->pm_time, (int)state->gravity,
 		(int)state->delta_angles[0], (int)state->delta_angles[1],
 		(int)state->delta_angles[2]);
+}
+
+static sg_human_trace_v3_step_evidence_t HumanTraceStepEvidence(
+	const edict_t *entity, const pmove_state_t *before, const pmove_t *after)
+{
+	sg_human_trace_v3_step_evidence_t evidence = 0U;
+	const uint16_t transient_flags = PMF_DUCKED | PMF_JUMP_HELD |
+		PMF_TIME_WATERJUMP | PMF_TIME_LAND | PMF_TIME_TELEPORT |
+		PMF_NO_PREDICTION;
+
+	if (entity == NULL || entity->client == NULL || before == NULL ||
+		after == NULL)
+		return 0U;
+	if (after->groundentity != NULL)
+		evidence |= SG_HUMAN_TRACE_V3_STEP_EVIDENCE_GROUNDED;
+	if (after->waterlevel == 0 && after->watertype == 0)
+		evidence |= SG_HUMAN_TRACE_V3_STEP_EVIDENCE_DRY;
+	if ((after->cmd.forwardmove != 0 || after->cmd.sidemove != 0) &&
+		after->cmd.upmove == 0 &&
+		(((uint16_t)before->pm_flags | (uint16_t)after->s.pm_flags) &
+			transient_flags) == 0U)
+		evidence |= SG_HUMAN_TRACE_V3_STEP_EVIDENCE_ORDINARY_INPUT;
+	if (entity->client->hook == NULL && entity->client->hookstate == 0)
+		evidence |= SG_HUMAN_TRACE_V3_STEP_EVIDENCE_NO_HOOK;
+	if (after->groundentity == &g_edicts[0])
+		evidence |= SG_HUMAN_TRACE_V3_STEP_EVIDENCE_WORLD_SUPPORT;
+	if (after->numtouch == 0)
+		evidence |= SG_HUMAN_TRACE_V3_STEP_EVIDENCE_NO_EXTERNAL;
+	if (before->origin[0] != after->s.origin[0] ||
+		before->origin[1] != after->s.origin[1])
+		evidence |= SG_HUMAN_TRACE_V3_STEP_EVIDENCE_MOVED;
+	return evidence;
 }
 
 static qboolean HumanTraceHuman(const edict_t *entity, int *client_key,
@@ -1987,6 +2098,7 @@ typedef struct human_trace_manifest_s
 	size_t segment_count;
 	size_t segment_capacity;
 	uint64_t visit_identity;
+	uint8_t allocation_failed;
 } human_trace_manifest_t;
 
 typedef struct human_trace_manifest_scope_occurrence_s
@@ -2069,6 +2181,13 @@ static int HumanTraceManifestGrow(void **items, size_t item_bytes,
 		return 0;
 	if (needed <= *capacity)
 		return 1;
+#ifdef SG_HUMAN_TRACE_TEST
+	if (sg_human_trace_test_fail_collection_allocation)
+	{
+		sg_human_trace_test_fail_collection_allocation = false;
+		return 0;
+	}
+#endif
 	next = *capacity ? *capacity : 8U;
 	while (next < needed)
 	{
@@ -2116,10 +2235,15 @@ static int HumanTraceManifestCandidateAppend(human_trace_manifest_t *manifest,
 {
 	human_trace_manifest_candidate_t *candidate;
 
-	if (!manifest || !directory || !name || !HumanTraceManifestGrow(
-		(void **)&manifest->candidates, sizeof(*manifest->candidates),
-		manifest->candidate_count + 1U, &manifest->candidate_capacity))
+	if (!manifest || !directory || !name)
 		return 0;
+	if (!HumanTraceManifestGrow((void **)&manifest->candidates,
+		sizeof(*manifest->candidates), manifest->candidate_count + 1U,
+		&manifest->candidate_capacity))
+	{
+		manifest->allocation_failed = 1U;
+		return 0;
+	}
 	candidate = &manifest->candidates[manifest->candidate_count];
 	memset(candidate, 0, sizeof(*candidate));
 	if (snprintf(candidate->path, sizeof(candidate->path), "%s/%s", directory,
@@ -2231,7 +2355,10 @@ static int HumanTraceManifestCandidatesSort(human_trace_manifest_t *manifest)
 		return 0;
 	temporary = malloc(manifest->candidate_count * sizeof(*temporary));
 	if (!temporary)
+	{
+		manifest->allocation_failed = 1U;
 		return 0;
+	}
 	source = manifest->candidates;
 	target = temporary;
 	for (pass = 0U; pass < sizeof(uint32_t); pass++)
@@ -2314,6 +2441,9 @@ static int HumanTraceManifestRootRead(
 					sizeof(identity->mapname)) != 0 ||
 				root->header.identity.bsp_checksum != identity->bsp_checksum ||
 				root->header.identity.entity_crc32 != identity->entity_crc32 ||
+				root->header.identity.bsp_bytes != identity->bsp_bytes ||
+				memcmp(root->header.identity.bsp_sha256, identity->bsp_sha256,
+					SG_LEVEL_BSP_SHA256_BYTES) != 0 ||
 				root->header.identity.host_physics_id != identity->host_physics_id)
 			{
 				valid = 0;
@@ -2364,6 +2494,9 @@ static int HumanTraceManifestRootRead(
 					sizeof(terminal.mapname)) != 0 ||
 				terminal.bsp_checksum != root->header.identity.bsp_checksum ||
 				terminal.entity_crc32 != root->header.identity.entity_crc32 ||
+				terminal.bsp_bytes != root->header.identity.bsp_bytes ||
+				memcmp(terminal.bsp_sha256, root->header.identity.bsp_sha256,
+					SG_LEVEL_BSP_SHA256_BYTES) != 0 ||
 				terminal.host_physics_id !=
 					root->header.identity.host_physics_id ||
 				previous_order >= terminal.end_order)
@@ -2402,10 +2535,15 @@ static int HumanTraceManifestRootRead(
 static int HumanTraceManifestRootAppend(human_trace_manifest_t *manifest,
 	human_trace_manifest_root_t *root)
 {
-	if (!manifest || !root || !HumanTraceManifestGrow((void **)&manifest->roots,
+	if (!manifest || !root)
+		return 0;
+	if (!HumanTraceManifestGrow((void **)&manifest->roots,
 		sizeof(*manifest->roots), manifest->root_count + 1U,
 		&manifest->root_capacity))
+	{
+		manifest->allocation_failed = 1U;
 		return 0;
+	}
 	manifest->roots[manifest->root_count++] = *root;
 	memset(root, 0, sizeof(*root));
 	return 1;
@@ -2495,10 +2633,15 @@ static int HumanTraceManifestSegmentRead(
 static int HumanTraceManifestSegmentAppend(human_trace_manifest_t *manifest,
 	human_trace_manifest_segment_t *segment)
 {
-	if (!manifest || !segment || !HumanTraceManifestGrow(
-		(void **)&manifest->segments, sizeof(*manifest->segments),
-		manifest->segment_count + 1U, &manifest->segment_capacity))
+	if (!manifest || !segment)
 		return 0;
+	if (!HumanTraceManifestGrow((void **)&manifest->segments,
+		sizeof(*manifest->segments), manifest->segment_count + 1U,
+		&manifest->segment_capacity))
+	{
+		manifest->allocation_failed = 1U;
+		return 0;
+	}
 	manifest->segments[manifest->segment_count++] = *segment;
 	memset(segment, 0, sizeof(*segment));
 	return 1;
@@ -2520,7 +2663,10 @@ static int HumanTraceManifestSegmentsSort(human_trace_manifest_t *manifest)
 		return manifest != NULL;
 	if (manifest->segment_count > SIZE_MAX / sizeof(*temporary) ||
 		!(temporary = malloc(manifest->segment_count * sizeof(*temporary))))
+	{
+		manifest->allocation_failed = 1U;
 		return 0;
+	}
 	source = manifest->segments;
 	target = temporary;
 	for (pass = 0U; pass < sizeof(uint32_t); pass++)
@@ -2586,19 +2732,19 @@ static int HumanTraceManifestDigestIndexesSort(
 	target = temporary;
 	for (pass = 0U; pass < SG_HUMAN_TRACE_SHA256_BYTES; pass++)
 	{
-		size_t byte = SG_HUMAN_TRACE_SHA256_BYTES - pass - 1U;
+		size_t byte_index = SG_HUMAN_TRACE_SHA256_BYTES - pass - 1U;
 
 		memset(count, 0, sizeof(count));
 		for (index = 0U; index < item_count; index++)
 			count[HumanTraceManifestSegmentDigest(
-				&manifest->segments[source[index]], key)[byte]]++;
+				&manifest->segments[source[index]], key)[byte_index]]++;
 		offset[0] = 0U;
 		for (index = 1U; index < 256U; index++)
 			offset[index] = offset[index - 1U] + count[index - 1U];
 		for (index = 0U; index < item_count; index++)
 		{
 			uint8_t bucket = HumanTraceManifestSegmentDigest(
-				&manifest->segments[source[index]], key)[byte];
+				&manifest->segments[source[index]], key)[byte_index];
 
 			target[offset[bucket]++] = source[index];
 		}
@@ -2630,7 +2776,10 @@ static int HumanTraceManifestSegmentsLink(human_trace_manifest_t *manifest)
 	last = malloc(manifest->segment_count * sizeof(*last));
 	previous = malloc(manifest->segment_count * sizeof(*previous));
 	if (!last || !previous)
+	{
+		manifest->allocation_failed = 1U;
 		goto finish;
+	}
 	for (index = 0U; index < manifest->segment_count; index++)
 	{
 		last[index] = index;
@@ -2643,7 +2792,10 @@ static int HumanTraceManifestSegmentsLink(human_trace_manifest_t *manifest)
 		manifest->segment_count, HUMAN_TRACE_MANIFEST_LAST_DIGEST) ||
 		!HumanTraceManifestDigestIndexesSort(manifest, previous,
 			continuation_count, HUMAN_TRACE_MANIFEST_PREVIOUS_DIGEST))
+	{
+		manifest->allocation_failed = 1U;
 		goto finish;
+	}
 	while (last_at < manifest->segment_count &&
 		previous_at < continuation_count)
 	{
@@ -2761,6 +2913,11 @@ static int HumanTraceManifestAuthenticateRoot(human_trace_manifest_root_t *root,
 					root->header.identity.bsp_checksum ||
 				current->header.identity.entity_crc32 !=
 					root->header.identity.entity_crc32 ||
+				current->header.identity.bsp_bytes !=
+					root->header.identity.bsp_bytes ||
+				memcmp(current->header.identity.bsp_sha256,
+					root->header.identity.bsp_sha256,
+					SG_LEVEL_BSP_SHA256_BYTES) != 0 ||
 				current->header.identity.host_physics_id !=
 					root->header.identity.host_physics_id)
 				return 0;
@@ -2913,11 +3070,17 @@ static int HumanTraceManifestBuildScopes(human_trace_manifest_t *manifest,
 	if (root->event_count == 0U)
 		return 1;
 	if (root->event_count > SIZE_MAX / sizeof(*occurrences))
+	{
+		manifest->allocation_failed = 1U;
 		return 0;
+	}
 	occurrences = malloc(root->event_count * sizeof(*occurrences));
 	order = malloc(root->event_count * sizeof(*order));
 	if (!occurrences || !order)
+	{
+		manifest->allocation_failed = 1U;
 		goto finish;
+	}
 	for (index = 0U; index < root->event_count; index++)
 	{
 		occurrences[index].client_id = root->events[index].recorded.event.client_id;
@@ -2928,7 +3091,10 @@ static int HumanTraceManifestBuildScopes(human_trace_manifest_t *manifest,
 	}
 	if (!HumanTraceManifestScopeOccurrencesSort(occurrences,
 		root->event_count))
+	{
+		manifest->allocation_failed = 1U;
 		goto finish;
+	}
 	for (index = 0U; index < root->event_count;)
 	{
 		size_t after = index + 1U;
@@ -2954,8 +3120,11 @@ static int HumanTraceManifestBuildScopes(human_trace_manifest_t *manifest,
 	}
 	if (!HumanTraceManifestScopeOrderSort(order, group_count) ||
 		group_count > (SIZE_MAX - sizeof(*allocation)) /
-			sizeof(*root->scopes))
+				sizeof(*root->scopes))
+	{
+		manifest->allocation_failed = 1U;
 		goto finish;
+	}
 	allocation_bytes = sizeof(*allocation) +
 		group_count * sizeof(*root->scopes);
 	if (!HumanTraceAuthorityIdentityNext(
@@ -2964,7 +3133,10 @@ static int HumanTraceManifestBuildScopes(human_trace_manifest_t *manifest,
 		goto finish;
 	allocation = calloc(1U, allocation_bytes);
 	if (!allocation)
+	{
+		manifest->allocation_failed = 1U;
 		goto finish;
+	}
 	allocation->allocation_identity = allocation_identity;
 	allocation->scope_count = group_count;
 	root->scope_allocation = allocation;
@@ -2972,7 +3144,10 @@ static int HumanTraceManifestBuildScopes(human_trace_manifest_t *manifest,
 	root->scope_started = calloc(group_count, sizeof(*root->scope_started));
 	group_to_scope = malloc(group_count * sizeof(*group_to_scope));
 	if (!root->scopes || !root->scope_started || !group_to_scope)
+	{
+		manifest->allocation_failed = 1U;
 		goto finish;
+	}
 	root->scope_count = group_count;
 	for (index = 0U; index < group_count; index++)
 	{
@@ -3030,7 +3205,10 @@ static int HumanTraceManifestBuild(const sg_level_identity_t *identity,
 			int read = HumanTraceManifestRootRead(candidate, identity, &root);
 
 			if (read < 0)
+			{
+				manifest->allocation_failed = 1U;
 				return 0;
+			}
 			if (read > 0 && !HumanTraceManifestRootAppend(manifest, &root))
 			{
 				free(root.events);
@@ -3049,7 +3227,10 @@ static int HumanTraceManifestBuild(const sg_level_identity_t *identity,
 			int read = HumanTraceManifestSegmentRead(candidate, &segment);
 
 			if (read < 0)
+			{
+				manifest->allocation_failed = 1U;
 				return 0;
+			}
 			if (read > 0 && !HumanTraceManifestSegmentAppend(manifest, &segment))
 			{
 				free(segment.events);
@@ -3167,7 +3348,8 @@ static int HumanTraceManifestVisitRoot(human_trace_manifest_t *manifest,
 	return result;
 }
 
-int SG_HumanTraceVisitAcceptedV3Collection(const sg_level_identity_t *identity,
+sg_human_trace_visit_status_t SG_HumanTraceVisitAcceptedV3CollectionStatus(
+	const sg_level_identity_t *identity,
 	const sg_human_trace_v3_collection_visitor_t *visitor, void *context)
 {
 	human_trace_manifest_t manifest;
@@ -3178,15 +3360,21 @@ int SG_HumanTraceVisitAcceptedV3Collection(const sg_level_identity_t *identity,
 		!visitor->begin_root || !visitor->segment || !visitor->scope ||
 		!visitor->event || !visitor->finish_root ||
 		sg_human_trace_active_collection)
-		return 0;
+		return sg_human_trace_active_collection
+			? SG_HUMAN_TRACE_VISIT_BUSY
+			: SG_HUMAN_TRACE_VISIT_INVALID_ARGUMENT;
 	memset(&manifest, 0, sizeof(manifest));
 	if (!HumanTraceAuthorityIdentityNext(&sg_human_trace_next_visit_identity,
 		&manifest.visit_identity))
-		return 0;
+		return SG_HUMAN_TRACE_VISIT_INVALID_COLLECTION;
 	if (!HumanTraceManifestBuild(identity, &manifest))
 	{
+		sg_human_trace_visit_status_t status = manifest.allocation_failed
+			? SG_HUMAN_TRACE_VISIT_ALLOCATION_FAILED
+			: SG_HUMAN_TRACE_VISIT_INVALID_COLLECTION;
+
 		HumanTraceManifestFree(&manifest);
-		return 0;
+		return status;
 	}
 	sg_human_trace_active_collection = &manifest;
 	for (root_index = 0U; result && root_index < manifest.root_count;
@@ -3201,7 +3389,15 @@ int SG_HumanTraceVisitAcceptedV3Collection(const sg_level_identity_t *identity,
 	sg_human_trace_active_root = NULL;
 	sg_human_trace_active_collection = NULL;
 	HumanTraceManifestFree(&manifest);
-	return result;
+	return result ? SG_HUMAN_TRACE_VISIT_OK
+		: SG_HUMAN_TRACE_VISIT_INVALID_COLLECTION;
+}
+
+int SG_HumanTraceVisitAcceptedV3Collection(const sg_level_identity_t *identity,
+	const sg_human_trace_v3_collection_visitor_t *visitor, void *context)
+{
+	return SG_HumanTraceVisitAcceptedV3CollectionStatus(identity, visitor,
+		context) == SG_HUMAN_TRACE_VISIT_OK;
 }
 
 int SG_HumanTraceAcceptedV3ScopeView(
@@ -3298,6 +3494,7 @@ void SG_HumanTracePmove(edict_t *entity,
 		event.command_msec = command->msec;
 		event.grounded = HumanTraceEntityKey(after->groundentity) >= 0 ?
 			1U : 0U;
+		event.step_evidence = HumanTraceStepEvidence(entity, before, after);
 		event_ready = HumanTraceEventPrepare(&event);
 	}
 	HumanTraceBuilderBegin(&builder);
@@ -3309,7 +3506,8 @@ void SG_HumanTracePmove(edict_t *entity,
 		"\"snapinitial\":%d,"
 		"\"cmd\":{\"msec\":%u,\"buttons\":%u,"
 		"\"angles\":[%d,%d,%d],\"forward\":%d,\"side\":%d,"
-		"\"up\":%d,\"impulse\":%u,\"light\":%u},\"before\":",
+		"\"up\":%d,\"impulse\":%u,\"light\":%u},"
+		"\"walk_evidence\":%u,\"before\":",
 		SG_HUMAN_TRACE_FORMAT, next_order, next_command, client_key,
 		spawn_generation, level.framenum, HumanTraceLevelTimeBits(),
 		after->snapinitial ? 1 : 0,
@@ -3318,7 +3516,8 @@ void SG_HumanTracePmove(edict_t *entity,
 		(int)command->angles[2], (int)command->forwardmove,
 		(int)command->sidemove, (int)command->upmove,
 		(unsigned int)command->impulse,
-		(unsigned int)command->lightlevel);
+		(unsigned int)command->lightlevel,
+		(unsigned int)event.step_evidence);
 	HumanTraceState(&builder, before);
 	HumanTraceBuilderAppend(&builder, ",\"after\":");
 	HumanTraceState(&builder, &after->s);

@@ -2,6 +2,7 @@
 #include "sg_configuration_lattice.h"
 
 #include <float.h>
+#include <limits.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -10,8 +11,6 @@
 #define SEMANTICS_POINT_EPSILON 0.00001f
 #define SEMANTICS_GEOMETRY_EPSILON 0.000001
 #define SEMANTICS_CONTENTS_DEADMONSTER UINT32_C(0x04000000)
-#define SEMANTICS_GROUND_PROBE 0.25f
-#define SEMANTICS_TRACE_EPSILON 0.03125f
 
 typedef struct semantic_constraint_s
 {
@@ -799,18 +798,18 @@ static int SampleOffsets(const sg_host_collision_authority_t *authority,
 	if (stance == SG_RUNE_STANCE_STANDING)
 	{
 		hull = &authority->identity.standing_hull;
-		view_height = 22.0f;
+		view_height = SG_HOST_STANDING_VIEW_HEIGHT;
 	}
 	else if (stance == SG_RUNE_STANCE_CROUCHING)
 	{
 		hull = &authority->identity.crouching_hull;
-		view_height = -2.0f;
+		view_height = SG_HOST_CROUCHING_VIEW_HEIGHT;
 	}
 	else
 		return 0;
 	sample_height = view_height - hull->mins.value[2];
-	if (!isfinite(sample_height) || sample_height < (float)INT32_MIN ||
-		sample_height >= (float)INT32_MAX)
+	if (!isfinite(sample_height) || sample_height < (float)INT_MIN ||
+		sample_height >= (float)INT_MAX)
 		return 0;
 	sample2 = (int)sample_height;
 	offsets[0] = hull->mins.value[2] + 1.0f;
@@ -886,6 +885,77 @@ static float BoundsMinimum(const sg_rune_bounds_t *bounds,
 	return value;
 }
 
+static float BoundsMaximum(const sg_rune_bounds_t *bounds,
+	const float normal[3])
+{
+	float value = 0.0f;
+	uint32_t axis;
+
+	for (axis = 0; axis < 3U; axis++)
+		value += normal[axis] < 0.0f ?
+			normal[axis] * bounds->mins.value[axis] :
+			normal[axis] * bounds->maxs.value[axis];
+	return value;
+}
+
+static float TraceExtent(const sg_rune_hull_profile_t *hull,
+	const float normal[3])
+{
+	float extent = 0.0f;
+	uint32_t axis;
+
+	for (axis = 0; axis < 3U; axis++)
+		extent += fabsf(normal[axis]) * fmaxf(-hull->mins.value[axis],
+			hull->maxs.value[axis]);
+	return extent;
+}
+
+static int BuildSupportTraversalDecisions(semantic_build_t *build,
+	const sg_rune_hull_profile_t *hull, uint32_t cell_index,
+	int has_support_brush)
+{
+	const sg_bsp_world_t *world = build->authority->world;
+	const sg_rune_bounds_t *bounds =
+		&build->configuration->cells[cell_index].bounds;
+	uint32_t node_index;
+
+	if (!has_support_brush)
+		return 1;
+	for (node_index = 0; node_index < world->node_count; node_index++)
+	{
+		const sg_bsp_node_t *node = &world->nodes[node_index];
+		const sg_bsp_plane_t *plane;
+		float extent;
+		uint32_t side, endpoint;
+
+		if (node->plane >= world->plane_count)
+		{
+			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
+				node_index);
+			return 0;
+		}
+		plane = &world->planes[node->plane];
+		extent = TraceExtent(hull, plane->normal.value);
+		for (side = 0U; side < 2U; side++)
+			for (endpoint = 0U; endpoint < 2U; endpoint++)
+			{
+				float distance = plane->distance +
+					(side ? extent : -extent) +
+					(endpoint ? plane->normal.value[2] *
+						SG_HOST_GROUND_PROBE : 0.0f);
+
+				if (BoundsMinimum(bounds, plane->normal.value) >= distance ||
+					BoundsMaximum(bounds, plane->normal.value) <= distance)
+					continue;
+				if (!AppendSupportDecision(build, plane->normal.value, distance,
+					SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_BSP_TRAVERSAL,
+					node_index, side * 2U + endpoint))
+					return 0;
+			}
+	}
+	return 1;
+}
+
 static int BuildSupportDecisions(semantic_build_t *build,
 	sg_rune_stance_t stance, uint32_t cell_index)
 {
@@ -902,6 +972,7 @@ static int BuildSupportDecisions(semantic_build_t *build,
 	uint32_t entering_count = 0, entering_capacity = 0;
 	uint32_t leaving_count = 0, leaving_capacity = 0;
 	uint32_t brush, side_index, first, second;
+	int has_support_brush = 0;
 
 	free(build->support_decisions);
 	build->support_decisions = NULL;
@@ -953,9 +1024,9 @@ static int BuildSupportDecisions(semantic_build_t *build,
 			reachable_minimum = BoundsMinimum(bounds, plane->normal.value);
 			if (plane->normal.value[2] > 0.0f)
 				reachable_minimum -= plane->normal.value[2] *
-					SEMANTICS_GROUND_PROBE;
+					SG_HOST_GROUND_PROBE;
 			if (reachable_minimum > expanded_distance +
-				SEMANTICS_TRACE_EPSILON)
+				SG_HOST_COLLISION_TRACE_EPSILON)
 			{
 				potentially_reachable = 0;
 				break;
@@ -963,6 +1034,7 @@ static int BuildSupportDecisions(semantic_build_t *build,
 		}
 		if (!potentially_reachable)
 			continue;
+		has_support_brush = 1;
 		for (side_offset = 0; side_offset < record->side_count; side_offset++)
 		{
 			const sg_bsp_brush_side_t *side;
@@ -986,12 +1058,12 @@ static int BuildSupportDecisions(semantic_build_t *build,
 			if (plane->normal.value[2] < 0.0f)
 			{
 				if (!AppendSupportDecision(build, plane->normal.value,
-					expanded_distance - SEMANTICS_TRACE_EPSILON,
+					expanded_distance - SG_HOST_COLLISION_TRACE_EPSILON,
 					SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_LEAVE_ZERO,
 					side_index, brush) ||
 					!AppendSupportDecision(build, plane->normal.value,
 						expanded_distance + plane->normal.value[2] *
-							SEMANTICS_GROUND_PROBE,
+							SG_HOST_GROUND_PROBE,
 						SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_LEAVE_END,
 						side_index, brush) || leaving_count == UINT32_MAX ||
 					!Grow((void **)&leaving, &leaving_capacity,
@@ -1016,12 +1088,12 @@ static int BuildSupportDecisions(semantic_build_t *build,
 				continue;
 			if (!AppendSupportDecision(build, plane->normal.value,
 				expanded_distance +
-					plane->normal.value[2] * SEMANTICS_GROUND_PROBE +
-					SEMANTICS_TRACE_EPSILON,
+					plane->normal.value[2] * SG_HOST_GROUND_PROBE +
+					SG_HOST_COLLISION_TRACE_EPSILON,
 				SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_REACH,
 					side_index, brush) ||
 				!AppendSupportDecision(build, plane->normal.value,
-					expanded_distance + SEMANTICS_TRACE_EPSILON,
+				expanded_distance + SG_HOST_COLLISION_TRACE_EPSILON,
 					SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_ENTER_ZERO,
 					side_index, brush))
 				goto failure;
@@ -1043,6 +1115,9 @@ static int BuildSupportDecisions(semantic_build_t *build,
 			entering[entering_count++] = candidate;
 		}
 	}
+	if (!BuildSupportTraversalDecisions(build, hull, cell_index,
+		has_support_brush))
+		goto failure;
 	for (first = 0; first < entering_count; first++)
 		for (second = first + 1U; second < entering_count; second++)
 		{
@@ -1055,9 +1130,9 @@ static int BuildSupportDecisions(semantic_build_t *build,
 					entering[first].normal[2] *
 					entering[second].normal[axis];
 			distance = entering[second].normal[2] *
-				(entering[first].distance + SEMANTICS_TRACE_EPSILON) -
+				(entering[first].distance + SG_HOST_COLLISION_TRACE_EPSILON) -
 				entering[first].normal[2] *
-				(entering[second].distance + SEMANTICS_TRACE_EPSILON);
+				(entering[second].distance + SG_HOST_COLLISION_TRACE_EPSILON);
 			if (!AppendSupportDecision(build, normal, distance,
 				SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_ORDER,
 				entering[first].source_index, entering[second].source_index))
@@ -1076,9 +1151,9 @@ static int BuildSupportDecisions(semantic_build_t *build,
 					leaving[second].normal[axis] - leaving[second].normal[2] *
 					entering[first].normal[axis];
 			distance = entering[first].normal[2] *
-				(leaving[second].distance - SEMANTICS_TRACE_EPSILON) -
+				(leaving[second].distance - SG_HOST_COLLISION_TRACE_EPSILON) -
 				leaving[second].normal[2] *
-				(entering[first].distance + SEMANTICS_TRACE_EPSILON);
+				(entering[first].distance + SG_HOST_COLLISION_TRACE_EPSILON);
 			if (!AppendSupportDecision(build, normal, distance,
 				SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_CLIP,
 				entering[first].source_index, leaving[second].source_index))
@@ -1133,6 +1208,10 @@ static int AddBspSideConstraint(const sg_bsp_plane_t *plane, float offset,
 	constraint.source_index = plane_index;
 	constraint.sample_index = sample;
 	constraint.reversed = (uint8_t)front;
+	/* HostLeafAtPoint resolves a node-plane tie to children[0].  Partition
+	 * only the back child strictly so a later support-plane solve cannot pick
+	 * a Q8 point claimed by both leaves and then disagree with the host. */
+	constraint.halfspace.open = front ? 0 : 1;
 	if (front)
 	{
 		constraint.halfspace.normal[0] = -plane->normal.value[0];
@@ -1880,7 +1959,7 @@ static int AppendRegion(semantic_build_t *build, uint32_t cell_index,
 
 static int PartitionSupport(semantic_build_t *build, uint32_t cell_index,
 	uint32_t decision_index, semantic_constraints_t *constraints,
-	const uint32_t leaves[3])
+	const uint32_t leaves[3], const float offsets[3])
 {
 	const semantic_support_decision_t *decision;
 	int side;
@@ -1896,8 +1975,9 @@ static int PartitionSupport(semantic_build_t *build, uint32_t cell_index,
 				SG_CONFIGURATION_SEMANTICS_ERROR_SOLVER, cell_index);
 			return 0;
 		}
-		return !feasible || AppendRegion(build, cell_index, constraints,
-			leaves, witness);
+		if (!feasible)
+			return 1;
+		return AppendRegion(build, cell_index, constraints, leaves, witness);
 	}
 	decision = &build->support_decisions[decision_index];
 	for (side = 0; side < 2; side++)
@@ -1941,7 +2021,7 @@ static int PartitionSupport(semantic_build_t *build, uint32_t cell_index,
 			return 0;
 		}
 		if (feasible && !PartitionSupport(build, cell_index,
-			decision_index + 1U, &branch, leaves))
+			decision_index + 1U, &branch, leaves, offsets))
 		{
 			FreeConstraints(&branch);
 			return 0;
@@ -1978,8 +2058,9 @@ static int ContinueSamples(semantic_build_t *build, uint32_t cell_index,
 			SG_CONFIGURATION_SEMANTICS_ERROR_SOLVER, cell_index);
 		return 0;
 	}
-	return !feasible || PartitionSupport(build, cell_index, 0,
-		constraints, leaves);
+	if (!feasible)
+		return 1;
+	return PartitionSupport(build, cell_index, 0, constraints, leaves, offsets);
 }
 
 static int PartitionSample(semantic_build_t *build, uint32_t cell_index,
@@ -2883,6 +2964,48 @@ static int AuditAddDecision(semantic_audit_t *audit,
 	return 1;
 }
 
+static int AuditSupportTraversalDecisions(semantic_audit_t *audit,
+	const sg_rune_hull_profile_t *hull, uint32_t cell_index,
+	int has_support_brush)
+{
+	const sg_bsp_world_t *world = audit->authority->world;
+	const sg_rune_bounds_t *bounds =
+		&audit->configuration->cells[cell_index].bounds;
+	uint32_t node_index;
+
+	if (!has_support_brush)
+		return 1;
+	for (node_index = 0; node_index < world->node_count; node_index++)
+	{
+		const sg_bsp_node_t *node = &world->nodes[node_index];
+		const sg_bsp_plane_t *plane;
+		float extent;
+		uint32_t side, endpoint;
+
+		if (node->plane >= world->plane_count)
+			return 0;
+		plane = &world->planes[node->plane];
+		extent = TraceExtent(hull, plane->normal.value);
+		for (side = 0U; side < 2U; side++)
+			for (endpoint = 0U; endpoint < 2U; endpoint++)
+			{
+				float distance = plane->distance +
+					(side ? extent : -extent) +
+					(endpoint ? plane->normal.value[2] *
+						SG_HOST_GROUND_PROBE : 0.0f);
+
+				if (BoundsMinimum(bounds, plane->normal.value) >= distance ||
+					BoundsMaximum(bounds, plane->normal.value) <= distance)
+					continue;
+				if (!AuditAddDecision(audit, plane->normal.value, distance,
+					SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_BSP_TRAVERSAL,
+					node_index, side * 2U + endpoint))
+					return 0;
+			}
+	}
+	return 1;
+}
+
 static int AuditBuildSupportDecisions(semantic_audit_t *audit,
 	sg_rune_stance_t stance, uint32_t cell_index)
 {
@@ -2898,6 +3021,7 @@ static int AuditBuildSupportDecisions(semantic_audit_t *audit,
 	uint32_t entry_count = 0, entry_capacity = 0;
 	uint32_t leave_count = 0, leave_capacity = 0;
 	uint32_t brush, first, second;
+	int has_support_brush = 0;
 
 	free(audit->support_decisions);
 	audit->support_decisions = NULL;
@@ -2935,8 +3059,8 @@ static int AuditBuildSupportDecisions(semantic_audit_t *audit,
 					plane->normal.value[axis] * bounds->maxs.value[axis] :
 					plane->normal.value[axis] * bounds->mins.value[axis];
 			if (plane->normal.value[2] > 0.0f)
-				minimum -= plane->normal.value[2] * SEMANTICS_GROUND_PROBE;
-			if (minimum > expanded + SEMANTICS_TRACE_EPSILON)
+				minimum -= plane->normal.value[2] * SG_HOST_GROUND_PROBE;
+			if (minimum > expanded + SG_HOST_COLLISION_TRACE_EPSILON)
 			{
 				potentially_reachable = 0;
 				break;
@@ -2944,6 +3068,7 @@ static int AuditBuildSupportDecisions(semantic_audit_t *audit,
 		}
 		if (!potentially_reachable)
 			continue;
+		has_support_brush = 1;
 		for (offset = 0; offset < record->side_count; offset++)
 		{
 			uint32_t side_index = record->first_side + offset;
@@ -2964,12 +3089,12 @@ static int AuditBuildSupportDecisions(semantic_audit_t *audit,
 			if (plane->normal.value[2] < 0.0f)
 			{
 				if (!AuditAddDecision(audit, plane->normal.value,
-					expanded - SEMANTICS_TRACE_EPSILON,
+					expanded - SG_HOST_COLLISION_TRACE_EPSILON,
 					SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_LEAVE_ZERO,
 					side_index, brush) ||
 					!AuditAddDecision(audit, plane->normal.value,
 						expanded + plane->normal.value[2] *
-							SEMANTICS_GROUND_PROBE,
+							SG_HOST_GROUND_PROBE,
 						SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_LEAVE_END,
 						side_index, brush) || leave_count == UINT32_MAX ||
 					!AuditGrow(audit->allocations, (void **)&leaves,
@@ -2987,12 +3112,12 @@ static int AuditBuildSupportDecisions(semantic_audit_t *audit,
 			if (plane->normal.value[2] == 0.0f)
 				continue;
 			if (!AuditAddDecision(audit, plane->normal.value,
-				expanded + plane->normal.value[2] * SEMANTICS_GROUND_PROBE +
-					SEMANTICS_TRACE_EPSILON,
+				expanded + plane->normal.value[2] * SG_HOST_GROUND_PROBE +
+					SG_HOST_COLLISION_TRACE_EPSILON,
 				SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_REACH,
 					side_index, brush) ||
 				!AuditAddDecision(audit, plane->normal.value,
-					expanded + SEMANTICS_TRACE_EPSILON,
+				expanded + SG_HOST_COLLISION_TRACE_EPSILON,
 					SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_ENTER_ZERO,
 					side_index, brush) ||
 				!AuditGrow(audit->allocations, (void **)&entries,
@@ -3007,6 +3132,9 @@ static int AuditBuildSupportDecisions(semantic_audit_t *audit,
 			entry_count++;
 		}
 	}
+	if (!AuditSupportTraversalDecisions(audit, hull, cell_index,
+		has_support_brush))
+		goto failure;
 	for (first = 0; first < entry_count; first++)
 		for (second = first + 1U; second < entry_count; second++)
 		{
@@ -3018,9 +3146,9 @@ static int AuditBuildSupportDecisions(semantic_audit_t *audit,
 					entries[first].normal[axis] - entries[first].normal[2] *
 					entries[second].normal[axis];
 			distance = entries[second].normal[2] *
-				(entries[first].distance + SEMANTICS_TRACE_EPSILON) -
+				(entries[first].distance + SG_HOST_COLLISION_TRACE_EPSILON) -
 				entries[first].normal[2] *
-				(entries[second].distance + SEMANTICS_TRACE_EPSILON);
+				(entries[second].distance + SG_HOST_COLLISION_TRACE_EPSILON);
 			if (!AuditAddDecision(audit, normal, distance,
 				SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_ORDER,
 				entries[first].source_index, entries[second].source_index))
@@ -3038,9 +3166,9 @@ static int AuditBuildSupportDecisions(semantic_audit_t *audit,
 					leaves[second].normal[axis] - leaves[second].normal[2] *
 					entries[first].normal[axis];
 			distance = entries[first].normal[2] *
-				(leaves[second].distance - SEMANTICS_TRACE_EPSILON) -
+				(leaves[second].distance - SG_HOST_COLLISION_TRACE_EPSILON) -
 				leaves[second].normal[2] *
-				(entries[first].distance + SEMANTICS_TRACE_EPSILON);
+				(entries[first].distance + SG_HOST_COLLISION_TRACE_EPSILON);
 			if (!AuditAddDecision(audit, normal, distance,
 				SG_CONFIGURATION_SEMANTIC_PLANE_SUPPORT_CLIP,
 				entries[first].source_index, leaves[second].source_index))
@@ -3152,8 +3280,8 @@ static int AuditInterior(semantic_audit_t *audit,
 	audit->result->lattice_constraints += stats.constraints;
 	if (stats.maximum_binary_shift >
 		audit->result->lattice_maximum_binary_shift)
-		audit->result->lattice_maximum_binary_shift =
-			stats.maximum_binary_shift;
+			audit->result->lattice_maximum_binary_shift =
+				stats.maximum_binary_shift;
 	return answer;
 }
 
@@ -3801,6 +3929,9 @@ static int AuditTree(semantic_audit_t *audit, uint8_t sample, int32_t node,
 			free(branch.items);
 			goto solver_failure;
 		}
+		/* HostLeafAtPoint resolves distance == 0 to children[0], so the
+		 * opposite (back) branch is strict just as it is in AppendRegion. */
+		branch.items[branch.count - 1U].halfspace.open = side == 0 ? 0 : 1;
 		feasible = AuditInterior(audit, &branch, q8);
 		if (feasible < 0)
 		{

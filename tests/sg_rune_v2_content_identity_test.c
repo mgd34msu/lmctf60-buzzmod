@@ -4,7 +4,6 @@
 
 #include "slipgate/sg_rune_v2_exact_snapshot.h"
 #include "slipgate/sg_rune_v2_exact_snapshot_private.h"
-#include "slipgate/sg_rune_v2_artifact_publication_internal.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -96,7 +95,6 @@ static void TestSHA256Vectors(void)
 static void TestCopyOwnsExactBytes(void)
 {
 	unsigned char source[] = { 1U, 2U, 3U, 4U };
-	unsigned char too_large[SG_RUNE_V2_PUBLICATION_MANIFEST_MAX_BYTES + 1U];
 	sg_rune_v2_exact_snapshot_t *snapshot = NULL;
 	const sg_rune_v2_snapshot_view_t *view = NULL;
 	sg_rune_v2_content_id_t expected;
@@ -114,14 +112,6 @@ static void TestCopyOwnsExactBytes(void)
 	SG_RuneV2ExactSnapshotDestroy(snapshot);
 
 	snapshot = (sg_rune_v2_exact_snapshot_t *)(uintptr_t)1U;
-	assert(SG_RuneV2ExactSnapshotCopyBytes(SG_RUNE_V2_SNAPSHOT_PROOF,
-		source, sizeof(source), &snapshot) ==
-		SG_RUNE_V2_SNAPSHOT_UNSUPPORTED_KIND);
-	assert(snapshot == NULL);
-	assert(SG_RuneV2ExactSnapshotCopyBytes(SG_RUNE_V2_SNAPSHOT_SIDECAR,
-		source, sizeof(source), &snapshot) ==
-		SG_RUNE_V2_SNAPSHOT_UNSUPPORTED_KIND);
-	assert(snapshot == NULL);
 	assert(SG_RuneV2ExactSnapshotCopyBytes((sg_rune_v2_snapshot_kind_t)99,
 		source, sizeof(source), &snapshot) ==
 		SG_RUNE_V2_SNAPSHOT_INVALID_ARGUMENT);
@@ -132,11 +122,6 @@ static void TestCopyOwnsExactBytes(void)
 	assert(SG_RuneV2ExactSnapshotCopyBytes(SG_RUNE_V2_SNAPSHOT_ARTIFACT,
 		NULL, 0U, &snapshot) == SG_RUNE_V2_SNAPSHOT_OK);
 	SG_RuneV2ExactSnapshotDestroy(snapshot);
-	memset(too_large, 0, sizeof(too_large));
-	assert(SG_RuneV2ExactSnapshotCopyBytes(SG_RUNE_V2_SNAPSHOT_MANIFEST,
-		too_large, sizeof(too_large), &snapshot) ==
-		SG_RUNE_V2_SNAPSHOT_TOO_LARGE);
-	assert(snapshot == NULL);
 
 	view = (const sg_rune_v2_snapshot_view_t *)(uintptr_t)1U;
 	assert(SG_RuneV2ExactSnapshotInspect(NULL, &view) ==

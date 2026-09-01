@@ -18,7 +18,6 @@
 #include "slipgate/sg_price.h"
 #include "slipgate/sg_item_route.h"
 #include "slipgate/sg_field_projection.h"
-#include "slipgate/sg_tactic_policy.h"
 #include "slipgate/sg_intercept_policy.h"
 #include "slipgate/sg_role_policy.h"
 #include "slipgate/sg_rune_handoff_policy.h"
@@ -555,7 +554,7 @@ static qboolean DefenseSupplyOtherOwner(const sg_bot_t *bot,
 	/* These are already-owned missions.  A supply sortie never steals their
 	 * route, and an active sortie is retired if one is acquired later. */
 	if (bot->lead_ent > 0 || bot->patrol_seed >= 0 ||
-	    bot->def_shift_seed >= 0 || bot->tac_seed >= 0 ||
+	    bot->def_shift_seed >= 0 ||
 	    bot->rail_stage > 0 || SG_RocketJumpLiveOwns(&bot->rocketjump) ||
 	    bot->nade_phase > 0 ||
 	    bot->hook_phase > 0 || bot->jump_link >= 0 || bot->drop_link >= 0)
@@ -1779,8 +1778,6 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	                     ? goal_field[SG_BotLocalizationCell(bot)] : -1;
 	route_field = goal_field;
 	route_pure = tc->rune_handoff_route;
-	/* Tactical waypoint selection runs after the typed strategy instruction
-	 * has committed this field in Think_TacticalRoute. */
 
 	/* The sortie is the one explicit route owner that may override tactics.
 	 * OUTBOUND follows the current live weapon field with no detour arithmetic;
@@ -1842,119 +1839,10 @@ void Think_Objective(sg_bot_t *bot, sg_think_t *tc)
 	tc->route_pure = route_pure;
 }
 
-/* Derive a tactical waypoint only from the destination selected by the typed
- * reducer.  Its activation identity replaces the old parallel role latch. */
+/* Capability selection is frame-local. It may not replace the committed
+ * destination with a tactical route field. */
 void Think_TacticalRoute(sg_bot_t *bot, sg_think_t *tc)
 {
-	static int tac_fields[SG_MAXBOTS][SG_MAX_SEEDS];
-	static unsigned tac_field_epoch[SG_MAXBOTS];
-	static sg_field_key_t tac_goal[SG_MAXBOTS];
-	const int *goal_field;
-	int bi;
-
-	if (!bot || !tc || !tc->e || !tc->goal_field || !SG_Rune())
-		return;
-	goal_field = tc->goal_field;
-	tc->route_field = goal_field;
-	if (tc->route_pure || !SG_RuneHandoffAllowsOptional(
-	        tc->rune_handoff_route) || tc->strike_blocks_optional ||
-	    !sg_cv.tactics->value || tc->role == SG_ROLE_ESCORT ||
-	    tc->role == SG_ROLE_CARRY || SG_BotLocalizationCell(bot) < 0 ||
-	    goal_field[SG_BotLocalizationCell(bot)] >= SG_FIELD_INF ||
-	    goal_field[SG_BotLocalizationCell(bot)] < 400)
-		return;
-	bi = (int)(bot - sg_bots);
-	if (bi < 0 || bi >= SG_MAXBOTS)
-		return;
-	{
-		sg_field_key_t goal = SG_FieldKey(SG_Rune(), goal_field);
-		sg_tactic_cache_t cache = {
-			.topology_current = Fields_ActionTopologyCurrent(tac_field_epoch[bi]),
-			.tactic_seed = bot->tac_seed,
-			.cached_strategy_activation = bot->tac_strategy_activation,
-			.current_strategy_activation = tc->strategy_activation_id,
-			.cached_goal = tac_goal[bi], .current_goal = goal,
-			.committed_at = bot->tac_time, .now = level.time,
-			.route_cost = tac_fields[bi][SG_BotLocalizationCell(bot)]
-		};
-		qboolean need;
-
-		sg_route_pure_now = false;
-		need = SG_TacticCacheNeedsRefresh(&cache);
-		if (need)
-		{
-			static int g2_field[SG_MAX_SEEDS];
-			int s10, best10 = -1, g2 = -1;
-			int cur = goal_field[SG_BotLocalizationCell(bot)];
-			float bv10 = 1e30f, gv10 = 1e30f;
-
-			for (s10 = 0; s10 < SG_Rune()->hdr.num_seeds &&
-			     s10 < SG_MAX_SEEDS; s10++)
-			{
-				float sv;
-
-				if (goal_field[s10] >= SG_FIELD_INF ||
-				    goal_field[s10] > cur - 2500 ||
-				    goal_field[s10] < cur - 4500)
-					continue;
-				sv = Surface_At(tc, s10, tc->w, goal_field,
-				                tc->support, tc->intercept);
-				if (sv < gv10)
-				{
-					gv10 = sv;
-					g2 = s10;
-				}
-			}
-			if (g2 >= 0)
-			{
-				int gc = 0;
-
-				Field_Flood(SG_Rune(), g2_field, &g2, &gc, 1);
-			}
-			for (s10 = 0; s10 < SG_Rune()->hdr.num_seeds &&
-			     s10 < SG_MAX_SEEDS; s10++)
-			{
-				float sv;
-
-				if (goal_field[s10] >= SG_FIELD_INF ||
-				    goal_field[s10] > cur - 800 ||
-				    goal_field[s10] < cur - 2500)
-					continue;
-				sv = Surface_At(tc, s10, tc->w, goal_field,
-				                tc->support, tc->intercept);
-				if (g2 >= 0 && g2_field[s10] < SG_FIELD_INF)
-					sv += 0.5f * (float)g2_field[s10];
-				if (sv < bv10)
-				{
-					bv10 = sv;
-					best10 = s10;
-				}
-			}
-			if (best10 >= 0)
-			{
-				int cost10 = 0;
-
-				bot->tac_seed = best10;
-				SG_Mark(&bot->tac_time);
-				bot->tac_strategy_activation = tc->strategy_activation_id;
-				tac_goal[bi] = goal;
-				Field_Flood(SG_Rune(), tac_fields[bi],
-				            &bot->tac_seed, &cost10, 1);
-				tac_field_epoch[bi] = sg_fields.action_topology_epoch;
-				if (sg_cv.debug->value)
-					sg_host.dprint("TACTIC %s seed=%d strat=%d\n",
-					           tc->e->client->pers.netname,
-					           best10, goal_field[best10]);
-			}
-			else
-				bot->tac_seed = -1;
-		}
-		if (bot->tac_seed >= 0 &&
-		    Fields_ActionTopologyCurrent(tac_field_epoch[bi]) &&
-		    tac_fields[bi][SG_BotLocalizationCell(bot)] < SG_FIELD_INF)
-		{
-			tc->route_field = tac_fields[bi];
-			tc->route_pure = true;
-		}
-	}
+	(void)bot;
+	(void)tc;
 }

@@ -993,9 +993,13 @@ static int FillAngles(const parsed_entity_t *entity,
 {
 	const char *angle = EntityValue(entity, "angle");
 	const char *angles = EntityValue(entity, "angles");
-	const double degrees_to_radians = 0.017453292519943295769;
-	double pitch;
-	double yaw;
+	const double angle_scale = 3.14159265358979323846 * 2.0 / 360.0;
+	float pitch_angle;
+	float yaw_angle;
+	float sine_pitch;
+	float cosine_pitch;
+	float sine_yaw;
+	float cosine_yaw;
 
 	if (angle && angles)
 	{
@@ -1034,11 +1038,15 @@ static int FillAngles(const parsed_entity_t *entity,
 		semantic->move_direction.value[2] = -1.0f;
 		return 1;
 	}
-	pitch = (double)semantic->angles.value[0] * degrees_to_radians;
-	yaw = (double)semantic->angles.value[1] * degrees_to_radians;
-	semantic->move_direction.value[0] = (float)(cos(pitch) * cos(yaw));
-	semantic->move_direction.value[1] = (float)(cos(pitch) * sin(yaw));
-	semantic->move_direction.value[2] = (float)-sin(pitch);
+	yaw_angle = (float)((double)semantic->angles.value[1] * angle_scale);
+	sine_yaw = (float)sin((double)yaw_angle);
+	cosine_yaw = (float)cos((double)yaw_angle);
+	pitch_angle = (float)((double)semantic->angles.value[0] * angle_scale);
+	sine_pitch = (float)sin((double)pitch_angle);
+	cosine_pitch = (float)cos((double)pitch_angle);
+	semantic->move_direction.value[0] = cosine_pitch * cosine_yaw;
+	semantic->move_direction.value[1] = cosine_pitch * sine_yaw;
+	semantic->move_direction.value[2] = -sine_pitch;
 	if (!isfinite(semantic->move_direction.value[0]) ||
 		!isfinite(semantic->move_direction.value[1]) ||
 		!isfinite(semantic->move_direction.value[2]))
@@ -1123,6 +1131,154 @@ static int FillOptionalVector(const parsed_entity_t *entity, const char *key,
 		return 0;
 	}
 	return 1;
+}
+
+enum
+{
+	DOOR_START_OPEN = 1U,
+	DOOR_REVERSE = 2U,
+	DOOR_CRUSHER = 4U,
+	DOOR_TOGGLE = 32U,
+	DOOR_X_AXIS = 64U,
+	DOOR_Y_AXIS = 128U,
+	ROTATING_START_ON = 1U,
+	ROTATING_REVERSE = 2U,
+	ROTATING_X_AXIS = 4U,
+	ROTATING_Y_AXIS = 8U,
+	ROTATING_TOUCH_PAIN = 16U,
+	ROTATING_STOP = 32U,
+	ANGULAR_MOVER_FRAME_MS = 100U
+};
+
+static int AngularVectorFinite(const sg_rune_vec3_t *value)
+{
+	return value && isfinite(value->value[0]) && isfinite(value->value[1]) &&
+		isfinite(value->value[2]);
+}
+
+static void SetAngularAxis(sg_rune_vec3_t *axis, uint32_t spawnflags,
+	uint32_t x_axis, uint32_t y_axis, uint32_t reverse)
+{
+	memset(axis, 0, sizeof(*axis));
+	if (spawnflags & x_axis)
+		axis->value[2] = 1.0f;
+	else if (spawnflags & y_axis)
+		axis->value[0] = 1.0f;
+	else
+		axis->value[1] = 1.0f;
+	if (spawnflags & reverse)
+	{
+		axis->value[0] = -axis->value[0];
+		axis->value[1] = -axis->value[1];
+		axis->value[2] = -axis->value[2];
+	}
+}
+
+static int BuildAngularMover(const char *classname,
+	sg_bsp_entity_semantic_t *semantic, uint32_t source_ordinal,
+	sg_bsp_entity_semantics_error_t *error)
+{
+	sg_bsp_entity_angular_mover_t *mover;
+	uint32_t axis;
+
+	if (!classname || !semantic)
+		return 0;
+	mover = &semantic->angular_mover;
+	memset(mover, 0, sizeof(*mover));
+	if (!strcmp(classname, "func_door_rotating"))
+	{
+		sg_bsp_entity_angular_door_schedule_t *schedule =
+			&mover->schedule.finite_door;
+		float distance = semantic->distance;
+		float speed = semantic->speed;
+
+		mover->kind = SG_BSP_ENTITY_ANGULAR_MOVER_FINITE_DOOR;
+		if (semantic->spawnflags & DOOR_START_OPEN)
+			mover->flags |= SG_BSP_ENTITY_ANGULAR_MOVER_START_OPEN;
+		if (semantic->spawnflags & DOOR_REVERSE)
+			mover->flags |= SG_BSP_ENTITY_ANGULAR_MOVER_REVERSE;
+		if (semantic->spawnflags & DOOR_TOGGLE)
+			mover->flags |= SG_BSP_ENTITY_ANGULAR_MOVER_TOGGLE;
+		if (semantic->spawnflags & DOOR_CRUSHER)
+			mover->flags |= SG_BSP_ENTITY_ANGULAR_MOVER_CRUSHER;
+		SetAngularAxis(&schedule->axis, semantic->spawnflags, DOOR_X_AXIS,
+			DOOR_Y_AXIS, DOOR_REVERSE);
+		if (distance == 0.0f)
+			distance = 90.0f;
+		if (speed == 0.0f)
+			speed = 100.0f;
+		schedule->speed = speed;
+		schedule->acceleration = semantic->acceleration == 0.0f ? speed :
+			semantic->acceleration;
+		schedule->deceleration = semantic->deceleration == 0.0f ? speed :
+			semantic->deceleration;
+		schedule->frame_ms = ANGULAR_MOVER_FRAME_MS;
+		for (axis = 0U; axis < 3U; axis++)
+			schedule->active_angles.value[axis] =
+				0.0f + distance * schedule->axis.value[axis];
+		if (mover->flags & SG_BSP_ENTITY_ANGULAR_MOVER_START_OPEN)
+		{
+			sg_rune_vec3_t open_angles = schedule->active_angles;
+
+			schedule->active_angles = schedule->inactive_angles;
+			schedule->inactive_angles = open_angles;
+			for (axis = 0U; axis < 3U; axis++)
+				schedule->axis.value[axis] = -schedule->axis.value[axis];
+		}
+		for (axis = 0U; axis < 3U; axis++)
+			schedule->angular_displacement.value[axis] =
+				schedule->active_angles.value[axis] -
+				schedule->inactive_angles.value[axis];
+		if (AngularVectorFinite(&schedule->axis) &&
+			AngularVectorFinite(&schedule->inactive_angles) &&
+			AngularVectorFinite(&schedule->active_angles) &&
+			AngularVectorFinite(&schedule->angular_displacement) &&
+			isfinite(schedule->speed) && isfinite(schedule->acceleration) &&
+			isfinite(schedule->deceleration))
+			return 1;
+	}
+	else if (!strcmp(classname, "func_rotating"))
+	{
+		sg_bsp_entity_continuous_angular_schedule_t *schedule =
+			&mover->schedule.continuous_rotator;
+		float speed = semantic->speed;
+
+		mover->kind = SG_BSP_ENTITY_ANGULAR_MOVER_CONTINUOUS_ROTATOR;
+		if (semantic->spawnflags & ROTATING_START_ON)
+			mover->flags |= SG_BSP_ENTITY_ANGULAR_MOVER_START_ON;
+		if (semantic->spawnflags & ROTATING_REVERSE)
+			mover->flags |= SG_BSP_ENTITY_ANGULAR_MOVER_REVERSE;
+		if (semantic->spawnflags & ROTATING_TOUCH_PAIN)
+			mover->flags |= SG_BSP_ENTITY_ANGULAR_MOVER_TOUCH_DAMAGE;
+		if (semantic->spawnflags & ROTATING_STOP)
+			mover->flags |= SG_BSP_ENTITY_ANGULAR_MOVER_STOP_ON_BLOCK;
+		SetAngularAxis(&schedule->axis, semantic->spawnflags,
+			ROTATING_X_AXIS, ROTATING_Y_AXIS, ROTATING_REVERSE);
+		if (speed == 0.0f)
+			speed = 100.0f;
+		schedule->initial_angles = semantic->angles;
+		schedule->speed = speed;
+		schedule->frame_ms = ANGULAR_MOVER_FRAME_MS;
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			schedule->angular_velocity.value[axis] =
+				schedule->axis.value[axis] * speed;
+			schedule->frame_angular_delta.value[axis] =
+				schedule->angular_velocity.value[axis] * 0.1f;
+		}
+		if (AngularVectorFinite(&schedule->initial_angles) &&
+			AngularVectorFinite(&schedule->axis) &&
+			AngularVectorFinite(&schedule->angular_velocity) &&
+			AngularVectorFinite(&schedule->frame_angular_delta) &&
+			isfinite(schedule->speed))
+			return 1;
+	}
+	else
+		return 1;
+
+	SetError(error, SG_BSP_ENTITY_SEMANTICS_ERROR_INVALID_VALUE,
+		source_ordinal, UINT32_MAX);
+	return 0;
 }
 
 static int ValidLightRamp(const parsed_entity_t *entity)
@@ -1412,6 +1568,9 @@ static int BuildRecord(const sg_bsp_world_t *world,
 		record->semantic.flags |= SG_BSP_ENTITY_MOVE_ORIGIN_DEFINED;
 	if (EntityValue(entity, "move_angles"))
 		record->semantic.flags |= SG_BSP_ENTITY_MOVE_ANGLES_DEFINED;
+	if (!BuildAngularMover(classname, &record->semantic, source_ordinal,
+		error))
+		return 0;
 	if (EntityValue(entity, "gravity"))
 	{
 		int32_t gravity;
@@ -1804,7 +1963,7 @@ static host_edge_policy_t HostEdgePolicy(const char *classname,
 		{ "point_combat", HOST_EDGE_PICK_EIGHT, HOST_EDGE_ALL, HOST_EDGE_ALL },
 		{ "misc_viper", HOST_EDGE_PICK_EIGHT, HOST_EDGE_NONE, HOST_EDGE_NONE },
 		{ "misc_strogg_ship", HOST_EDGE_PICK_EIGHT, HOST_EDGE_NONE, HOST_EDGE_NONE },
-		{ "misc_teleporter", HOST_EDGE_FIRST, HOST_EDGE_NONE, HOST_EDGE_NONE },
+		{ "misc_teleporter", HOST_EDGE_ALL, HOST_EDGE_NONE, HOST_EDGE_NONE },
 		{ "target_laser", HOST_EDGE_FIRST, HOST_EDGE_NONE, HOST_EDGE_NONE },
 		{ "target_lightramp", HOST_EDGE_LAST_LIGHT, HOST_EDGE_NONE, HOST_EDGE_NONE },
 		{ "target_explosion", HOST_EDGE_ALL, HOST_EDGE_ALL, HOST_EDGE_NONE },
@@ -2432,6 +2591,26 @@ const char *SG_BspEntitySemanticsString(
 		(size_t)semantics->string_bytes - offset))
 		return NULL;
 	return semantics->strings + offset;
+}
+
+const sg_bsp_entity_angular_mover_t *SG_BspEntitySemanticsAngularMover(
+	const sg_bsp_entity_semantics_t *semantics, uint32_t canonical_ordinal)
+{
+	const sg_bsp_entity_semantic_t *entity;
+
+	if (!semantics || semantics->source_set_identity == 0U ||
+		semantics->source_set_identity == UINT64_MAX ||
+		!SG_BspEntitySemanticsEntityStorageValid(semantics) ||
+		canonical_ordinal >= semantics->entity_count)
+		return NULL;
+	entity = &semantics->entities[canonical_ordinal];
+	if (entity->source_set_identity == 0U ||
+		entity->source_set_identity != semantics->source_set_identity ||
+		entity->canonical_ordinal != canonical_ordinal ||
+		entity->angular_mover.kind == SG_BSP_ENTITY_ANGULAR_MOVER_NONE ||
+		entity->angular_mover.kind >= SG_BSP_ENTITY_ANGULAR_MOVER_KIND_COUNT)
+		return NULL;
+	return &entity->angular_mover;
 }
 
 int SG_BspEntitySemanticsCountsRepresentable(size_t entity_count,

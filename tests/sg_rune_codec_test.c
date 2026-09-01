@@ -135,11 +135,6 @@ static void PutU32(unsigned char *out, uint32_t value)
 	out[3] = (unsigned char)(value >> 24);
 }
 
-static uint16_t GetU16(const unsigned char *in)
-{
-	return (uint16_t)((uint16_t)in[0] | (uint16_t)((uint16_t)in[1] << 8));
-}
-
 static uint32_t GetU32(const unsigned char *in)
 {
 	return (uint32_t)in[0] | ((uint32_t)in[1] << 8) |
@@ -472,7 +467,7 @@ static sg_rune_codec_diagnostic_t ValidateTeleportFixture(
 	teleport_fixture_t *fixture)
 {
 	TeleportFixtureWorkspace(fixture);
-	return SG_RuneCodecValidate(RUNE_ROUTE_CONTRACT_COMPLETE,
+	return SG_RuneCodecValidate(
 		fixture->seeds, TELEPORT_TEST_SEEDS,
 		fixture->links, TELEPORT_TEST_LINKS,
 		fixture->nodes, TELEPORT_TEST_NODES,
@@ -485,7 +480,7 @@ static sg_rune_codec_diagnostic_t ValidateTeleportFixture(
 static sg_rune_codec_diagnostic_t ValidateFixture(fixture_t *fixture)
 {
 	FixtureWorkspace(fixture);
-	return SG_RuneCodecValidate(RUNE_ROUTE_CONTRACT_COMPLETE,
+	return SG_RuneCodecValidate(
 		fixture->seeds, TEST_SEEDS,
 		fixture->links, TEST_LINKS, fixture->nodes, TEST_NODES,
 		fixture->edges, TEST_EDGES, fixture->plans, TEST_PLANS,
@@ -496,7 +491,7 @@ static sg_rune_codec_diagnostic_t ValidateFixtureCounts(fixture_t *fixture,
 	uint32_t num_nodes, uint32_t num_edges)
 {
 	FixtureWorkspace(fixture);
-	return SG_RuneCodecValidate(RUNE_ROUTE_CONTRACT_COMPLETE,
+	return SG_RuneCodecValidate(
 		fixture->seeds, TEST_SEEDS,
 		fixture->links, TEST_LINKS, fixture->nodes, num_nodes,
 		fixture->edges, num_edges, fixture->plans, TEST_PLANS,
@@ -681,7 +676,7 @@ static sg_rune_codec_diagnostic_t EncodeFixture(fixture_t *fixture,
 	unsigned char encoded[TEST_FILE_BYTES], size_t *encoded_size)
 {
 	FixtureWorkspace(fixture);
-	return SG_RuneCodecEncode(RUNE_ROUTE_CONTRACT_COMPLETE,
+	return SG_RuneCodecEncode(
 		&fixture->identity, fixture->seeds, TEST_SEEDS,
 		fixture->links, TEST_LINKS, fixture->nodes, TEST_NODES,
 		fixture->edges, TEST_EDGES, fixture->plans, TEST_PLANS,
@@ -758,7 +753,6 @@ static void TestWholeGolden(void)
 	CHECK_DIAGNOSTIC(RLCODEC_OK, DecodeFixture(encoded, encoded_size,
 		&fixture.identity, &decoded, &header));
 	CHECK(header.header_bytes == SG_RUNE_CODEC_HEADER_BYTES);
-	CHECK(header.route_contract == RUNE_ROUTE_CONTRACT_COMPLETE);
 	CHECK(header.num_activation_nodes == TEST_NODES);
 	CHECK(header.num_activation_edges == TEST_EDGES);
 	CHECK(header.num_activation_plans == TEST_PLANS);
@@ -775,19 +769,6 @@ static void TestWholeGolden(void)
 	CHECK(memcmp(decoded.strings, canonical_strings,
 		TEST_STRING_BYTES) == 0);
 
-	FixtureWorkspace(&fixture);
-	fixture.seeds[0].flags |= SG_RUNE_CODEC_SEED_OBJECTIVE;
-	fixture.seeds[1].flags |= SG_RUNE_CODEC_SEED_OBJECTIVE;
-	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecEncode(
-		RUNE_ROUTE_CONTRACT_LOCAL_ONLY, &fixture.identity, fixture.seeds,
-		TEST_SEEDS, fixture.links, TEST_LINKS, fixture.nodes, TEST_NODES,
-		fixture.edges, TEST_EDGES, fixture.plans, TEST_PLANS,
-		fixture.strings, TEST_STRING_BYTES, &fixture.workspace, encoded,
-		TEST_FILE_BYTES, &encoded_size));
-	CHECK(GetU16(encoded + 4U) == RUNE_ROUTE_CONTRACT_LOCAL_ONLY);
-	CHECK_DIAGNOSTIC(RLCODEC_OK, DecodeFixture(encoded, encoded_size,
-		&fixture.identity, &decoded, &header));
-	CHECK(header.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY);
 }
 
 static void TestPrimitiveMalformed(void)
@@ -1107,7 +1088,7 @@ static sg_rune_codec_diagnostic_t ValidateFixtureStringBytes(fixture_t *fixture,
 	uint32_t string_bytes)
 {
 	FixtureWorkspace(fixture);
-	return SG_RuneCodecValidate(RUNE_ROUTE_CONTRACT_COMPLETE,
+	return SG_RuneCodecValidate(
 		fixture->seeds, TEST_SEEDS,
 		fixture->links, TEST_LINKS, fixture->nodes, TEST_NODES,
 		fixture->edges, TEST_EDGES, fixture->plans, TEST_PLANS,
@@ -1346,18 +1327,9 @@ static void TestWholeMalformed(void)
 	CHECK_DIAGNOSTIC((sg_rune_codec_diagnostic_t)RLW_BAD_SEED_RECORD,
 		DecodeFixture(mutated, sizeof(mutated), NULL, &decoded, &header));
 	memcpy(mutated, golden, sizeof(mutated));
-	PutU16(mutated + 4, RUNE_ROUTE_CONTRACT_LOCAL_ONLY);
-	PutU16(mutated + SEED_OFFSET + 14U, SG_RUNE_CODEC_SEED_OBJECTIVE);
-	PutU16(mutated + SEED_OFFSET + SG_RUNE_CODEC_SEED_BYTES + 14U,
-		SG_RUNE_CODEC_SEED_OBJECTIVE);
-	FixPayloadCRC(mutated);
-	CHECK_DIAGNOSTIC(RLCODEC_OK,
-		DecodeFixture(mutated, sizeof(mutated), NULL, &decoded, &header));
-	CHECK(header.route_contract == RUNE_ROUTE_CONTRACT_LOCAL_ONLY);
-	memcpy(mutated, golden, sizeof(mutated));
-	PutU16(mutated + 4, 2U);
+	PutU16(mutated + 4, 1U);
 	FixHeaderCRC(mutated);
-	CHECK_DIAGNOSTIC(RLCODEC_BAD_ROUTE_CONTRACT,
+	CHECK_DIAGNOSTIC(RLCODEC_NONZERO_RESERVED,
 		DecodeFixture(mutated, sizeof(mutated), NULL, &decoded, &header));
 	memcpy(mutated, golden, sizeof(mutated));
 	PutU16(mutated + 134U, 1U);
@@ -1449,14 +1421,14 @@ static void TestEmptyMechanismCompatibility(void)
 		TEST_LINKS * SG_RUNE_CODEC_LINK_BYTES + 1U);
 	FixtureWorkspace(&fixture);
 	CHECK_DIAGNOSTIC(RLCODEC_OK, SG_RuneCodecValidate(
-		RUNE_ROUTE_CONTRACT_COMPLETE, fixture.seeds,
+		fixture.seeds,
 		TEST_SEEDS, fixture.links, TEST_LINKS, NULL, 0U, NULL, 0U,
 		NULL, 0U, empty_strings, 1U, &fixture.workspace));
 	fixture.links[0].action = RL_DOOR;
 	fixture.links[0].provenance = RL_DECLARED;
 	FixtureWorkspace(&fixture);
 	CHECK_DIAGNOSTIC(RLCODEC_BAD_ACTIVATION_PLAN,
-		SG_RuneCodecValidate(RUNE_ROUTE_CONTRACT_COMPLETE, fixture.seeds,
+		SG_RuneCodecValidate(fixture.seeds,
 			TEST_SEEDS, fixture.links,
 			TEST_LINKS, NULL, 0U, NULL, 0U, NULL, 0U, empty_strings,
 			1U, &fixture.workspace));
@@ -1468,7 +1440,7 @@ static sg_rune_codec_diagnostic_t ValidatePlanlessFixture(
 	static const unsigned char empty_strings[1] = { 0U };
 
 	FixtureWorkspace(fixture);
-	return SG_RuneCodecValidate(RUNE_ROUTE_CONTRACT_COMPLETE, fixture->seeds,
+	return SG_RuneCodecValidate(fixture->seeds,
 		TEST_SEEDS, fixture->links,
 		TEST_LINKS, NULL, 0U, NULL, 0U, NULL, 0U, empty_strings, 1U,
 		&fixture->workspace);

@@ -1,6 +1,6 @@
 /* Focused RUNE graph diagnostics: compiled directly with function-section GC.
- * The production generator remains untouched by this harness; it supplies the
- * host boundary needed by the static graph helpers below. */
+ * The legacy generator supplies the host boundary needed by the static graph
+ * helpers below; obsolete objective-wide repair is intentionally not wired. */
 #include <stdarg.h>
 #include <stdint.h>
 #include <math.h>
@@ -10,35 +10,15 @@
 
 #include "g_local.h"
 
-static qboolean TestObjectiveDropProver(int from, int to, vec3_t lip_out,
+static qboolean TestRunProver(int from, int to, qboolean jump,
 	short *cost_ms, byte *exit_speed);
-static qboolean TestObjectiveHookProver(int from, int to, vec3_t control_out,
-	short *cost_ms, byte *exit_speed);
-static qboolean TestLateRunProver(int from, int to, qboolean jump,
-	short *cost_ms, byte *exit_speed);
-static qboolean TestLateDropProver(int from, int to, vec3_t anchor,
-	short *cost_ms, byte *exit_speed);
-static qboolean TestLateSwimProver(int from, int to,
-	short *cost_ms, byte *exit_speed);
-static qboolean TestLateHookProver(int from, int to, vec3_t anchor,
-	short *cost_ms, byte *exit_speed);
-static int TestLateGravity(void);
 static qboolean TestDeclaredApproachProver(const vec3_t source,
 	const vec3_t target, edict_t *entry, edict_t *support, int action,
 	int *arrival_ms);
 static qboolean TestButtonLiftApproachProver(const vec3_t source,
 	const vec3_t target, edict_t *button, edict_t *platform,
 	int *arrival_ms);
-#define SG_RUNE_OBJECTIVE_DROP_PROVER TestObjectiveDropProver
-#define SG_RUNE_OBJECTIVE_HOOK_PROVER TestObjectiveHookProver
-#define SG_RUNE_OBJECTIVE_RUN_PROVER TestLateRunProver
-#define SG_RUNE_OBJECTIVE_SWIM_PROVER TestLateSwimProver
-#define SG_RUNE_TOPOLOGY_RUN_PROVER TestLateRunProver
-#define SG_RUNE_LATE_RUN_PROVER TestLateRunProver
-#define SG_RUNE_LATE_DROP_PROVER TestLateDropProver
-#define SG_RUNE_LATE_SWIM_PROVER TestLateSwimProver
-#define SG_RUNE_LATE_HOOK_PROVER TestLateHookProver
-#define SG_RUNE_LATE_GRAVITY() TestLateGravity()
+#define SG_RUNE_TOPOLOGY_RUN_PROVER TestRunProver
 #include "slipgate/sg_rune.c"
 
 static void SetLink(rune_link_t *link, int from, int to);
@@ -50,7 +30,6 @@ game_export_t globals;
 edict_t *g_edicts;
 edict_t *redflag;
 edict_t *blueflag;
-static int learning_update_calls;
 
 void SG_OracleRun(sg_phantom_t *phantom, usercmd_t *command, int steps)
 {
@@ -83,30 +62,6 @@ void SG_CompoundGenGameTopologyFree(
 	deallocate(topology->objective_mask);
 	topology->component = NULL;
 	topology->objective_mask = NULL;
-}
-
-int SG_RelayWallObjectiveGameBridge(
-	const sg_relay_wall_objective_game_request_t *request,
-	sg_relay_wall_objective_report_t *report)
-{
-	(void)request;
-	memset(report, 0, sizeof(*report));
-	return 0;
-}
-
-sg_rune_learning_apply_status_t SG_RuneLearningGameUpdate(
-	const rune_t *source, const sg_rune_learning_evidence_t *evidence,
-	const sg_rune_learning_graph_t *graph,
-	const sg_rune_learning_owners_t *owners,
-	sg_rune_learning_update_report_t *report)
-{
-	(void)source;
-	(void)evidence;
-	(void)graph;
-	(void)owners;
-	learning_update_calls++;
-	memset(report, 0, sizeof(*report));
-	return SG_RUNE_LEARNING_OPEN_UNCHANGED;
 }
 
 qboolean SG_RuneProveHookNomination(
@@ -174,11 +129,6 @@ void VectorMA(vec3_t first, float scale, vec3_t second, vec3_t result)
 	result[2] = first[2] + scale * second[2];
 }
 
-int SG_RuneProofObjectiveRunReplayAccepted(int edge_seek, int airborne)
-{
-	return !edge_seek && !airborne;
-}
-
 static char diagnostic_log[32768];
 static size_t diagnostic_used;
 static FILE *telemetry_output;
@@ -186,21 +136,6 @@ static int telemetry_flush_calls;
 static int allocations_before_failure = -1;
 static int failures;
 extern int sg_rune_test_declared_door_members_result;
-static qboolean objective_drop_succeeds;
-static int objective_drop_calls;
-static int objective_drop_from;
-static int objective_drop_to;
-static qboolean objective_hook_succeeds;
-static qboolean fail_allocation_after_objective_hook;
-static int objective_hook_calls;
-static int late_run_calls;
-static int late_hook_calls;
-static qboolean late_allow_forward;
-static qboolean late_allow_reverse;
-static qboolean late_allow_hook;
-static qboolean late_allow_any_run_once;
-static qboolean late_allow_all_runs;
-static int late_gravity;
 static edict_t *declared_expected_entry;
 static qboolean declared_approach_succeeds;
 static int declared_approach_calls;
@@ -362,97 +297,15 @@ static void TestFree(void *memory)
 	free(memory);
 }
 
-static qboolean TestObjectiveDropProver(int from, int to, vec3_t lip_out,
-	short *cost_ms, byte *exit_speed)
-{
-	objective_drop_calls++;
-	objective_drop_from = from;
-	objective_drop_to = to;
-	if (!objective_drop_succeeds)
-		return false;
-	VectorSet(lip_out, 10.0f, 20.0f, 30.0f);
-	*cost_ms = 1100;
-	*exit_speed = 74;
-	return true;
-}
-
-static qboolean TestObjectiveHookProver(int from, int to, vec3_t control_out,
+static qboolean TestRunProver(int from, int to, qboolean jump,
 	short *cost_ms, byte *exit_speed)
 {
 	(void)from;
 	(void)to;
-	objective_hook_calls++;
-	if (!objective_hook_succeeds)
-		return false;
-	if (fail_allocation_after_objective_hook)
-		allocations_before_failure = 0;
-	VectorSet(control_out, 10.0f, 90.0f, 30.0f);
-	*cost_ms = 1200;
-	*exit_speed = 75;
-	return true;
-}
-
-static qboolean TestLateRunProver(int from, int to, qboolean jump,
-	short *cost_ms, byte *exit_speed)
-{
-	late_run_calls++;
-	if (!jump && late_allow_all_runs)
-	{
-		*cost_ms = 100;
-		*exit_speed = 0;
-		return true;
-	}
-	if (!jump && late_allow_any_run_once)
-	{
-		late_allow_any_run_once = false;
-		*cost_ms = 100;
-		*exit_speed = 0;
-		return true;
-	}
-	if (jump || !((late_allow_forward && from == 1 && to == 2) ||
-		(late_allow_reverse && from == 2 && to == 1)))
-		return false;
-	*cost_ms = 100;
-	*exit_speed = 0;
-	return true;
-}
-
-static qboolean TestLateDropProver(int from, int to, vec3_t anchor,
-	short *cost_ms, byte *exit_speed)
-{
-	(void)from;
-	(void)to;
-	(void)anchor;
+	(void)jump;
 	(void)cost_ms;
 	(void)exit_speed;
 	return false;
-}
-
-static qboolean TestLateSwimProver(int from, int to,
-	short *cost_ms, byte *exit_speed)
-{
-	(void)from;
-	(void)to;
-	(void)cost_ms;
-	(void)exit_speed;
-	return false;
-}
-
-static qboolean TestLateHookProver(int from, int to, vec3_t anchor,
-	short *cost_ms, byte *exit_speed)
-{
-	late_hook_calls++;
-	if (!late_allow_hook || from != 0 || to != 1)
-		return false;
-	VectorSet(anchor, 10.0f, 20.0f, 30.0f);
-	*cost_ms = 250;
-	*exit_speed = 75;
-	return true;
-}
-
-static int TestLateGravity(void)
-{
-	return late_gravity;
 }
 
 static qboolean TestDeclaredApproachProver(const vec3_t source,
@@ -585,26 +438,9 @@ static void ResetGraph(rune_seed_t *seeds, int seed_count,
 	gen_mechanism_bindings = NULL;
 	gen_num_mechanism_bindings = 0U;
 	gen_mechanism_failed = false;
-	gen_objective_reverse_failed = false;
 	memset(&gen_telemetry, 0, sizeof(gen_telemetry));
 	memset(&gen_phase_telemetry, 0, sizeof(gen_phase_telemetry));
 	allocations_before_failure = -1;
-	objective_drop_succeeds = false;
-	objective_drop_calls = 0;
-	objective_drop_from = -1;
-	objective_drop_to = -1;
-	objective_hook_succeeds = false;
-	fail_allocation_after_objective_hook = false;
-	objective_hook_calls = 0;
-	late_run_calls = 0;
-	late_hook_calls = 0;
-	late_allow_forward = false;
-	late_allow_reverse = false;
-	late_allow_hook = false;
-	late_allow_any_run_once = false;
-	late_allow_all_runs = false;
-	late_gravity = 800;
-	learning_update_calls = 0;
 	gen_env_drop = 0;
 	gen_env_hook = 0;
 	declared_expected_entry = NULL;
@@ -681,366 +517,6 @@ static void SetLink(rune_link_t *link, int from, int to)
 	link->mechanism_plan = RUNE_NO_MECHANISM_PLAN;
 }
 
-static void TestBidirectionalCore(void)
-{
-	rune_seed_t seeds[2];
-	rune_link_t links[2];
-	rune_seed_t seed_snapshot[2];
-	rune_link_t link_snapshot[2];
-	edict_t red, blue;
-
-	ResetGraph(seeds, 2, links, 2, &red, &blue);
-	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
-	VectorSet(blue.homeposition, 100.0f, 0.0f, 0.0f);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 100.0f, 0.0f, 0.0f);
-	SetLink(&links[0], 0, 1);
-	SetLink(&links[1], 1, 0);
-	memcpy(seed_snapshot, seeds, sizeof(seeds));
-	memcpy(link_snapshot, links, sizeof(links));
-	CHECK(Graph_PruneObjectiveCore());
-	CHECK(strstr(diagnostic_log, "red_to_blue=1 blue_to_red=1") != NULL);
-	CHECK(strstr(diagnostic_log,
-	    "objective-partitions red_only=0 blue_only=0 shared=2 neither=0") != NULL);
-	CHECK(strstr(diagnostic_log,
-	    "objective-boundary phase=initial reported=0 limit=16") != NULL);
-	CHECK(gen_num_seeds == 2 && gen_num_links == 2);
-	CHECK(memcmp(seeds, seed_snapshot, sizeof(seeds)) == 0);
-	CHECK(memcmp(links, link_snapshot, sizeof(links)) == 0);
-}
-
-static void TestDisconnectedPartitionDiagnostics(void)
-{
-	rune_seed_t seeds[4];
-	rune_link_t links[4];
-	rune_seed_t seed_snapshot[4];
-	rune_link_t link_snapshot[4];
-	edict_t red, blue;
-
-	ResetGraph(seeds, 4, links, 4, &red, &blue);
-	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
-	VectorSet(blue.homeposition, 1000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 1000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[2].origin, 400.0f, 0.0f, 0.0f);
-	VectorSet(seeds[3].origin, 500.0f, 0.0f, 0.0f);
-	SetLink(&links[0], 0, 2);
-	SetLink(&links[1], 2, 0);
-	SetLink(&links[2], 1, 3);
-	SetLink(&links[3], 3, 1);
-	memcpy(seed_snapshot, seeds, sizeof(seeds));
-	memcpy(link_snapshot, links, sizeof(links));
-	CHECK(!Graph_PruneObjectiveCore());
-	CHECK(strstr(diagnostic_log,
-	    "objective-partitions red_only=2 blue_only=2 shared=0 neither=0") != NULL);
-	CHECK(strstr(diagnostic_log,
-	    "objective-gap pair=red-blue from=2") != NULL);
-	CHECK(strstr(diagnostic_log, "to=3") != NULL);
-	CHECK(strstr(diagnostic_log, "distance=100.000 exact=1 pairs=4") != NULL);
-	CHECK(strstr(diagnostic_log,
-	    "objective-boundary phase=initial reported=0 limit=16") != NULL);
-	CHECK(gen_num_seeds == 4 && gen_num_links == 4);
-	CHECK(memcmp(seeds, seed_snapshot, sizeof(seeds)) == 0);
-	CHECK(memcmp(links, link_snapshot, sizeof(links)) == 0);
-}
-
-static void TestOneWayAndFixedPointFailures(void)
-{
-	rune_seed_t seeds[7];
-	rune_link_t links[6];
-	edict_t red, blue;
-
-	ResetGraph(seeds, 7, links, 6, &red, &blue);
-	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
-	VectorSet(blue.homeposition, 1000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 1000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[2].origin, 2000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[3].origin, 2100.0f, 0.0f, 0.0f);
-	VectorSet(seeds[4].origin, 2200.0f, 0.0f, 0.0f);
-	VectorSet(seeds[5].origin, 2300.0f, 0.0f, 0.0f);
-	VectorSet(seeds[6].origin, 2400.0f, 0.0f, 0.0f);
-	SetLink(&links[0], 0, 5);
-	SetLink(&links[1], 1, 6);
-	SetLink(&links[2], 2, 0);
-	SetLink(&links[3], 3, 1);
-	SetLink(&links[4], 4, 2);
-	SetLink(&links[5], 4, 3);
-	CHECK(!Graph_PruneObjectiveCore());
-	CHECK(strstr(diagnostic_log, "red_to_blue=0 blue_to_red=0") != NULL);
-	CHECK(strstr(diagnostic_log, "iteration=0 removed=6") != NULL);
-	CHECK(strstr(diagnostic_log, "iteration=1 removed=1") != NULL);
-	CHECK(strstr(diagnostic_log,
-	    "objective-boundary phase=initial reported=") != NULL);
-}
-
-static void TestOneWayCrossRootReject(void)
-{
-	rune_seed_t seeds[3];
-	rune_link_t links[2];
-	edict_t red, blue;
-
-	ResetGraph(seeds, 3, links, 2, &red, &blue);
-	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
-	VectorSet(blue.homeposition, 100.0f, 0.0f, 0.0f);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 100.0f, 0.0f, 0.0f);
-	VectorSet(seeds[2].origin, 200.0f, 0.0f, 0.0f);
-	SetLink(&links[0], 0, 1);
-	SetLink(&links[1], 1, 2);
-	CHECK(!Graph_PruneObjectiveCore());
-	CHECK(strstr(diagnostic_log,
-	    "objective-core initial red_reach=1 blue_reach=2") != NULL);
-	CHECK(strstr(diagnostic_log,
-	    "FAILED: flag objectives share no closed route core") != NULL);
-}
-
-static void TestHookReverseDropRepair(void)
-{
-	rune_seed_t seeds[4];
-	rune_link_t links[6];
-	edict_t red, blue;
-
-	ResetGraph(seeds, 4, links, 5, &red, &blue);
-	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
-	VectorSet(blue.homeposition, 1000.0f, 0.0f, 240.0f);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 1000.0f, 0.0f, 240.0f);
-	VectorSet(seeds[2].origin, 64.0f, 0.0f, 0.0f);
-	VectorSet(seeds[3].origin, 636.0f, 0.0f, 240.0f);
-	SetLink(&links[0], 0, 2);
-	SetLink(&links[1], 2, 0);
-	SetLink(&links[2], 1, 3);
-	SetLink(&links[3], 3, 1);
-	SetLink(&links[4], 2, 3);
-	links[4].action = RL_HOOK;
-	objective_drop_succeeds = true;
-	CHECK(Graph_PruneObjectiveCore());
-	CHECK(objective_drop_calls == 1);
-	CHECK(objective_drop_from == 3 && objective_drop_to == 2);
-	CHECK(gen_num_links == 6);
-	CHECK(links[5].from == 3 && links[5].to == 2);
-	CHECK(links[5].action == RL_DROP);
-	CHECK(links[5].cost_ms == 1100 && links[5].exit_speed == 74);
-	CHECK(strstr(diagnostic_log,
-	    "objective-repair kind=hook-reverse-drop") != NULL);
-	CHECK(strstr(diagnostic_log,
-	    "red_to_blue=1 blue_to_red=1") != NULL);
-}
-
-static void TestObjectiveReverseHookRepair(void)
-{
-	rune_seed_t seeds[4];
-	rune_link_t links[6];
-	edict_t red, blue;
-
-	ResetGraph(seeds, 4, links, 5, &red, &blue);
-	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
-	VectorSet(blue.homeposition, 1000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 1000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[2].origin, 64.0f, 0.0f, 0.0f);
-	VectorSet(seeds[3].origin, 636.0f, 0.0f, 0.0f);
-	SetLink(&links[0], 0, 2);
-	SetLink(&links[1], 2, 0);
-	SetLink(&links[2], 1, 3);
-	SetLink(&links[3], 3, 1);
-	SetLink(&links[4], 2, 3);
-	links[4].action = RL_DROP;
-	objective_hook_succeeds = true;
-	CHECK(Graph_PruneObjectiveCore());
-	CHECK(objective_hook_calls == 1);
-	CHECK(gen_num_links == 6);
-	CHECK(links[5].from == 3 && links[5].to == 2);
-	CHECK(links[5].action == RL_HOOK);
-	CHECK(links[5].cost_ms == 1200 && links[5].exit_speed == 75);
-	CHECK(links[5].anchor[0] == 10.0f && links[5].anchor[1] == 90.0f &&
-	    links[5].anchor[2] == 30.0f);
-	CHECK(links[5].heading == 64);
-	CHECK(links[5].heading_slack == RUNE_HOOK_CONTROL_SLACK);
-	CHECK(links[5].min_speed == 0 && gen_env_hook == 1);
-	CHECK(strstr(diagnostic_log, "objective-repair kind=reverse-hook") != NULL);
-}
-
-static void TestObjectiveReverseHookRepairFromRunBoundary(void)
-{
-	rune_seed_t seeds[4];
-	rune_link_t links[6];
-	edict_t red, blue;
-
-	ResetGraph(seeds, 4, links, 5, &red, &blue);
-	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
-	VectorSet(blue.homeposition, 1000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 1000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[2].origin, 64.0f, 0.0f, 0.0f);
-	VectorSet(seeds[3].origin, 636.0f, 0.0f, 0.0f);
-	SetLink(&links[0], 0, 2);
-	SetLink(&links[1], 2, 0);
-	SetLink(&links[2], 1, 3);
-	SetLink(&links[3], 3, 1);
-	SetLink(&links[4], 2, 3);
-	objective_hook_succeeds = true;
-	CHECK(Graph_PruneObjectiveCore());
-	CHECK(objective_hook_calls == 1);
-	CHECK(gen_num_links == 6);
-	CHECK(links[5].from == 3 && links[5].to == 2);
-	CHECK(links[5].action == RL_HOOK);
-}
-
-static void TestObjectiveReverseRunRepair(void)
-{
-	rune_seed_t seeds[4];
-	rune_link_t links[6];
-	edict_t red, blue;
-
-	ResetGraph(seeds, 4, links, 5, &red, &blue);
-	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
-	VectorSet(blue.homeposition, 1000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 1000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[2].origin, 64.0f, 0.0f, 0.0f);
-	VectorSet(seeds[3].origin, 636.0f, 0.0f, 0.0f);
-	SetLink(&links[0], 0, 2);
-	SetLink(&links[1], 2, 0);
-	SetLink(&links[2], 1, 3);
-	SetLink(&links[3], 3, 1);
-	SetLink(&links[4], 2, 3);
-	late_allow_all_runs = true;
-	CHECK(Graph_PruneObjectiveCore());
-	CHECK(late_run_calls == 1);
-	CHECK(objective_hook_calls == 0);
-	CHECK(gen_num_links == 6);
-	CHECK(links[5].from == 3 && links[5].to == 2);
-	CHECK(links[5].action == RL_RUN);
-	CHECK(strstr(diagnostic_log, "objective-repair kind=reverse-run") != NULL);
-}
-
-static void TestObjectiveReverseRejectsFailedHook(void)
-{
-	rune_seed_t seeds[4];
-	rune_link_t links[6];
-	edict_t red, blue;
-
-	ResetGraph(seeds, 4, links, 5, &red, &blue);
-	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
-	VectorSet(blue.homeposition, 1000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 1000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[2].origin, 64.0f, 0.0f, 0.0f);
-	VectorSet(seeds[3].origin, 636.0f, 0.0f, 0.0f);
-	SetLink(&links[0], 0, 2);
-	SetLink(&links[1], 2, 0);
-	SetLink(&links[2], 1, 3);
-	SetLink(&links[3], 3, 1);
-	SetLink(&links[4], 2, 3);
-	links[4].action = RL_DROP;
-	CHECK(!Graph_PruneObjectiveCore());
-	CHECK(objective_hook_calls == 1);
-	CHECK(gen_num_links == 5);
-}
-
-static void TestObjectiveReverseAllocationIsFatal(void)
-{
-	rune_seed_t seeds[2];
-	rune_link_t links[1];
-	byte red_reach[2] = { 1U, 1U };
-	byte blue_reach[2] = { 1U, 0U };
-	edict_t red, blue;
-
-	ResetGraph(seeds, 2, links, 1, &red, &blue);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 64.0f, 0.0f, 0.0f);
-	SetLink(&links[0], 0, 1);
-	links[0].action = RL_DROP;
-	allocations_before_failure = 0;
-	CHECK(Graph_ProveObjectiveReverse(red_reach, blue_reach, NULL, NULL) ==
-	    GRAPH_OBJECTIVE_REVERSE_FATAL);
-	CHECK(gen_num_links == 1);
-	CHECK(strstr(diagnostic_log,
-	    "FAILED: objective-reverse candidate allocation") != NULL);
-}
-
-static void TestObjectiveSwimAllocationIsFatal(void)
-{
-	rune_seed_t seeds[2];
-	rune_link_t links[1];
-	edict_t red, blue;
-	qboolean fatal = false;
-
-	ResetGraph(seeds, 2, links, 1, &red, &blue);
-	SetLink(&links[0], 0, 1);
-	allocations_before_failure = 0;
-	CHECK(!Prove_ObjectiveSwimClosure(0, 1, &fatal));
-	CHECK(fatal && gen_num_links == 1);
-
-	ResetGraph(seeds, 2, links, 1, &red, &blue);
-	SetLink(&links[0], 0, 1);
-	/* Red and blue reach buffers succeed; the first reach-mask allocation
-	 * then fails and must not fall through to late-path classification. */
-	allocations_before_failure = 2;
-	fatal = false;
-	CHECK(!Prove_ObjectiveSwimClosure(0, 1, &fatal));
-	CHECK(fatal && gen_num_links == 1);
-	allocations_before_failure = -1;
-}
-
-static void TestObjectiveReverseReindexAllocationIsFatal(void)
-{
-	rune_seed_t seeds[4];
-	rune_link_t links[6];
-	edict_t red, blue;
-	int red_root = -1, blue_root = -1;
-
-	ResetGraph(seeds, 4, links, 5, &red, &blue);
-	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
-	VectorSet(blue.homeposition, 1000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 1000.0f, 0.0f, 0.0f);
-	VectorSet(seeds[2].origin, 64.0f, 0.0f, 0.0f);
-	VectorSet(seeds[3].origin, 636.0f, 0.0f, 0.0f);
-	SetLink(&links[0], 0, 2);
-	SetLink(&links[1], 2, 0);
-	SetLink(&links[2], 1, 3);
-	SetLink(&links[3], 3, 1);
-	SetLink(&links[4], 2, 3);
-	objective_hook_succeeds = true;
-	fail_allocation_after_objective_hook = true;
-	CHECK(!Graph_PruneObjectiveCoreTry(true, &red_root, &blue_root));
-	CHECK(red_root == 0 && blue_root == 1);
-	CHECK(gen_objective_reverse_failed);
-	fail_allocation_after_objective_hook = false;
-	allocations_before_failure = -1;
-}
-
-static void TestObjectiveReverseHookProofExhaustsRankedPairs(void)
-{
-	rune_seed_t seeds[66];
-	rune_link_t links[33];
-	byte red_reach[66], blue_reach[66];
-	edict_t red, blue;
-
-	ResetGraph(seeds, 66, links, 33, &red, &blue);
-	for (int pair = 0; pair < 33; pair++)
-	{
-		int from = pair * 2;
-		int to = from + 1;
-
-		VectorSet(seeds[from].origin, (float)(pair * 32), 0.0f, 0.0f);
-		VectorSet(seeds[to].origin, (float)(pair * 32 + 16), 0.0f, 0.0f);
-		SetLink(&links[pair], from, to);
-		links[pair].action = RL_DROP;
-		red_reach[from] = blue_reach[from] = 1U;
-		red_reach[to] = 1U;
-		blue_reach[to] = 0U;
-	}
-	CHECK(Graph_ProveObjectiveReverse(red_reach, blue_reach, NULL, NULL) ==
-	    GRAPH_OBJECTIVE_REVERSE_NO_PROOF);
-	CHECK(objective_hook_calls == 33);
-	CHECK(gen_num_links == 33);
-}
-
-
 static void TestObjectiveMetricUnits(void)
 {
 	rune_seed_t seeds[1];
@@ -1055,16 +531,12 @@ static void TestObjectiveMetricUnits(void)
 	CHECK(Graph_ObjectiveRoot(objective, has_out, &diag) == 0);
 	CHECK(fabsf(diag.score - 9216.0f) < 0.001f);
 	CHECK(fabsf(diag.distance - 96.0f) < 0.001f);
-	Graph_LogObjectiveRoot("red", &diag, 0);
-	CHECK(strstr(diagnostic_log, "score=9216.000 distance=96.000") != NULL);
 
 	ResetGraph(seeds, 1, links, 0, &red, &blue);
 	VectorSet(seeds[0].origin, 0.0f, 0.0f, 80.0f);
 	CHECK(Graph_ObjectiveRoot(objective, has_out, &diag) == 0);
 	CHECK(fabsf(diag.score - 1600.0f) < 0.001f);
 	CHECK(fabsf(diag.distance - 80.0f) < 0.001f);
-	Graph_LogObjectiveRoot("blue", &diag, 0);
-	CHECK(strstr(diagnostic_log, "score=1600.000 distance=80.000") != NULL);
 }
 
 static void TestNearestUnlinked(void)
@@ -1085,9 +557,6 @@ static void TestNearestUnlinked(void)
 	CHECK(diag.nearest == 0);
 	CHECK(!diag.has_out);
 	CHECK(diag.no_out_rejects == 1U);
-	Graph_LogObjectiveRoot("red", &diag, -1);
-	CHECK(strstr(diagnostic_log, "nearest=0") != NULL);
-	CHECK(strstr(diagnostic_log, "has_out=0") != NULL);
 }
 
 static void TestDirectShallowApproachEnvelope(void)
@@ -1202,383 +671,6 @@ static void TestDirectShallowApproachEnvelope(void)
 }
 
 
-static void TestBoundaryCap(void)
-{
-	rune_seed_t seeds[19];
-	rune_link_t links[18];
-	byte red_reach[19];
-	byte blue_reach[19];
-	edict_t red, blue;
-	const char *previous = diagnostic_log;
-	int i;
-
-	ResetGraph(seeds, 19, links, 18, &red, &blue);
-	memset(red_reach, 0, sizeof(red_reach));
-	memset(blue_reach, 0, sizeof(blue_reach));
-	for (i = 0; i < 19; i++)
-		red_reach[i] = (byte)(i & 1);
-	for (i = 0; i < 18; i++)
-		SetLink(&links[i], i, i + 1);
-	Graph_LogBoundaryLinks("test", red_reach, blue_reach);
-	for (i = 0; i < 16; i++)
-	{
-		char expected[48];
-		const char *found;
-
-		snprintf(expected, sizeof(expected), "ordinal=%d link=%d", i, i);
-		found = strstr(previous, expected);
-		CHECK(found != NULL);
-		if (found)
-			previous = found + 1;
-	}
-	CHECK(strstr(diagnostic_log, "ordinal=16") == NULL);
-	CHECK(strstr(diagnostic_log, "link=16") == NULL);
-	CHECK(strstr(diagnostic_log,
-	    "objective-boundary phase=test reported=16 limit=16") != NULL);
-}
-
-static void TestZeroAndAllocationFailures(void)
-{
-	rune_seed_t seeds[2];
-	rune_link_t links[1];
-	edict_t red, blue;
-
-	ResetGraph(seeds, 0, links, 0, &red, &blue);
-	CHECK(!Graph_PruneObjectiveCore());
-	CHECK(strstr(diagnostic_log, "reason=no-seeds") != NULL);
-
-	ResetGraph(seeds, 2, links, 0, &red, &blue);
-	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
-	VectorSet(blue.homeposition, 100.0f, 0.0f, 0.0f);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 100.0f, 0.0f, 0.0f);
-	CHECK(!Graph_PruneObjectiveCore());
-	CHECK(strstr(diagnostic_log, "root=-1") != NULL);
-
-	ResetGraph(seeds, 2, links, 1, &red, &blue);
-	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
-	VectorSet(blue.homeposition, 100.0f, 0.0f, 0.0f);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 100.0f, 0.0f, 0.0f);
-	SetLink(&links[0], 0, 1);
-	allocations_before_failure = 3;
-	CHECK(!Graph_PruneObjectiveCore());
-	CHECK(strstr(diagnostic_log, "FAILED: objective-core allocation") != NULL);
-	CHECK(gen_num_seeds == 2 && gen_num_links == 1);
-	allocations_before_failure = -1;
-}
-
-static void TestLocalOnlyPublicationRetainsProvenUnion(void)
-{
-	rune_seed_t seeds[6];
-	rune_link_t links[7];
-	rune_link_t retained[6];
-	edict_t red, blue;
-
-	ResetGraph(seeds, 6, links, 7, &red, &blue);
-	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
-	VectorSet(blue.homeposition, 1000.0f, 0.0f, 0.0f);
-	for (int i = 0; i < 6; i++)
-		VectorSet(seeds[i].origin, (float)i * 100.0f, 0.0f, 0.0f);
-	SetLink(&links[0], 0, 2);
-	SetLink(&links[1], 2, 0);
-	SetLink(&links[2], 1, 3);
-	SetLink(&links[3], 3, 1);
-	SetLink(&links[4], 4, 2);
-	SetLink(&links[5], 2, 4);
-	SetLink(&links[6], 5, 5);
-	links[4].action = RL_HOOK;
-	links[4].cost_ms = 777;
-	memcpy(retained, links, sizeof(retained));
-
-	CHECK(Graph_PruneLocalObjectiveUnion(0, 1));
-	CHECK(gen_num_links == 6);
-	CHECK(memcmp(links, retained, sizeof(retained)) == 0);
-	CHECK((seeds[0].flags & RSF_OBJECTIVE) != 0);
-	CHECK((seeds[1].flags & RSF_OBJECTIVE) != 0);
-	CHECK((seeds[5].flags & RSF_TOMBSTONE) != 0);
-	CHECK(strstr(diagnostic_log,
-	    "route contract local-only red_reach=3 blue_reach=2 shared=0 retained=5") != NULL);
-}
-
-static void TestLocalOnlyPublicationRejectsClosedOrUnallocatableGraph(void)
-{
-	rune_seed_t seeds[2];
-	rune_link_t links[2];
-	rune_seed_t seed_snapshot[2];
-	rune_link_t link_snapshot[2];
-	edict_t red, blue;
-
-	ResetGraph(seeds, 2, links, 2, &red, &blue);
-	SetLink(&links[0], 0, 1);
-	SetLink(&links[1], 1, 0);
-	memcpy(seed_snapshot, seeds, sizeof(seeds));
-	memcpy(link_snapshot, links, sizeof(links));
-	CHECK(!Graph_PruneLocalObjectiveUnion(0, 1));
-	CHECK(gen_num_links == 2);
-	CHECK(memcmp(seeds, seed_snapshot, sizeof(seeds)) == 0);
-	CHECK(memcmp(links, link_snapshot, sizeof(links)) == 0);
-
-	ResetGraph(seeds, 2, links, 0, &red, &blue);
-	memcpy(seed_snapshot, seeds, sizeof(seeds));
-	allocations_before_failure = 0;
-	CHECK(!Graph_PruneLocalObjectiveUnion(0, 1));
-	CHECK(gen_num_links == 0);
-	CHECK(memcmp(seeds, seed_snapshot, sizeof(seeds)) == 0);
-	allocations_before_failure = -1;
-}
-
-static void TestLatePathProductionClosure(void)
-{
-	rune_seed_t seeds[4];
-	rune_link_t links[6];
-	edict_t red, blue;
-	rune_route_contract_t contract = RUNE_ROUTE_CONTRACT_LOCAL_ONLY;
-	int components[4];
-	sg_rune_topology_snapshot_t topology = {
-		components, 4U, 0U, 0U, 0U, 0U
-	};
-	byte objective_masks[4] = {1, 1, 2, 2};
-	sg_rune_learning_evidence_t learning = {0};
-
-	ResetGraph(seeds, 4, links, 4, &red, &blue);
-	memset(&gen_mechanism_catalog, 0, sizeof(gen_mechanism_catalog));
-	VectorSet(red.homeposition, 0.0f, 0.0f, 0.0f);
-	VectorSet(blue.homeposition, 300.0f, 0.0f, 0.0f);
-	for (int i = 0; i < 4; i++)
-	{
-		VectorSet(seeds[i].origin, (float)i * 100.0f, 0.0f, 0.0f);
-		gen_source_stable[i] = true;
-		gen_source_waterlevel[i] = 0;
-	}
-	SetLink(&links[0], 0, 1);
-	SetLink(&links[1], 1, 0);
-	SetLink(&links[2], 2, 3);
-	SetLink(&links[3], 3, 2);
-	gen_prove_has_wp = false;
-	late_allow_forward = true;
-	late_allow_reverse = true;
-
-	CHECK(Graph_PruneObjectiveCoreWithClosure(&contract, &learning, NULL,
-		&topology, objective_masks));
-	CHECK(contract == RUNE_ROUTE_CONTRACT_COMPLETE);
-	CHECK(gen_num_links == 6);
-	CHECK(late_run_calls == 2);
-	CHECK(learning_update_calls == 0);
-	CHECK(((links[4].from == 1 && links[4].to == 2) &&
-	       (links[5].from == 2 && links[5].to == 1)) ||
-	      ((links[5].from == 1 && links[5].to == 2) &&
-	       (links[4].from == 2 && links[4].to == 1)));
-	for (int i = 0; i < 4; i++)
-		CHECK((seeds[i].flags & RSF_TOMBSTONE) == 0);
-}
-
-static void TestObjectiveOverlapClosesSharedReachableRoom(void)
-{
-	rune_seed_t seeds[3];
-	rune_link_t links[4];
-	edict_t red, blue;
-
-	ResetGraph(seeds, 3, links, 2, &red, &blue);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 128.0f, 0.0f, 0.0f);
-	VectorSet(seeds[2].origin, 64.0f, 64.0f, 0.0f);
-	SetLink(&links[0], 0, 2);
-	SetLink(&links[1], 1, 2);
-	late_allow_all_runs = true;
-
-	CHECK(Graph_ProveObjectiveOverlap(0, 1) == 1);
-	CHECK(gen_num_links == 4);
-	CHECK(Link_Exists(2, 0));
-	CHECK(Link_Exists(2, 1));
-	CHECK(strstr(diagnostic_log,
-	    "rune: objective-overlap status=closed overlaps=") != NULL);
-}
-
-static void TestLatePathOpenKeepsExactMerge(void)
-{
-	rune_seed_t seeds[4];
-	rune_link_t links[5];
-	edict_t red, blue;
-	sg_rune_late_completion_t completion;
-
-	ResetGraph(seeds, 4, links, 4, &red, &blue);
-	for (int i = 0; i < 4; i++)
-	{
-		VectorSet(seeds[i].origin, (float)i * 100.0f, 0.0f, 0.0f);
-		gen_source_stable[i] = true;
-		gen_source_waterlevel[i] = 0;
-	}
-	SetLink(&links[0], 0, 1);
-	SetLink(&links[1], 1, 0);
-	SetLink(&links[2], 2, 3);
-	SetLink(&links[3], 3, 2);
-	late_allow_forward = true;
-	completion = Graph_ProveLatePath(0, 3);
-
-	CHECK(completion == SG_RUNE_LATE_COMPLETION_OPEN_EXHAUSTED);
-	CHECK(gen_num_links == 5);
-	CHECK(links[4].from == 1 && links[4].to == 2);
-}
-
-static void TestLatePathFallsThroughToExactHook(void)
-{
-	rune_seed_t seeds[2];
-	rune_link_t links[1];
-	edict_t red, blue;
-	rune_late_context_t context;
-	sg_rune_late_candidate_t candidate;
-
-	ResetGraph(seeds, 2, links, 0, &red, &blue);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 100.0f, 0.0f, 0.0f);
-	gen_source_stable[0] = true;
-	gen_source_waterlevel[0] = 0;
-	memset(&context, 0, sizeof(context));
-	memset(&candidate, 0, sizeof(candidate));
-	candidate.from = 0;
-	candidate.to = 1;
-	candidate.action = RL_RUN;
-	late_allow_hook = true;
-
-	CHECK(Rune_LateTryBridge(&context, &candidate) == 1);
-	CHECK(late_run_calls == 2);
-	CHECK(late_hook_calls == 1);
-	CHECK(context.exact_attempts == 3U);
-	CHECK(gen_num_links == 1 && links[0].action == RL_HOOK);
-	CHECK(gen_env_hook == 1);
-	CHECK(links[0].anchor[0] == 10.0f && links[0].anchor[1] == 20.0f &&
-		links[0].anchor[2] == 30.0f);
-}
-
-static void TestLatePathSchedulingExhaustsEveryRegionPair(void)
-{
-	rune_seed_t seeds[130];
-	rune_link_t links[1];
-	edict_t red, blue;
-	sg_rune_late_completion_t completion;
-
-	ResetGraph(seeds, 130, links, 0, &red, &blue);
-	for (int i = 0; i < 130; i++)
-	{
-		VectorSet(seeds[i].origin, (float)i * 16.0f, 0.0f, 0.0f);
-		/* Keep this scheduler-only fixture ineligible without relying on the
-		 * dry-source stability rule exercised by the next test. */
-		gen_source_waterlevel[i] = 1;
-	}
-	completion = Graph_ProveLatePath(0, 129);
-
-	CHECK(completion == SG_RUNE_LATE_COMPLETION_OPEN_EXHAUSTED);
-	CHECK(gen_num_links == 0);
-	CHECK(strstr(diagnostic_log, "selectors=263") != NULL);
-	CHECK(strstr(diagnostic_log, "scheduled=16770") != NULL);
-}
-
-static void TestLatePathLowGravityRiseRemainsEligible(void)
-{
-	rune_seed_t seeds[2];
-	rune_link_t links[1];
-	edict_t red, blue;
-	rune_late_context_t context;
-	sg_rune_late_graph_t graph;
-	sg_rune_late_proposal_t proposal = {0};
-
-	ResetGraph(seeds, 2, links, 0, &red, &blue);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 500.0f, 0.0f, 700.0f);
-	gen_source_stable[0] = true;
-	gen_source_waterlevel[0] = 0;
-	late_gravity = 100;
-	memset(&context, 0, sizeof(context));
-	memset(&graph, 0, sizeof(graph));
-	graph.seeds = seeds;
-	graph.seed_count = 2U;
-
-	CHECK(Rune_LateEligible(&context, &graph, 0, 1, &proposal));
-	CHECK(proposal.action == RL_HOOK);
-}
-
-static void TestLatePathUnstableDrySourceCanRun(void)
-{
-	rune_seed_t seeds[2];
-	rune_link_t links[1];
-	edict_t red, blue;
-	rune_late_context_t context;
-	sg_rune_late_graph_t graph;
-	sg_rune_late_proposal_t proposal = {0};
-	sg_rune_late_candidate_t candidate = {0};
-
-	ResetGraph(seeds, 2, links, 0, &red, &blue);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 64.0f, 0.0f, 8.0f);
-	gen_source_stable[0] = false;
-	gen_source_waterlevel[0] = 0;
-	memset(&context, 0, sizeof(context));
-	memset(&graph, 0, sizeof(graph));
-	graph.seeds = seeds;
-	graph.seed_count = 2U;
-
-	CHECK(Rune_LateEligible(&context, &graph, 0, 1, &proposal));
-	CHECK(proposal.action == RL_RUN);
-	candidate.from = 0;
-	candidate.to = 1;
-	candidate.action = RL_RUN;
-	late_allow_any_run_once = true;
-	CHECK(Rune_LateTryBridge(&context, &candidate) == 1);
-	CHECK(gen_num_links == 1);
-	CHECK(links[0].from == 0 && links[0].to == 1);
-	CHECK(links[0].action == RL_RUN);
-}
-
-static void TestLatePathExhaustionKeepsAcceptedMerge(void)
-{
-	rune_seed_t seeds[130];
-	rune_link_t links[1];
-	edict_t red, blue;
-	sg_rune_late_completion_t completion;
-
-	ResetGraph(seeds, 130, links, 0, &red, &blue);
-	for (int i = 0; i < 130; i++)
-	{
-		VectorSet(seeds[i].origin, (float)i * 4.0f, 0.0f, 0.0f);
-		gen_source_stable[i] = true;
-		gen_source_waterlevel[i] = 0;
-	}
-	late_allow_any_run_once = true;
-	completion = Graph_ProveLatePath(0, 129);
-
-	CHECK(completion == SG_RUNE_LATE_COMPLETION_OPEN_EXHAUSTED);
-	CHECK(gen_num_links == 1);
-}
-
-static void TestLatePathFatalRollsBackAcceptedHook(void)
-{
-	rune_seed_t seeds[2];
-	rune_link_t links[1];
-	edict_t red, blue;
-	sg_rune_late_completion_t completion;
-
-	ResetGraph(seeds, 2, links, 0, &red, &blue);
-	VectorSet(seeds[0].origin, 0.0f, 0.0f, 0.0f);
-	VectorSet(seeds[1].origin, 100.0f, 0.0f, 0.0f);
-	gen_source_stable[0] = gen_source_stable[1] = true;
-	gen_source_waterlevel[0] = gen_source_waterlevel[1] = 0;
-	gen_env_drop = 2;
-	gen_env_hook = 3;
-	gen_swim_links = 4;
-	gen_waypoint_links = 5;
-	late_allow_hook = true;
-	/* Four entry allocations and one complete eight-allocation SCC build. */
-	allocations_before_failure = 12;
-	completion = Graph_ProveLatePath(0, 1);
-
-	CHECK(completion == SG_RUNE_LATE_COMPLETION_FATAL);
-	CHECK(gen_num_links == 0);
-	CHECK(gen_env_drop == 2 && gen_env_hook == 3);
-	CHECK(gen_swim_links == 4 && gen_waypoint_links == 5);
-	allocations_before_failure = -1;
-}
-
 static void TestTelemetryFlush(void)
 {
 	char buffering[1024];
@@ -1621,7 +713,6 @@ static void TestRejectedMechanismCandidateDoesNotPoisonGraph(void)
 	rune_seed_t seeds[2];
 	rune_link_t links[1];
 	edict_t red, blue;
-	byte keep[2] = { 1, 1 };
 
 	ResetGraph(seeds, 1, links, 0, &red, &blue);
 	CHECK(!Mechanism_Bind(NULL, SG_MECH_NO_KEY, SG_MECH_NO_KEY,
@@ -1633,12 +724,6 @@ static void TestRejectedMechanismCandidateDoesNotPoisonGraph(void)
 	CHECK(!gen_mechanism_failed);
 	CHECK(!Mechanism_BindDoor(NULL, NULL));
 	CHECK(!gen_mechanism_failed);
-
-	ResetGraph(seeds, 2, links, 1, &red, &blue);
-	SetLink(&links[0], 0, 1);
-	links[0].mechanism_plan = 0U;
-	CHECK(!Graph_ApplyObjectiveKeep(keep, "invalid binding"));
-	CHECK(gen_mechanism_failed);
 }
 
 static void TestDoorMemberEnumerationFailureIsFatal(void)
@@ -1755,47 +840,19 @@ static void TestRelayWallCandidatesBindAuthenticatedPlan(void)
 
 int main(void)
 {
-	(void)ProveHook;
 	(void)ProveContactRun;
-	(void)TestLateRunProver;
 	sg_host.dprint = TestDprint;
 	sg_host.flush = TestFlush;
 	sg_host.trace = TestTrace;
 	sg_host.level_alloc = TestAlloc;
 	sg_host.level_free = TestFree;
-	TestBidirectionalCore();
-	TestDisconnectedPartitionDiagnostics();
-	TestOneWayCrossRootReject();
-	TestHookReverseDropRepair();
-	TestObjectiveReverseHookRepair();
-	TestObjectiveReverseHookRepairFromRunBoundary();
-	TestObjectiveReverseRunRepair();
-	TestObjectiveReverseRejectsFailedHook();
-	TestObjectiveReverseAllocationIsFatal();
-	TestObjectiveSwimAllocationIsFatal();
-	TestObjectiveReverseReindexAllocationIsFatal();
-	TestObjectiveReverseHookProofExhaustsRankedPairs();
-	TestOneWayAndFixedPointFailures();
 	TestObjectiveMetricUnits();
 	TestNearestUnlinked();
 	TestArrivalContactSamplesPlayerBody();
 	TestSteeredProbeStopsAtWaypoint();
 	TestDirectShallowApproachEnvelope();
 	TestTeleporterApproachOwnsNonlinearStaging();
-	TestBoundaryCap();
-	TestZeroAndAllocationFailures();
-	TestLocalOnlyPublicationRetainsProvenUnion();
-	TestLocalOnlyPublicationRejectsClosedOrUnallocatableGraph();
 	TestTelemetryFlush();
-	TestLatePathProductionClosure();
-	TestObjectiveOverlapClosesSharedReachableRoom();
-	TestLatePathOpenKeepsExactMerge();
-	TestLatePathFallsThroughToExactHook();
-	TestLatePathSchedulingExhaustsEveryRegionPair();
-	TestLatePathLowGravityRiseRemainsEligible();
-	TestLatePathUnstableDrySourceCanRun();
-	TestLatePathExhaustionKeepsAcceptedMerge();
-	TestLatePathFatalRollsBackAcceptedHook();
 	TestRejectedMechanismCandidateDoesNotPoisonGraph();
 	TestDoorMemberEnumerationFailureIsFatal();
 	TestRelayWallCandidatesBindAuthenticatedPlan();

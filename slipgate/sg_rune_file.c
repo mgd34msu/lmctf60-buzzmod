@@ -147,8 +147,6 @@ static const char *RuneFile_DiagnosticText(sg_rune_codec_diagnostic_t diagnostic
 		return "invalid mechanism graph";
 	case RLCODEC_NONZERO_RESERVED:
 		return "nonzero reserved header field";
-	case RLCODEC_BAD_ROUTE_CONTRACT:
-		return "invalid route contract";
 	default:
 		return "unknown RUNE diagnostic";
 	}
@@ -252,7 +250,6 @@ static void RuneFile_ArtifactFromWire(const sg_rune_codec_header_t *source,
 {
 	memset(destination, 0, sizeof(*destination));
 	destination->magic = source->magic;
-	destination->route_contract = source->route_contract;
 	destination->payload_crc32 = source->payload_crc32;
 	destination->header_crc32 = source->header_crc32;
 	destination->action_contract_crc32 = source->action_contract_crc32;

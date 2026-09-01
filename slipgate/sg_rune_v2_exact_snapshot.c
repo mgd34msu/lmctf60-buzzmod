@@ -6,8 +6,6 @@
 
 #include "sg_rune_v2_exact_snapshot_private.h"
 
-#include "sg_rune_v2_artifact_publication_internal.h"
-
 #include <errno.h>
 #include <limits.h>
 #include <stdint.h>
@@ -42,12 +40,6 @@ static sg_rune_v2_snapshot_diagnostic_t KindLimit(
 	case SG_RUNE_V2_SNAPSHOT_ARTIFACT:
 		*limit_out = SG_RUNE_V2_MAX_ARTIFACT_BYTES;
 		return SG_RUNE_V2_SNAPSHOT_OK;
-	case SG_RUNE_V2_SNAPSHOT_MANIFEST:
-		*limit_out = SG_RUNE_V2_PUBLICATION_MANIFEST_MAX_BYTES;
-		return SG_RUNE_V2_SNAPSHOT_OK;
-	case SG_RUNE_V2_SNAPSHOT_PROOF:
-	case SG_RUNE_V2_SNAPSHOT_SIDECAR:
-		return SG_RUNE_V2_SNAPSHOT_UNSUPPORTED_KIND;
 	default:
 		return SG_RUNE_V2_SNAPSHOT_INVALID_ARGUMENT;
 	}

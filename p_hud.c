@@ -4,6 +4,7 @@
 #include "bat.h"
 #include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatLevelEnd from BeginIntermission
 #include "slipgate/sg_human_trace.h"
+#include "slipgate/sg_local.h"
 #include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionRecord from BeginIntermission
 #include "ui_boards.h"              // settled boards: UI_Boards_MatchEnd from BeginIntermission
 #include "ui_text.h"                // bounded appender, needed by ui_layout.h below
@@ -25,6 +26,15 @@ INTERMISSION
 ======================================================================
 */
 
+/* The lifecycle host has no connected clients.  Keep the real intermission
+ * boundary linkable there without bringing the scoreboard presentation tree
+ * into that focused executable. */
+#if defined(SG_RUNE_COMPACT_LEARNING_HOST_LIFECYCLE_TEST)
+void MoveClientToIntermission (edict_t *ent)
+{
+	(void)ent;
+}
+#else
 void MoveClientToIntermission (edict_t *ent)
 {
 	
@@ -66,6 +76,7 @@ void MoveClientToIntermission (edict_t *ent)
 	}
 
 }
+#endif
 
 void BeginIntermission (edict_t *targ)
 {
@@ -75,6 +86,9 @@ void BeginIntermission (edict_t *targ)
 	if (level.intermissiontime)
 		return;		// already activated
 	SG_HumanTraceMatchEnd();
+	/* The recorder has committed its terminal roots, while the exact compact
+	 * production owner and its level-bound model are still current. */
+	SG_CompactProductionPostMatchLearning();
 
 	MvpDisp = 1;
 

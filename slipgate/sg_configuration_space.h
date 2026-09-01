@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "sg_host_collision.h"
+#include "sg_rune_compact_spatial_index.h"
 
 #define SG_CONFIGURATION_INDEX_NONE UINT32_MAX
 /* Quake II pmove_state_t stores origin in signed 12.3 fixed-point shorts. */
@@ -30,6 +31,7 @@ typedef enum sg_configuration_error_code_e
 	SG_CONFIGURATION_ERROR_DEGENERATE_GEOMETRY,
 	SG_CONFIGURATION_ERROR_OVERFLOW,
 	SG_CONFIGURATION_ERROR_OUT_OF_MEMORY,
+	SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY,
 	SG_CONFIGURATION_ERROR_HOST_DISAGREEMENT
 } sg_configuration_error_code_t;
 
@@ -181,6 +183,15 @@ typedef struct sg_configuration_space_s
 	uint64_t lattice_solve_calls;
 	uint64_t lattice_constraints;
 	uint32_t lattice_maximum_binary_shift;
+	uint64_t brush_index_queries;
+	uint32_t brush_index_entry_count;
+	uint64_t brush_index_visited_nodes;
+	uint64_t brush_index_tested_entries;
+	uint32_t brush_index_minimum_tested_entries;
+	uint32_t brush_index_maximum_tested_entries;
+	uint64_t topology_split_count;
+	uint64_t topology_carried_portal_count;
+	sg_rune_compact_spatial_index_t *topology_index;
 } sg_configuration_space_t;
 
 void SG_ConfigurationDefaultLimits(sg_configuration_limits_t *limits_out);
@@ -194,6 +205,7 @@ const char *SG_ConfigurationErrorString(sg_configuration_error_code_t code);
 int SG_ConfigurationTestConstraintFacetWinding(void);
 int SG_ConfigurationTestCompleteFinalIncidence(void);
 int SG_ConfigurationTestFinalRepresentationBounds(void);
+int SG_ConfigurationTestTopologyMappingValidation(void);
 int SG_ConfigurationTestConstraintPortal(
 	const sg_host_collision_authority_t *authority);
 int SG_ConfigurationTestHostValidatedCandidate(

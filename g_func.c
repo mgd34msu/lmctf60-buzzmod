@@ -112,6 +112,10 @@ int SG_HostMechanismLiveCapture(sg_host_mechanism_law_t *law_out)
 	/* Rotating doors use SP_func_door_rotating's stock speed and are not
 	 * subject to func_door's deathmatch multiplier. */
 	law_out->door_rotating_default_speed = SG_MOVER_DOOR_DEFAULT_SPEED;
+	law_out->button_default_speed = 40.0f;
+	law_out->door_default_lip = 8.0f;
+	law_out->button_default_lip = 4.0f;
+	law_out->platform_default_lip = 8.0f;
 	law_out->platform_default_speed = SG_MOVER_PLAT_DEFAULT_SPEED;
 	law_out->platform_default_accel = SG_MOVER_PLAT_DEFAULT_ACCEL;
 	law_out->platform_default_decel = SG_MOVER_PLAT_DEFAULT_DECEL;

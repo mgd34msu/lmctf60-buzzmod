@@ -5,7 +5,27 @@
 
 #include "slipgate/sg_belief_runtime.h"
 
+/* These raw symbols are deliberately absent from the public header.  The
+ * fixture exercises the compact-owner path, while RawObserve proves a forged
+ * caller-filled payload has no admission authority. */
+extern sg_belief_runtime_observe_result_t
+	SG_BeliefRuntimeObserveFromCompactOwner(
+		const sg_belief_runtime_observation_t *observation);
+extern sg_belief_runtime_observe_result_t SG_BeliefRuntimeObserve(
+	const sg_belief_runtime_observation_t *observation);
+static sg_belief_runtime_observe_result_t (*const RawObserve)(
+	const sg_belief_runtime_observation_t *observation) =
+	SG_BeliefRuntimeObserve;
+
+#define SG_BeliefRuntimeObserve SG_BeliefRuntimeObserveFromCompactOwner
+
 static int failures;
+static int provider_current = 1;
+static int propagation_enabled;
+static int propagation_overflow;
+static int propagation_overflow_cell;
+static int propagation_wrong_direction;
+static int propagation_nonadjacent;
 
 #define CHECK(expression) do { \
 	if (!(expression)) { \
@@ -15,1881 +35,689 @@ static int failures;
 	} \
 } while (0)
 
-typedef struct runtime_fixture_s
-{
-	sg_rune_plane_t planes[6];
-	sg_rune_phase_basis_t model_phases[3];
-	sg_rune_capability_kernel_t kernels[3];
-	sg_rune_cell_t cells[2];
-	sg_rune_model_t model;
-	sg_phase_coordinate_t phases[3];
-	sg_rune_runtime_snapshot_t snapshot;
-} runtime_fixture_t;
+static sg_rune_compact_model_t model;
+static sg_rune_compact_cell_t cells[3];
+static sg_rune_compact_portal_t portals[1];
+static sg_rune_compact_incidence_t incidences[2];
 
-static sg_belief_runtime_provider_t replacement_provider;
-static sg_belief_runtime_provider_t restored_provider;
-
-static sg_rune_stable_id_t StableId(uint64_t low)
+static void FixtureInit(void)
 {
-	return (sg_rune_stable_id_t){ 99U, 0U, low };
+	memset(&model, 0, sizeof(model));
+	memset(cells, 0, sizeof(cells));
+	memset(portals, 0, sizeof(portals));
+	memset(incidences, 0, sizeof(incidences));
+	cells[0].valid_stances = SG_RUNE_STANCE_VALID_STANDING;
+	cells[1].valid_stances = SG_RUNE_STANCE_VALID_STANDING;
+	cells[2].valid_stances = SG_RUNE_STANCE_VALID_STANDING;
+	model.version = SG_RUNE_COMPACT_MODEL_VERSION;
+	model.schema_tag = SG_RUNE_COMPACT_MODEL_SCHEMA_TAG;
+	model.cells = cells;
+	model.cell_count = 3U;
+	incidences[0].cell.value = 0U;
+	incidences[1].cell.value = 1U;
+	portals[0].negative_incidence.value = 0U;
+	portals[0].positive_incidence.value = 1U;
+	portals[0].direction = SG_RUNE_PORTAL_CONTINUITY_BOTH;
+	portals[0].valid_stances = SG_RUNE_STANCE_VALID_STANDING;
+	model.portals = portals;
+	model.portal_count = 1U;
+	model.incidences = incidences;
+	model.incidence_count = 2U;
+	provider_current = 1;
+	propagation_enabled = 0;
+	propagation_overflow = 0;
+	propagation_overflow_cell = -1;
+	propagation_wrong_direction = 0;
+	propagation_nonadjacent = 0;
 }
 
-static sg_rune_interval_t Interval(float min_value, float max_value)
-{
-	return (sg_rune_interval_t){ min_value, max_value };
-}
-
-static void SetKernel(sg_rune_capability_kernel_t *kernel,
-	const sg_rune_cell_t *from_cell, const sg_rune_phase_basis_t *from,
-	const sg_rune_cell_t *to_cell, const sg_rune_phase_basis_t *to)
-{
-	memset(kernel, 0, sizeof(*kernel));
-	kernel->source_cell.value = from_cell->id.value;
-	kernel->destination_cell.value = to_cell->id.value;
-	kernel->source_phase.value = from->id.value;
-	kernel->destination_phase.value = to->id.value;
-	kernel->family = SG_RUNE_CAPABILITY_CONTINUOUS_SUPPORT;
-	kernel->parameters.displacement.x = Interval(0.0f, 300.0f);
-	kernel->parameters.displacement.y = Interval(0.0f, 0.0f);
-	kernel->parameters.displacement.z = Interval(0.0f, 0.0f);
-	kernel->parameters.duration_ms = Interval(50.0f, 100.0f);
-	kernel->parameters.speed = Interval(0.0f, 100.0f);
-	kernel->parameters.acceleration = Interval(0.0f, 1000.0f);
-	kernel->parameters.vertical_acceleration = Interval(0.0f, 1000.0f);
-	kernel->parameters.gravity = 800.0f;
-	kernel->flags = SG_RUNE_KERNEL_DIRECTIONAL | SG_RUNE_KERNEL_PHASE_AWARE |
-		SG_RUNE_KERNEL_PROVEN;
-}
-
-static void FixtureInit(runtime_fixture_t *fixture)
-{
-	size_t index;
-
-	memset(fixture, 0, sizeof(*fixture));
-	fixture->model.version = SG_RUNE_MODEL_VERSION;
-	fixture->model.schema_tag = SG_RUNE_MODEL_SCHEMA_TAG;
-	fixture->model.flags = SG_RUNE_MODEL_IMMUTABLE |
-		SG_RUNE_MODEL_EXACT_BOUND | SG_RUNE_MODEL_NO_RUNTIME_ACTORS;
-	fixture->model.completeness.state = SG_RUNE_COMPLETENESS_COMPLETE;
-	fixture->model.cell_count = 2U;
-	fixture->model.phase_count = 3U;
-	fixture->model.plane_count = 6U;
-	fixture->model.planes = fixture->planes;
-	fixture->model.cells = fixture->cells;
-	fixture->model.phases = fixture->model_phases;
-	fixture->model.kernel_count = 3U;
-	fixture->model.kernels = fixture->kernels;
-	fixture->model.identity.physics.gravity = 800.0f;
-	fixture->model.identity.physics.ground_acceleration = 1000.0f;
-	fixture->model.identity.physics.air_acceleration = 1000.0f;
-	fixture->model.identity.physics.water_acceleration = 1000.0f;
-	fixture->model.identity.physics.hook_acceleration = 1000.0f;
-	fixture->model.identity.physics.external_acceleration = 1000.0f;
-	fixture->model.identity.physics.max_velocity = 20000.0f;
-	fixture->cells[0].id.value = StableId(10U);
-	fixture->cells[1].id.value = StableId(11U);
-	for (index = 0U; index < 6U; index++)
-	{
-		fixture->planes[index].normal.value[index / 2U] =
-			(index & 1U) == 0U ? 1.0f : -1.0f;
-		fixture->planes[index].distance = 1000.0f;
-	}
-	for (index = 0U; index < 2U; index++)
-	{
-		fixture->cells[index].bounds.mins =
-			(sg_rune_vec3_t){ { -1000.0f, -1000.0f, -1000.0f } };
-		fixture->cells[index].bounds.maxs =
-			(sg_rune_vec3_t){ { 1000.0f, 1000.0f, 1000.0f } };
-		fixture->cells[index].boundary_planes =
-			(sg_rune_plane_span_t){ 0U, 6U };
-	}
-	for (index = 0U; index < 3U; index++)
-	{
-		fixture->model_phases[index].id.value = StableId(index + 1U);
-		fixture->model_phases[index].velocity.x = Interval(-20000.0f, 20000.0f);
-		fixture->model_phases[index].velocity.y = Interval(-20000.0f, 20000.0f);
-		fixture->model_phases[index].velocity.z = Interval(-20000.0f, 20000.0f);
-	}
-	SetKernel(&fixture->kernels[0], &fixture->cells[0],
-		&fixture->model_phases[0], &fixture->cells[0],
-		&fixture->model_phases[1]);
-	SetKernel(&fixture->kernels[1], &fixture->cells[0],
-		&fixture->model_phases[0], &fixture->cells[1],
-		&fixture->model_phases[2]);
-	SetKernel(&fixture->kernels[2], &fixture->cells[0],
-		&fixture->model_phases[1], &fixture->cells[1],
-		&fixture->model_phases[2]);
-	fixture->phases[0] = (sg_phase_coordinate_t){ 0U, 0U };
-	fixture->phases[1] = (sg_phase_coordinate_t){ 1U, 0U };
-	fixture->phases[2] = (sg_phase_coordinate_t){ 2U, 1U };
-	fixture->snapshot.identity = 99U;
-	fixture->snapshot.topology_revision = 7U;
-	fixture->snapshot.cell_count = 2U;
-	fixture->snapshot.phase_count = 3U;
-	fixture->snapshot.region_count = 1U;
-	fixture->snapshot.model = &fixture->model;
-	fixture->snapshot.phases = fixture->phases;
-	CHECK(SG_RuneRuntimeSnapshotValid(&fixture->snapshot));
-}
-
-static int Locate(void *context, const sg_rune_runtime_snapshot_t *snapshot,
-	const float position[3], sg_phase_coordinate_t *phase_out)
+static int Locate(void *context, const sg_rune_compact_model_t *input,
+	const float position[3], sg_belief_runtime_cell_state_t *cell_out)
 {
 	(void)context;
-	if (!SG_RuneRuntimeSnapshotValid(snapshot) || !position || !phase_out)
+	if (input != &model || !position || !cell_out || !isfinite(position[0]))
 		return 0;
-	*phase_out = position[0] >= 500.0f ?
-		(sg_phase_coordinate_t){ 2U, 1U } :
-		(sg_phase_coordinate_t){ 0U, 0U };
+	memset(cell_out, 0, sizeof(*cell_out));
+	cell_out->location.cell.value = position[0] < 100.0f ? 0U :
+		(position[0] < 250.0f ? 1U : 2U);
+	cell_out->location.valid_stances = SG_RUNE_STANCE_VALID_STANDING;
+	cell_out->known_components = SG_BELIEF_RUNTIME_CELL_MOTION;
+	cell_out->motion = SG_RUNE_MOTION_SUPPORTED;
 	return 1;
 }
 
-static int LocateReplacingProvider(void *context,
-	const sg_rune_runtime_snapshot_t *snapshot, const float position[3],
-	sg_phase_coordinate_t *phase_out)
+static int Current(void *context, const sg_rune_compact_model_t *input,
+	const sg_rune_compact_identity_t *identity, uint64_t rune_identity,
+	uint64_t topology_revision, uint64_t generation)
 {
-	int located = Locate(context, snapshot, position, phase_out);
-
-	(void)SG_BeliefRuntimeProviderSet(&replacement_provider);
-	return located;
+	(void)context;
+	return provider_current && input == &model && identity == &model.identity &&
+		rune_identity == 77U && topology_revision == 9U && generation == 1U;
 }
 
-static int LocateReplacingProviderTwice(void *context,
-	const sg_rune_runtime_snapshot_t *snapshot, const float position[3],
-	sg_phase_coordinate_t *phase_out)
+static void TransitionSet(sg_belief_runtime_propagation_t *transition,
+	const sg_belief_runtime_particle_t *particle, uint32_t cell, float x,
+	uint32_t portal, float likelihood)
 {
-	int located = Locate(context, snapshot, position, phase_out);
-
-	(void)SG_BeliefRuntimeProviderSet(&replacement_provider);
-	(void)SG_BeliefRuntimeProviderSet(&restored_provider);
-	return located;
+	memset(transition, 0, sizeof(*transition));
+	transition->cell.location.cell.value = cell;
+	transition->cell.location.valid_stances = SG_RUNE_STANCE_VALID_STANDING;
+	transition->portal.value = portal;
+	memcpy(transition->position, particle->position,
+		sizeof(transition->position));
+	memcpy(transition->velocity, particle->velocity,
+		sizeof(transition->velocity));
+	memcpy(transition->acceleration, particle->acceleration,
+		sizeof(transition->acceleration));
+	memcpy(transition->orientation, particle->orientation,
+		sizeof(transition->orientation));
+	transition->position[0] = x;
+	transition->likelihood = likelihood;
 }
 
-static sg_belief_runtime_provider_t Provider(runtime_fixture_t *fixture,
-	uint64_t localization_generation, float diffusion_fraction)
+/* The fixture's sole published portal is the only cross-cell movement this
+ * callback may emit.  This makes the runtime test prove the sparse boundary
+ * rather than merely moving a particle by coordinate convention. */
+static int Propagate(void *context, const sg_rune_compact_model_t *input,
+	const sg_belief_runtime_particle_t *particle, uint64_t from_ms,
+	uint64_t to_ms, sg_belief_runtime_propagation_t *transitions,
+	size_t capacity, size_t *count_out)
+{
+	const sg_rune_compact_portal_t *portal;
+
+	(void)context;
+	if (input != &model || !particle || !transitions || !count_out ||
+		from_ms >= to_ms || capacity == 0U || input->portals != portals ||
+		input->portal_count != 1U || input->incidences != incidences ||
+		input->incidence_count != 2U)
+		return 0;
+	if (propagation_overflow != 0 && (propagation_overflow_cell < 0 ||
+		particle->cell.location.cell.value == (uint32_t)propagation_overflow_cell))
+	{
+		*count_out = SG_BELIEF_RUNTIME_MAX_PARTICLES + 1U;
+		return 1;
+	}
+	if (propagation_wrong_direction != 0 &&
+		particle->cell.location.cell.value == 1U)
+	{
+		TransitionSet(&transitions[0], particle, 0U, 10.0f, 0U, 1.0f);
+		*count_out = 1U;
+		return 1;
+	}
+	if (propagation_nonadjacent != 0 &&
+		particle->cell.location.cell.value == 0U)
+	{
+		TransitionSet(&transitions[0], particle, 2U, 300.0f, 0U, 1.0f);
+		*count_out = 1U;
+		return 1;
+	}
+	portal = &input->portals[0];
+	if (propagation_enabled != 0 &&
+		particle->cell.location.cell.value ==
+			input->incidences[portal->negative_incidence.value].cell.value &&
+		portal->direction == SG_RUNE_PORTAL_CONTINUITY_BOTH &&
+		portal->valid_stances == SG_RUNE_STANCE_VALID_STANDING)
+	{
+		if (capacity < 2U || input->incidences[portal->positive_incidence.value]
+			.cell.value != 1U)
+			return 0;
+		TransitionSet(&transitions[0], particle, 0U, 10.0f,
+			SG_RUNE_COMPACT_INDEX_NONE, 1.0f);
+		TransitionSet(&transitions[1], particle, 1U, 200.0f, 0U, 1.0f);
+		*count_out = 2U;
+		return 1;
+	}
+	TransitionSet(&transitions[0], particle,
+		particle->cell.location.cell.value, particle->position[0],
+		SG_RUNE_COMPACT_INDEX_NONE, 1.0f);
+	*count_out = 1U;
+	return 1;
+}
+
+static sg_belief_runtime_provider_t Provider(void)
 {
 	sg_belief_runtime_provider_t provider;
 
 	memset(&provider, 0, sizeof(provider));
-	provider.snapshot = &fixture->snapshot;
-	provider.localization_generation = localization_generation;
+	provider.model = &model;
+	provider.identity = &model.identity;
+	provider.rune_identity = 77U;
+	provider.topology_revision = 9U;
+	provider.generation = 1U;
 	provider.policy.confidence_decay_ms = 1000U;
-	provider.policy.diffusion_fraction = diffusion_fraction;
-	provider.policy.spread_growth_per_ms = 0.01f;
+	provider.policy.spread_growth_per_ms = 0.25f;
 	provider.locate = Locate;
+	provider.propagate = Propagate;
+	provider.current = Current;
 	return provider;
 }
 
-static sg_belief_life_identity_t Life(uint32_t client_id,
-	uint64_t spawn_generation)
+static sg_belief_runtime_life_t Life(uint32_t client, uint64_t generation)
 {
-	sg_belief_life_identity_t life;
+	sg_belief_runtime_life_t life;
 
 	memset(&life, 0, sizeof(life));
-	life.client_id = client_id;
-	life.spawn_generation = spawn_generation;
+	life.client_id = client;
+	life.spawn_generation = generation;
 	return life;
 }
 
-static sg_perception_hypothesis_t Hypothesis(uint32_t phase, uint32_t cell,
-	sg_perception_location_basis_t basis, float spread)
+static sg_belief_runtime_observation_t Observation(
+	const sg_belief_runtime_hypothesis_t *hypotheses, size_t count,
+	uint64_t sequence)
 {
-	sg_perception_hypothesis_t hypothesis;
-
-	memset(&hypothesis, 0, sizeof(hypothesis));
-	hypothesis.phase = (sg_phase_coordinate_t){ phase, cell };
-	hypothesis.location_basis = basis;
-	hypothesis.movement_state = SG_BELIEF_MOTION_GROUND;
-	hypothesis.position[0] = phase == 2U ? 500.0f : 0.0f;
-	hypothesis.velocity[0] = 1.0f;
-	hypothesis.spread_radius = spread;
-	hypothesis.likelihood = 1.0f;
-	return hypothesis;
-}
-
-static sg_perception_observation_t Observation(sg_perception_source_t source,
-	uint64_t sequence, uint64_t at_ms, uint64_t target_generation)
-{
-	sg_perception_observation_t observation;
+	sg_belief_runtime_observation_t observation;
 
 	memset(&observation, 0, sizeof(observation));
-	observation.authentication.authenticated = 1U;
-	observation.authentication.authority = source == SG_PERCEPTION_SOURCE_TEAMMATE ?
-		SG_PERCEPTION_AUTHORITY_HOST_TEAMMATE_REPORT :
-		SG_PERCEPTION_AUTHORITY_HOST_SENSOR;
-	observation.authentication.issuer_team = 1U;
-	observation.authentication.audience_team = 1U;
-	observation.authentication.issuer_life = Life(4U, 40U);
-	observation.authentication.event_id = sequence + 1000U;
-	observation.authentication.evidence_sequence = sequence;
-	observation.authentication.observed_at_ms = at_ms;
-	observation.authentication.authenticated_at_ms = at_ms;
-	observation.authentication.valid_until_ms = at_ms + 100U;
-	observation.authentication.rune_identity = 99U;
-	observation.authentication.topology_revision = 7U;
-	observation.source = source;
-	observation.evidence_kind = SG_BELIEF_EVIDENCE_POSITIVE;
+	observation.authenticated = 1U;
+	observation.authority = SG_BELIEF_RUNTIME_AUTHORITY_HOST_SENSOR;
+	observation.audience_team = 1U;
 	observation.target_team = 2U;
-	observation.target_life = Life(3U, target_generation);
+	observation.source = SG_BELIEF_RUNTIME_SOURCE_SOUND;
+	observation.evidence_kind = SG_BELIEF_RUNTIME_EVIDENCE_POSITIVE;
+	observation.issuer_life = Life(1U, 11U);
+	observation.target_life = Life(2U, 22U);
+	observation.event_id = sequence;
+	observation.evidence_sequence = sequence;
+	observation.observed_at_ms = 100U + sequence;
+	observation.authenticated_at_ms = 100U + sequence;
+	observation.valid_until_ms = 1200U + sequence;
+	observation.rune_identity = 77U;
+	observation.topology_revision = 9U;
 	observation.confidence = 0.8f;
+	observation.hypotheses = hypotheses;
+	observation.hypothesis_count = count;
 	return observation;
 }
 
-static void SightObservation(sg_perception_observation_t *observation,
-	uint64_t sequence, uint64_t at_ms, uint64_t target_generation)
+static sg_belief_runtime_hypothesis_t Hypothesis(float x, float spread,
+	float likelihood)
 {
-	*observation = Observation(SG_PERCEPTION_SOURCE_SIGHT, sequence, at_ms,
-		target_generation);
-	observation->data.sight.in_pvs = 1U;
-	observation->data.sight.line_of_sight_proved = 1U;
-	observation->data.sight.hypothesis = Hypothesis(0U, 0U,
-		SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f);
+	sg_belief_runtime_hypothesis_t hypothesis;
+
+	memset(&hypothesis, 0, sizeof(hypothesis));
+	hypothesis.position[0] = x;
+	hypothesis.velocity[0] = 10.0f;
+	hypothesis.spread_radius = spread;
+	hypothesis.likelihood = likelihood;
+	return hypothesis;
 }
 
-static void SoundObservation(sg_perception_observation_t *observation,
-	uint64_t sequence, uint64_t at_ms, uint64_t target_generation,
-	const sg_perception_hypothesis_t *hypothesis)
+static void MakeNegative(sg_belief_runtime_observation_t *observation,
+	const sg_belief_runtime_coverage_t *coverage, size_t coverage_count,
+	uint64_t sequence)
 {
-	*observation = Observation(SG_PERCEPTION_SOURCE_SOUND, sequence, at_ms,
-		target_generation);
-	observation->data.sound.in_phs = 1U;
-	observation->data.sound.positional = 1U;
-	observation->data.sound.kind = SG_PERCEPTION_SOUND_WEAPON;
-	observation->data.sound.sound_id = 9U;
-	observation->data.sound.attenuation = 1.0f;
-	observation->data.sound.audible_radius = 800.0f;
-	observation->data.sound.hypotheses = hypothesis;
-	observation->data.sound.hypothesis_count = 1U;
-}
-
-static void TestRuntimeHorizonScopeLifecycle(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	const sg_belief_runtime_view_t *view;
-	size_t allocations;
-	uint64_t frame;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.0f);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	CHECK(SG_BeliefTestHorizonScopeLiveCount() == 0U);
-	allocations = SG_BeliefTestHorizonScopeAllocationCount();
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefTestHorizonScopeLiveCount() == 1U);
-	CHECK(SG_BeliefTestHorizonScopeAllocationCount() == allocations + 1U);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && view->updated_at_ms == 100U);
-	SG_BeliefTestHorizonScopeFailNext(
-		SG_BELIEF_HORIZON_ALLOCATION_FAILED);
-	CHECK(SG_BeliefRuntimeFrame(2U, 200U) ==
-		SG_BELIEF_RUNTIME_FRAME_CAPACITY);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && view->updated_at_ms == 100U);
-	CHECK(SG_BeliefRuntimeFrame(2U, 200U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && view->updated_at_ms == 200U);
-	SG_BeliefTestHorizonScopeFailNext(SG_BELIEF_HORIZON_OVERFLOW);
-	CHECK(SG_BeliefRuntimeFrame(3U, 300U) ==
-		SG_BELIEF_RUNTIME_FRAME_OVERFLOW);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && view->updated_at_ms == 200U);
-	CHECK(SG_BeliefRuntimeFrame(3U, 300U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	for (frame = 4U; frame <= 1024U; frame++)
-		CHECK(SG_BeliefRuntimeFrame(frame, frame * 100U) ==
-			SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	CHECK(SG_BeliefTestHorizonScopeLiveCount() == 1U);
-	CHECK(SG_BeliefTestHorizonScopeAllocationCount() == allocations + 1U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-	CHECK(SG_BeliefTestHorizonScopeLiveCount() == 0U);
-}
-
-static void TestRuntimeReplacementIsAtomic(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t old_life;
-	sg_belief_life_identity_t new_life;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	old_life = Life(3U, 30U);
-	new_life = Life(3U, 31U);
-	CHECK(SG_BeliefRuntimeView(1U, &old_life) != NULL);
-	SightObservation(&observation, 2U, 150U, 31U);
-	observation.authentication.authenticated_at_ms = 200U;
-	observation.authentication.valid_until_ms = 300U;
-	SG_BeliefTestHorizonScopeFailNext(
-		SG_BELIEF_HORIZON_ALLOCATION_FAILED);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_CAPACITY);
-	view = SG_BeliefRuntimeView(1U, &old_life);
-	CHECK(view && view->updated_at_ms == 100U);
-	CHECK(SG_BeliefRuntimeView(1U, &new_life) == NULL);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeView(1U, &old_life) == NULL);
-	CHECK(SG_BeliefRuntimeView(1U, &new_life) != NULL);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeLifeFencePreventsResurrection(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t life31;
-	sg_belief_life_identity_t life32;
-	sg_belief_life_identity_t life33;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	life31 = Life(3U, 31U);
-	life32 = Life(3U, 32U);
-	life33 = Life(3U, 33U);
-	SightObservation(&observation, 1U, 200U, 31U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	/* Each audience owns its observation ordering.  This lower observed time
-	 * is the first Team 2 track for the same authenticated life, not stale
-	 * Team 1 evidence. */
-	SightObservation(&observation, 2U, 100U, 31U);
-	observation.authentication.issuer_team = 2U;
-	observation.authentication.audience_team = 2U;
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	observation.target_team = 1U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeViewForClient(2U, 3U);
-	CHECK(view && SG_BeliefLifeIdentityEqual(&view->target_life, &life31));
-	SightObservation(&observation, 2U, 150U, 30U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && SG_BeliefLifeIdentityEqual(&view->target_life, &life31));
-	SightObservation(&observation, 3U, 250U, 32U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	SG_BeliefTestHorizonScopeFailNext(
-		SG_BELIEF_HORIZON_ALLOCATION_FAILED);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_CAPACITY);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && SG_BeliefLifeIdentityEqual(&view->target_life, &life31));
-	view = SG_BeliefRuntimeViewForClient(2U, 3U);
-	CHECK(view && SG_BeliefLifeIdentityEqual(&view->target_life, &life31));
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && SG_BeliefLifeIdentityEqual(&view->target_life, &life32));
-	CHECK(SG_BeliefRuntimeViewForClient(2U, 3U) == NULL);
-	CHECK(SG_BeliefRuntimeFrame(1U, 350U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	CHECK(SG_BeliefRuntimeViewForClient(2U, 3U) == NULL);
-	SG_BeliefRuntimeRetireLife(&life32);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	CHECK(SG_BeliefRuntimeFrame(2U, 600U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	CHECK(SG_BeliefRuntimeFrame(2U, 500U) ==
-		SG_BELIEF_RUNTIME_FRAME_REJECTED);
-	SightObservation(&observation, 4U, 700U, 32U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	SightObservation(&observation, 5U, 800U, 33U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	SG_BeliefRuntimeRetireLife(&life33);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	CHECK(SG_BeliefRuntimeViewForClient(2U, 3U) == NULL);
-	SightObservation(&observation, 6U, 900U, 33U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	SightObservation(&observation, 7U, 1000U, 34U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeIssuerLifeFences(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t issuer40;
-	sg_belief_life_identity_t issuer41;
-	sg_belief_life_identity_t target30;
-	const sg_belief_runtime_view_t *view;
-
-	issuer40 = Life(4U, 40U);
-	issuer41 = Life(4U, 41U);
-	target30 = Life(3U, 30U);
-	/* Target and issuer can name the same exact life once.  A different
-	 * generation in that same slot is rejected before it can build a track. */
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 40U);
-	observation.target_life = issuer40;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &issuer40);
-	CHECK(view && view->updated_at_ms == 100U);
-	SightObservation(&observation, 2U, 200U, 40U);
-	observation.target_life = issuer40;
-	observation.authentication.issuer_life = issuer41;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	view = SG_BeliefRuntimeView(1U, &issuer40);
-	CHECK(view && view->updated_at_ms == 100U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-
-	/* A life known only as an issuer still establishes an exact-life retirement
-	 * boundary, so a later target claim cannot revive that life. */
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeView(1U, &target30) != NULL);
-	SG_BeliefRuntimeRetireLife(&issuer40);
-	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
-	SightObservation(&observation, 2U, 200U, 40U);
-	observation.target_life = issuer40;
-	observation.authentication.issuer_life = Life(5U, 50U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	CHECK(SG_BeliefRuntimeView(1U, &issuer40) == NULL);
-	SightObservation(&observation, 3U, 250U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-
-	/* A newer issuer life is not published until its observation succeeds.
-	 * Once published, it invalidates an older target track for that issuer's
-	 * client, and both stale and retired issuers are rejected thereafter. */
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 40U);
-	observation.target_life = issuer40;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeView(1U, &issuer40) != NULL);
-	SightObservation(&observation, 2U, 110U, 30U);
-	observation.authentication.issuer_life = issuer41;
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	SG_BeliefTestHorizonScopeFailNext(
-		SG_BELIEF_HORIZON_ALLOCATION_FAILED);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_CAPACITY);
-	CHECK(SG_BeliefRuntimeView(1U, &issuer40) != NULL);
-	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeView(1U, &issuer40) == NULL);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 300U);
-	SightObservation(&observation, 3U, 350U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 300U);
-	SG_BeliefRuntimeRetireLife(&issuer41);
-	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
-	SightObservation(&observation, 4U, 400U, 30U);
-	observation.authentication.issuer_life = issuer41;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeIssuerGenerationInvalidatesTracks(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 100U);
-
-	/* A rejected issuer generation cannot publish its fence or disturb the
-	 * established target belief. */
-	SightObservation(&observation, 2U, 200U, 31U);
-	observation.target_life = Life(5U, 31U);
-	observation.authentication.issuer_life = Life(4U, 41U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	SG_BeliefTestHorizonScopeFailNext(
-		SG_BELIEF_HORIZON_ALLOCATION_FAILED);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_CAPACITY);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 100U);
-	SightObservation(&observation, 3U, 160U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeFrame(1U, 180U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 180U);
-
-	/* Publishing issuer 4/41 retires every track that recorded issuer 4/40.
-	 * The later frame may advance the new track, never the stale one. */
-	SightObservation(&observation, 4U, 220U, 31U);
-	observation.target_life = Life(5U, 31U);
-	observation.authentication.issuer_life = Life(4U, 41U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
-	CHECK(SG_BeliefRuntimeFrame(2U, 300U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
-	view = SG_BeliefRuntimeViewForClient(1U, 5U);
-	CHECK(view && view->updated_at_ms == 300U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeIssuerGenerationReplacesSameTargetTrack(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 100U);
-
-	SightObservation(&observation, 2U, 200U, 30U);
-	observation.authentication.issuer_life = Life(4U, 41U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	SG_BeliefTestHorizonScopeFailNext(
-		SG_BELIEF_HORIZON_ALLOCATION_FAILED);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_CAPACITY);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 100U);
-
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 300U);
-	CHECK(SG_BeliefRuntimeFrame(1U, 350U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 350U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeIssuerRolloverRejectsTimestampRollback(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 500U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	SightObservation(&observation, 2U, 200U, 30U);
-	observation.authentication.issuer_life = Life(4U, 41U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 500U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeIssuerRolloverRejectsEvidenceSequenceRollback(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 5U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	SightObservation(&observation, 4U, 200U, 30U);
-	observation.authentication.issuer_life = Life(4U, 41U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 100U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeFrameWatermarkRejectsIssuerRollover(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeFrame(1U, 500U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 500U);
-	SightObservation(&observation, 2U, 200U, 30U);
-	observation.authentication.issuer_life = Life(4U, 41U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 500U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeFrameWatermarkRejectsDelayedEvidence(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeFrame(1U, 500U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 500U);
-	SightObservation(&observation, 2U, 200U, 30U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 500U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeFrameWatermarkRejectsTargetLifeRollover(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-	sg_belief_life_identity_t target31;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	target31 = Life(3U, 31U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeFrame(1U, 500U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && view->updated_at_ms == 500U);
-	SightObservation(&observation, 2U, 200U, 31U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && SG_BeliefLifeIdentityEqual(&view->target_life, &target30));
-	CHECK(view && view->updated_at_ms == 500U);
-	SightObservation(&observation, 3U, 600U, 31U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
-	view = SG_BeliefRuntimeView(1U, &target31);
-	CHECK(view && view->updated_at_ms == 600U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeFrameTimestampRegressionResetsTracks(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-	sg_belief_life_identity_t retired50;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	retired50 = Life(5U, 50U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 500U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeView(1U, &target30) != NULL);
-	SG_BeliefRuntimeRetireLife(&retired50);
-	CHECK(SG_BeliefRuntimeFrame(1U, 400U) ==
-		SG_BELIEF_RUNTIME_FRAME_REJECTED);
-	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	SightObservation(&observation, 2U, 600U, 50U);
-	observation.target_life = retired50;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeAudienceClientWatermarkSurvivesRetirement(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-	sg_belief_life_identity_t target31;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	target31 = Life(3U, 31U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeFrame(1U, 500U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	SG_BeliefRuntimeRetireLife(&target30);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	SightObservation(&observation, 2U, 200U, 31U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	CHECK(SG_BeliefRuntimeView(1U, &target31) == NULL);
-	SightObservation(&observation, 3U, 600U, 31U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &target31);
-	CHECK(view && view->updated_at_ms == 600U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeAudienceClientWatermarkSurvivesSupersession(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target31;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target31 = Life(3U, 31U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	observation.authentication.issuer_team = 2U;
-	observation.authentication.audience_team = 2U;
-	observation.target_team = 1U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeFrame(1U, 500U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	view = SG_BeliefRuntimeViewForClient(2U, 3U);
-	CHECK(view && view->updated_at_ms == 500U);
-	SightObservation(&observation, 2U, 600U, 31U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeViewForClient(2U, 3U) == NULL);
-	SightObservation(&observation, 3U, 200U, 31U);
-	observation.authentication.issuer_team = 2U;
-	observation.authentication.audience_team = 2U;
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	observation.target_team = 1U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	SightObservation(&observation, 4U, 600U, 31U);
-	observation.authentication.issuer_team = 2U;
-	observation.authentication.audience_team = 2U;
-	observation.target_team = 1U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeView(2U, &target31);
-	CHECK(view && view->updated_at_ms == 600U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeAudienceClientWatermarkAdvancesEmptyFrame(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target31;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target31 = Life(3U, 31U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	observation.evidence_kind = SG_BELIEF_EVIDENCE_NEGATIVE;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	CHECK(SG_BeliefRuntimeFrame(1U, 500U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	SightObservation(&observation, 2U, 200U, 31U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	CHECK(SG_BeliefRuntimeView(1U, &target31) == NULL);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeAudienceClientWatermarkFailureDoesNotAdvance(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-	sg_belief_life_identity_t target31;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	target31 = Life(3U, 31U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeFrame(1U, 500U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	SG_BeliefRuntimeRetireLife(&target30);
-	SightObservation(&observation, 2U, 550U, 31U);
-	observation.authentication.authenticated_at_ms = 600U;
-	observation.authentication.valid_until_ms = 700U;
-	SG_BeliefTestHorizonScopeFailNext(
-		SG_BELIEF_HORIZON_ALLOCATION_FAILED);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_CAPACITY);
-	SightObservation(&observation, 3U, 550U, 31U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &target31);
-	CHECK(view && view->updated_at_ms == 550U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeAudienceClientWatermarkSurvivesProviderReplacement(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target32;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target32 = Life(3U, 32U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeFrame(1U, 500U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 2U, 200U, 31U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	provider.policy.diffusion_fraction = 0.25f;
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 3U, 200U, 32U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	SightObservation(&observation, 4U, 600U, 32U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &target32);
-	CHECK(view && view->updated_at_ms == 600U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeAudienceClientWatermarkResetStartsUniverse(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeFrame(1U, 500U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	SG_BeliefRuntimeReset();
-	SightObservation(&observation, 2U, 200U, 30U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 300U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeAudienceTargetSequenceSurvivesIssuerRetirement(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t issuer40;
-	sg_belief_life_identity_t target30;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	issuer40 = Life(4U, 40U);
-	target30 = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 5U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	SG_BeliefRuntimeRetireLife(&issuer40);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	SightObservation(&observation, 4U, 200U, 30U);
-	observation.authentication.issuer_life = Life(4U, 41U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeAudienceTargetSequenceSurvivesProviderReplacement(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 5U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	SightObservation(&observation, 4U, 200U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeAudienceTargetSequenceSurvivesFrameRegression(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 5U, 500U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeFrame(1U, 400U) ==
-		SG_BELIEF_RUNTIME_FRAME_REJECTED);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	SightObservation(&observation, 4U, 600U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	CHECK(SG_BeliefRuntimeView(1U, &target30) == NULL);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeAudienceTargetSequenceResetsForNewGeneration(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target31;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target31 = Life(3U, 31U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 5U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	SightObservation(&observation, 4U, 200U, 31U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &target31);
-	CHECK(view && view->updated_at_ms == 200U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeAudienceTargetSequenceStaysAudienceScoped(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 5U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	SightObservation(&observation, 4U, 200U, 30U);
-	observation.authentication.issuer_team = 2U;
-	observation.authentication.audience_team = 2U;
-	observation.target_team = 1U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeView(2U, &target30);
-	CHECK(view && view->updated_at_ms == 200U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeAudienceTargetSequenceResetStartsUniverse(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 5U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	SG_BeliefRuntimeReset();
-	SightObservation(&observation, 4U, 200U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 200U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeAudienceTargetSequenceRejectedObserveDoesNotAdvance(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 3U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	SightObservation(&observation, 5U, 150U, 30U);
-	observation.authentication.authenticated_at_ms = 200U;
-	observation.authentication.valid_until_ms = 199U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	SightObservation(&observation, 4U, 200U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &target30);
-	CHECK(view && view->updated_at_ms == 200U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeAudienceTargetSequenceFailureDoesNotAdvance(void)
-{
-	const sg_belief_horizon_accept_result_t failures_to_inject[] = {
-		SG_BELIEF_HORIZON_ALLOCATION_FAILED,
-		SG_BELIEF_HORIZON_OVERFLOW
-	};
-	size_t index;
-
-	for (index = 0U; index < sizeof(failures_to_inject) /
-		sizeof(failures_to_inject[0]); index++)
-	{
-		runtime_fixture_t fixture;
-		sg_belief_runtime_provider_t provider;
-		sg_perception_observation_t observation;
-		sg_belief_life_identity_t target30;
-		const sg_belief_runtime_view_t *view;
-
-		FixtureInit(&fixture);
-		provider = Provider(&fixture, 1U, 0.5f);
-		target30 = Life(3U, 30U);
-		CHECK(SG_BeliefRuntimeProviderSet(&provider));
-		SightObservation(&observation, 3U, 100U, 30U);
-		CHECK(SG_BeliefRuntimeObserve(&observation) ==
-			SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-		SightObservation(&observation, 5U, 150U, 30U);
-		observation.authentication.authenticated_at_ms = 200U;
-		observation.authentication.valid_until_ms = 300U;
-		SG_BeliefTestHorizonScopeFailNext(failures_to_inject[index]);
-		CHECK(SG_BeliefRuntimeObserve(&observation) ==
-			(failures_to_inject[index] ==
-			 SG_BELIEF_HORIZON_ALLOCATION_FAILED ?
-				SG_BELIEF_RUNTIME_OBSERVE_CAPACITY :
-				SG_BELIEF_RUNTIME_OBSERVE_OVERFLOW));
-		SightObservation(&observation, 4U, 200U, 30U);
-		CHECK(SG_BeliefRuntimeObserve(&observation) ==
-			SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-		view = SG_BeliefRuntimeView(1U, &target30);
-		CHECK(view && view->updated_at_ms == 200U);
-		CHECK(SG_BeliefRuntimeProviderSet(NULL));
-	}
-}
-
-static void TestRuntimeFrameIsAtomic(void)
-{
-	const sg_belief_horizon_accept_result_t failures_to_inject[] = {
-		SG_BELIEF_HORIZON_ALLOCATION_FAILED,
-		SG_BELIEF_HORIZON_OVERFLOW
-	};
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	const sg_belief_runtime_view_t *first;
-	const sg_belief_runtime_view_t *second;
-	size_t kind;
-	size_t failure_index;
-
-	for (kind = 0U; kind < sizeof(failures_to_inject) /
-		sizeof(failures_to_inject[0]); kind++)
-		for (failure_index = 0U; failure_index < 2U; failure_index++)
-		{
-			FixtureInit(&fixture);
-			provider = Provider(&fixture, 1U, 0.5f);
-			CHECK(SG_BeliefRuntimeProviderSet(&provider));
-			SightObservation(&observation, 1U, 100U, 30U);
-			CHECK(SG_BeliefRuntimeObserve(&observation) ==
-				SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-			SightObservation(&observation, 2U, 100U, 30U);
-			observation.target_life = Life(5U, 30U);
-			CHECK(SG_BeliefRuntimeObserve(&observation) ==
-				SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-			SG_BeliefTestHorizonScopeFailAfter(failure_index,
-				failures_to_inject[kind]);
-			CHECK(SG_BeliefRuntimeFrame(2U, 200U) ==
-				(failures_to_inject[kind] ==
-				 SG_BELIEF_HORIZON_ALLOCATION_FAILED ?
-					SG_BELIEF_RUNTIME_FRAME_CAPACITY :
-					SG_BELIEF_RUNTIME_FRAME_OVERFLOW));
-			first = SG_BeliefRuntimeViewForClient(1U, 3U);
-			second = SG_BeliefRuntimeViewForClient(1U, 5U);
-			CHECK(first && first->updated_at_ms == 100U);
-			CHECK(second && second->updated_at_ms == 100U);
-			CHECK(SG_BeliefRuntimeFrame(2U, 200U) ==
-				SG_BELIEF_RUNTIME_FRAME_APPLIED);
-			first = SG_BeliefRuntimeViewForClient(1U, 3U);
-			second = SG_BeliefRuntimeViewForClient(1U, 5U);
-			CHECK(first && first->updated_at_ms == 200U);
-			CHECK(second && second->updated_at_ms == 200U);
-			CHECK(SG_BeliefRuntimeProviderSet(NULL));
-		}
-}
-
-static void TestRuntimeRejectedObservationPreservesTrack(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t rejected_issuer;
-	const sg_belief_runtime_view_t *view;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	rejected_issuer = Life(5U, 50U);
-	SightObservation(&observation, 2U, 150U, 30U);
-	observation.authentication.authenticated_at_ms = 200U;
-	observation.authentication.valid_until_ms = 300U;
-	observation.authentication.issuer_life = rejected_issuer;
-	SG_BeliefTestHorizonScopeFailNext(
-		SG_BELIEF_HORIZON_ALLOCATION_FAILED);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_CAPACITY);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && view->updated_at_ms == 100U);
-	SG_BeliefRuntimeRetireLife(&rejected_issuer);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) != NULL);
-	SightObservation(&observation, 3U, 50U, 30U);
-	observation.authentication.authenticated_at_ms = 300U;
-	observation.authentication.valid_until_ms = 400U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && view->updated_at_ms == 100U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeLocatorProviderChangeRejected(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_belief_runtime_pose_t pose;
-	sg_perception_hypothesis_t hypothesis;
-	sg_perception_hypothesis_t expected;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	replacement_provider = Provider(&fixture, 2U, 0.5f);
-	provider.locate = LocateReplacingProvider;
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	memset(&pose, 0, sizeof(pose));
-	pose.movement_state = SG_BELIEF_MOTION_GROUND;
-	memset(&hypothesis, 0xa5, sizeof(hypothesis));
-	expected = hypothesis;
-	CHECK(!SG_BeliefRuntimeHypothesis(&pose, &hypothesis));
-	CHECK(memcmp(&hypothesis, &expected, sizeof(hypothesis)) == 0);
-	CHECK(SG_BeliefRuntimeProviderAvailable());
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeProviderReplacementIsTransactional(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_belief_runtime_provider_t invalid;
-	sg_belief_runtime_pose_t pose;
-	sg_perception_hypothesis_t hypothesis;
-	sg_perception_hypothesis_t expected;
-	sg_perception_observation_t observation;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	SightObservation(&observation, 2U, 100U, 30U);
-	observation.target_life = Life(5U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	invalid = provider;
-	invalid.localization_generation = 0U;
-	CHECK(!SG_BeliefRuntimeProviderSet(&invalid));
-	CHECK(SG_BeliefRuntimeSnapshot() == &fixture.snapshot);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) != NULL);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 5U) != NULL);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-
-	provider = Provider(&fixture, 1U, 0.5f);
-	provider.locate = LocateReplacingProvider;
-	replacement_provider = provider;
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	memset(&pose, 0, sizeof(pose));
-	pose.movement_state = SG_BELIEF_MOTION_GROUND;
-	memset(&hypothesis, 0xa5, sizeof(hypothesis));
-	expected = hypothesis;
-	CHECK(!SG_BeliefRuntimeHypothesis(&pose, &hypothesis));
-	CHECK(memcmp(&hypothesis, &expected, sizeof(hypothesis)) == 0);
-	CHECK(SG_BeliefRuntimeProviderAvailable());
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-
-	provider = Provider(&fixture, 1U, 0.5f);
-	provider.locate = LocateReplacingProviderTwice;
-	replacement_provider = Provider(&fixture, 2U, 0.5f);
-	restored_provider = provider;
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	memset(&hypothesis, 0xa5, sizeof(hypothesis));
-	expected = hypothesis;
-	CHECK(!SG_BeliefRuntimeHypothesis(&pose, &hypothesis));
-	CHECK(memcmp(&hypothesis, &expected, sizeof(hypothesis)) == 0);
-	CHECK(SG_BeliefRuntimeProviderAvailable());
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-
-	provider = Provider(&fixture, 1U, 0.5f);
-	provider.locate = LocateReplacingProvider;
-	replacement_provider = provider;
-	replacement_provider.policy.diffusion_fraction = 0.25f;
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	memset(&hypothesis, 0xa5, sizeof(hypothesis));
-	expected = hypothesis;
-	CHECK(!SG_BeliefRuntimeHypothesis(&pose, &hypothesis));
-	CHECK(memcmp(&hypothesis, &expected, sizeof(hypothesis)) == 0);
-	CHECK(SG_BeliefRuntimeProviderAvailable());
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-
-	provider = Provider(&fixture, 1U, 0.5f);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 3U, 300U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	SG_BeliefTestRuntimeProviderEpochExhaust();
-	invalid = provider;
-	invalid.policy.diffusion_fraction = 0.25f;
-	CHECK(!SG_BeliefRuntimeProviderSet(&invalid));
-	CHECK(SG_BeliefRuntimeSnapshot() == &fixture.snapshot);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) != NULL);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeProviderReplacementPreservesLifeFences(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target30;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target30 = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	SG_BeliefRuntimeRetireLife(&target30);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeDelayedEvidenceConverges(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_perception_hypothesis_t hypothesis;
-	sg_belief_particle_t stepped[64];
-	sg_belief_particle_t delayed[64];
-	const sg_belief_runtime_view_t *view;
-	size_t stepped_count = 0U;
-	size_t delayed_count = 0U;
-	size_t index;
-	int stepped_diffused = 0;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	SightObservation(&observation, 1U, 100U, 30U);
-	/* Start a known life with no positive mass.  The later sound is therefore
-	 * the only possible source of a non-origin mode at authentication time. */
-	observation.evidence_kind = SG_BELIEF_EVIDENCE_NEGATIVE;
-	hypothesis = Hypothesis(0U, 0U, SG_PERCEPTION_LOCATION_EARNED_RUNTIME,
-		32.0f);
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeFrame(2U, 200U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	SoundObservation(&observation, 2U, 300U, 30U, &hypothesis);
-	observation.authentication.observed_at_ms = 200U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && view->particle_count <= 64U);
-	if (view && view->particle_count <= 64U)
-	{
-		stepped_count = view->particle_count;
-		memcpy(stepped, view->particles,
-			stepped_count * sizeof(*stepped));
-	}
-	for (index = 0U; index < stepped_count; index++)
-		if (stepped[index].phase.phase_id != 0U)
-			stepped_diffused = 1;
-	CHECK(stepped_count > 1U);
-	CHECK(stepped_diffused);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	observation.evidence_kind = SG_BELIEF_EVIDENCE_NEGATIVE;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	SoundObservation(&observation, 2U, 300U, 30U, &hypothesis);
-	observation.authentication.observed_at_ms = 200U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && view->particle_count <= 64U);
-	if (view && view->particle_count <= 64U)
-	{
-		delayed_count = view->particle_count;
-		memcpy(delayed, view->particles,
-			delayed_count * sizeof(*delayed));
-	}
-	CHECK(stepped_count == delayed_count);
-	for (index = 0U; index < stepped_count && index < delayed_count; index++)
-	{
-		CHECK(stepped[index].phase.phase_id == delayed[index].phase.phase_id);
-		CHECK(stepped[index].phase.cell_id == delayed[index].phase.cell_id);
-		CHECK(stepped[index].future_time_ms == delayed[index].future_time_ms);
-		CHECK(fabsf(stepped[index].weight - delayed[index].weight) < 0.0001f);
-	}
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static int RuntimeParticlesEqual(const sg_belief_particle_t *left,
-	const sg_belief_particle_t *right)
-{
-	size_t axis;
-
-	if (!left || !right || left->phase.phase_id != right->phase.phase_id ||
-		left->phase.cell_id != right->phase.cell_id ||
-		left->movement_state != right->movement_state ||
-		left->weapon_state != right->weapon_state ||
-		left->reserved != right->reserved ||
-		left->source_mask != right->source_mask ||
-		left->reserved2 != right->reserved2 ||
-		left->future_time_ms != right->future_time_ms ||
-		left->latest_evidence_id != right->latest_evidence_id ||
-		left->latest_evidence_at_ms != right->latest_evidence_at_ms ||
-		left->spread_radius != right->spread_radius ||
-		left->weight != right->weight)
-		return 0;
-	for (axis = 0U; axis < 3U; axis++)
-		if (left->position[axis] != right->position[axis] ||
-			left->velocity[axis] != right->velocity[axis] ||
-			left->acceleration[axis] != right->acceleration[axis] ||
-			left->orientation[axis] != right->orientation[axis])
-			return 0;
-	return 1;
-}
-
-static void TestRuntimeFuturePredictionQuery(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_perception_observation_t observation;
-	sg_belief_life_identity_t target;
-	sg_belief_particle_t scratch_first[128];
-	sg_belief_particle_t scratch_second[128];
-	sg_belief_particle_t predicted_first[128];
-	sg_belief_particle_t predicted_second[128];
-	sg_belief_particle_t predicted_small[128];
-	sg_belief_particle_t predicted_small_before[128];
-	sg_belief_particle_t before[128];
-	sg_belief_prediction_t probe;
-	sg_belief_prediction_t first;
-	sg_belief_prediction_t second;
-	sg_belief_prediction_t small;
-	sg_belief_prediction_t rejected;
-	sg_belief_prediction_t rejected_before;
-	const sg_belief_runtime_view_t *view;
-	size_t index;
-	size_t required_particles;
-	size_t small_capacity;
-	float weight_sum;
-	int diffused;
-
-	FixtureInit(&fixture);
-	provider = Provider(&fixture, 1U, 0.5f);
-	target = Life(3U, 30U);
-	memset(before, 0, sizeof(before));
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	SightObservation(&observation, 1U, 100U, 30U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && view->particle_count <= sizeof(before) / sizeof(before[0]));
-	if (view && view->particle_count <= sizeof(before) / sizeof(before[0]))
-		memcpy(before, view->particles,
-			view->particle_count * sizeof(*before));
-
-	/* Probe the accepted prediction contract before supplying destination
-	 * storage.  The runtime must not silently truncate a sparse frontier. */
-	memset(&probe, 0, sizeof(probe));
-	CHECK(SG_BeliefRuntimePredict(1U, &target, 200U, scratch_first,
-		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
-		NULL, 0U, &probe) == SG_BELIEF_RUNTIME_PREDICT_CAPACITY);
-	required_particles = probe.required_particle_capacity;
-	CHECK(required_particles > 0U);
-	CHECK(probe.particle_count == 0U);
-	CHECK(probe.at_time_ms == 200U);
-	CHECK(probe.target_life.spawn_generation == 30U);
-	CHECK(required_particles <= sizeof(predicted_first) /
-		sizeof(predicted_first[0]));
-
-	/* A short destination reports capacity and leaves its existing contents
-	 * untouched, while scratch remains disposable as documented. */
-	memset(predicted_small, 0xa5, sizeof(predicted_small));
-	memcpy(predicted_small_before, predicted_small,
-		sizeof(predicted_small_before));
-	small_capacity = required_particles > 1U ? required_particles - 1U : 0U;
-	memset(&small, 0, sizeof(small));
-	CHECK(SG_BeliefRuntimePredict(1U, &target, 200U, scratch_first,
-		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
-		small_capacity != 0U ? predicted_small : NULL, small_capacity,
-		&small) == SG_BELIEF_RUNTIME_PREDICT_CAPACITY);
-	CHECK(small.required_particle_capacity == required_particles);
-	CHECK(memcmp(predicted_small, predicted_small_before,
-		sizeof(predicted_small)) == 0);
-
-	memset(&first, 0, sizeof(first));
-	CHECK(SG_BeliefRuntimePredict(1U, &target, 200U, scratch_first,
-		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
-		predicted_first, sizeof(predicted_first) / sizeof(predicted_first[0]),
-		&first) == SG_BELIEF_RUNTIME_PREDICT_APPLIED);
-	CHECK(first.particle_count == required_particles);
-	CHECK(first.particle_count > 1U);
-	CHECK(first.total_weight > 0.9999f && first.total_weight < 1.0001f);
-	weight_sum = 0.0f;
-	diffused = 0;
-	for (index = 0U; index < first.particle_count; index++)
-	{
-		weight_sum += predicted_first[index].weight;
-		CHECK(predicted_first[index].future_time_ms == 200U);
-		if (predicted_first[index].phase.phase_id != 0U)
-			diffused = 1;
-	}
-	CHECK(weight_sum > 0.9999f && weight_sum < 1.0001f);
-	CHECK(diffused);
-	CHECK(first.source.horizon_chain_identity.bytes[0] != 0U ||
-		first.source.horizon_chain_identity.bytes[1] != 0U);
-
-	/* Repeating the same query yields the same normalized sparse modes.  The
-	 * issuance metadata may advance, but it cannot affect the distribution. */
-	memset(&second, 0, sizeof(second));
-	CHECK(SG_BeliefRuntimePredict(1U, &target, 200U, scratch_first,
-		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
-		predicted_second,
-		sizeof(predicted_second) / sizeof(predicted_second[0]), &second) ==
-		SG_BELIEF_RUNTIME_PREDICT_APPLIED);
-	CHECK(second.particle_count == first.particle_count);
-	CHECK(second.confidence == first.confidence);
-	CHECK(memcmp(&second.source.horizon_chain_identity,
-		&first.source.horizon_chain_identity,
-		sizeof(first.source.horizon_chain_identity)) == 0);
-	for (index = 0U; index < first.particle_count; index++)
-		CHECK(RuntimeParticlesEqual(&predicted_first[index],
-			&predicted_second[index]));
-
-	/* Querying never publishes its temporary horizon or prediction buffers. */
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && view->updated_at_ms == 100U);
-	if (view && view->particle_count <= sizeof(before) / sizeof(before[0]))
-	{
-		CHECK(view->particle_count == 1U);
-		for (index = 0U; index < view->particle_count; index++)
-			CHECK(RuntimeParticlesEqual(&view->particles[index], &before[index]));
-	}
-
-	memset(&rejected, 0xa5, sizeof(rejected));
-	rejected.at_time_ms = UINT64_MAX;
-	rejected_before = rejected;
-	CHECK(SG_BeliefRuntimePredict(1U, &target, 99U, scratch_first,
-		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
-		predicted_first, sizeof(predicted_first) / sizeof(predicted_first[0]),
-		&rejected) == SG_BELIEF_RUNTIME_PREDICT_REJECTED);
-	CHECK(memcmp(&rejected, &rejected_before, sizeof(rejected)) == 0);
-
-	CHECK(SG_BeliefRuntimeFrame(1U, 300U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	CHECK(SG_BeliefRuntimePredict(1U, &target, 299U, scratch_first,
-		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
-		predicted_first, sizeof(predicted_first) / sizeof(predicted_first[0]),
-		&rejected) == SG_BELIEF_RUNTIME_PREDICT_REJECTED);
-	fixture.snapshot.topology_revision = 8U;
-	CHECK(SG_BeliefRuntimePredict(1U, &target, 350U, scratch_first,
-		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
-		predicted_first, sizeof(predicted_first) / sizeof(predicted_first[0]),
-		&rejected) == SG_BELIEF_RUNTIME_PREDICT_UNAVAILABLE);
-	fixture.snapshot.topology_revision = 7U;
-	CHECK(SG_BeliefRuntimePredict(1U, &target, 350U, scratch_first,
-		scratch_second, sizeof(scratch_first) / sizeof(scratch_first[0]),
-		predicted_first, sizeof(predicted_first) / sizeof(predicted_first[0]),
-		&first) == SG_BELIEF_RUNTIME_PREDICT_APPLIED);
-	CHECK(first.at_time_ms == 350U);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-}
-
-static void TestRuntimeOwner(void)
-{
-	runtime_fixture_t fixture;
-	sg_belief_runtime_provider_t provider;
-	sg_belief_runtime_pose_t pose;
-	sg_perception_observation_t observation;
-	sg_perception_hypothesis_t hypothesis;
-	sg_perception_hypothesis_t sound_hypotheses[17];
-	sg_belief_life_identity_t old_target;
-	sg_belief_life_identity_t current_target;
-	sg_belief_life_identity_t issuer;
-	const sg_belief_runtime_view_t *view;
-	size_t expected_particle_count;
-	uint64_t expected_updated_at;
-
-	FixtureInit(&fixture);
-	memset(&pose, 0, sizeof(pose));
-	pose.movement_state = SG_BELIEF_MOTION_GROUND;
-	CHECK(!SG_BeliefRuntimeHypothesis(&pose, &hypothesis));
-	memset(&provider, 0, sizeof(provider));
-	provider.snapshot = &fixture.snapshot;
-	provider.policy.confidence_decay_ms = 1000U;
-	provider.policy.diffusion_fraction = 0.5f;
-	provider.policy.spread_growth_per_ms = 0.01f;
-	provider.locate = Locate;
-	CHECK(!SG_BeliefRuntimeProviderSet(&provider));
-	provider.localization_generation = 1U;
-	CHECK(SG_BeliefRuntimeProviderSet(&provider));
-	CHECK(SG_BeliefRuntimeProviderAvailable());
-	CHECK(SG_BeliefRuntimeSnapshot() == &fixture.snapshot);
-	CHECK(SG_BeliefRuntimeHypothesis(&pose, &hypothesis));
-	CHECK(hypothesis.phase.phase_id == 0U);
-
-	observation = Observation(SG_PERCEPTION_SOURCE_SIGHT, 1U, 100U, 30U);
-	observation.data.sight.in_pvs = 1U;
-	observation.data.sight.line_of_sight_proved = 1U;
-	observation.data.sight.hypothesis = Hypothesis(0U, 0U,
-		SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f);
-	CHECK(SG_BeliefRuntimeObserve(&observation) == SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-
-	observation = Observation(SG_PERCEPTION_SOURCE_SOUND, 2U, 200U, 30U);
-	for (size_t index = 0U; index < 17U; index++)
-	{
-		sound_hypotheses[index] = Hypothesis(0U, 0U,
-			SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f);
-		sound_hypotheses[index].position[0] = (float)index;
-	}
-	observation.data.sound.in_phs = 1U;
-	observation.data.sound.positional = 1U;
-	observation.data.sound.kind = SG_PERCEPTION_SOUND_WEAPON;
-	observation.data.sound.sound_id = 9U;
-	observation.data.sound.attenuation = 1.0f;
-	observation.data.sound.audible_radius = 800.0f;
-	observation.data.sound.hypotheses = sound_hypotheses;
-	observation.data.sound.hypothesis_count = 17U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) == SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view != NULL && view->particle_count >= 18U);
-	CHECK(view && view->particles != NULL &&
-		view->particles[0].position[0] != view->particles[16].position[0]);
-
-	observation = Observation(SG_PERCEPTION_SOURCE_DAMAGE, 3U, 300U, 30U);
-	hypothesis = Hypothesis(0U, 0U, SG_PERCEPTION_LOCATION_EARNED_RUNTIME,
-		48.0f);
-	observation.data.damage.landed = 1U;
-	observation.data.damage.damage = 20U;
-	observation.data.damage.means_of_death = 7U;
-	observation.data.damage.incoming_direction[0] = 1.0f;
-	observation.data.damage.hypotheses = &hypothesis;
-	observation.data.damage.hypothesis_count = 1U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) == SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-
-	observation = Observation(SG_PERCEPTION_SOURCE_ITEM, 4U, 400U, 30U);
-	hypothesis = Hypothesis(2U, 1U, SG_PERCEPTION_LOCATION_RUNE_STATIC, 0.0f);
-	observation.data.item.occurrence = SG_PERCEPTION_ITEM_TARGET_PICKUP;
-	observation.data.item.destination.kind = SG_DESTINATION_POWERUP;
-	observation.data.item.destination.value.item.item_id = 11U;
-	observation.data.item.hypotheses = &hypothesis;
-	observation.data.item.hypothesis_count = 1U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) == SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-
-	observation = Observation(SG_PERCEPTION_SOURCE_FLAG, 5U, 500U, 30U);
-	hypothesis = Hypothesis(2U, 1U, SG_PERCEPTION_LOCATION_RUNE_STATIC, 0.0f);
-	observation.data.flag.occurrence = SG_PERCEPTION_FLAG_TARGET_PICKUP;
-	observation.data.flag.destination.kind = SG_DESTINATION_FLAG;
-	observation.data.flag.destination.value.flag.team = 1U;
-	observation.data.flag.destination.value.flag.location = SG_DESTINATION_FLAG_HOME;
-	observation.data.flag.hypotheses = &hypothesis;
-	observation.data.flag.hypothesis_count = 1U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) == SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-
-	observation = Observation(SG_PERCEPTION_SOURCE_TEAMMATE, 6U, 600U, 30U);
-	observation.authentication.issuer_life = Life(5U, 50U);
-	hypothesis = Hypothesis(0U, 0U, SG_PERCEPTION_LOCATION_EARNED_RUNTIME,
-		32.0f);
-	observation.data.teammate.reported_source = SG_PERCEPTION_SOURCE_SOUND;
-	observation.data.teammate.report_kind = 1U;
-	observation.data.teammate.hypotheses = &hypothesis;
-	observation.data.teammate.hypothesis_count = 1U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) == SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	view = SG_BeliefRuntimeView(1U, &observation.target_life);
-	CHECK(view != NULL);
-	CHECK(view && view->latest_source == SG_BELIEF_SOURCE_TEAMMATE);
-	CHECK(SG_BeliefRuntimeFrame(7U, 800U) ==
-		SG_BELIEF_RUNTIME_FRAME_APPLIED);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view != NULL);
-	CHECK(view && view->updated_at_ms == 800U);
-	CHECK(view && !view->exact_sight);
-
-	observation = Observation(SG_PERCEPTION_SOURCE_SIGHT, 7U, 900U, 31U);
-	observation.data.sight.in_pvs = 1U;
-	observation.data.sight.line_of_sight_proved = 1U;
-	observation.data.sight.hypothesis = Hypothesis(0U, 0U,
-		SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f);
-	CHECK(SG_BeliefRuntimeObserve(&observation) == SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	old_target = Life(3U, 30U);
-	CHECK(SG_BeliefRuntimeView(1U, &old_target) == NULL);
-	view = SG_BeliefRuntimeView(1U, &observation.target_life);
-	CHECK(view != NULL && view->target_life.spawn_generation == 31U);
-	expected_particle_count = view ? view->particle_count : 0U;
-	expected_updated_at = view ? view->updated_at_ms : 0U;
-	SightObservation(&observation, 7U, 900U, 31U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	SightObservation(&observation, 8U, 850U, 31U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) ==
-		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	view = SG_BeliefRuntimeViewForClient(1U, 3U);
-	CHECK(view && view->updated_at_ms == expected_updated_at);
-	CHECK(view && view->particle_count == expected_particle_count);
-	SightObservation(&observation, 9U, 950U, 31U);
-	observation.target_team = 1U;
-	CHECK(SG_BeliefRuntimeObserve(&observation) == SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
-	current_target = Life(3U, 31U);
-	CHECK(SG_BeliefRuntimeView(1U, &current_target) != NULL);
-
-	issuer = Life(4U, 40U);
-	SG_BeliefRuntimeRetireLife(&issuer);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	observation = Observation(SG_PERCEPTION_SOURCE_SIGHT, 8U, 1000U, 31U);
-	observation.evidence_kind = SG_BELIEF_EVIDENCE_NEGATIVE;
-	observation.data.sight.in_pvs = 1U;
-	observation.data.sight.line_of_sight_proved = 1U;
-	observation.data.sight.hypothesis = Hypothesis(0U, 0U,
-		SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f);
-	observation.authentication.issuer_life = Life(6U, 60U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) == SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	observation = Observation(SG_PERCEPTION_SOURCE_SIGHT, 9U, 1100U, 31U);
-	observation.data.sight.in_pvs = 1U;
-	observation.data.sight.line_of_sight_proved = 1U;
-	observation.data.sight.hypothesis = Hypothesis(0U, 0U,
-		SG_PERCEPTION_LOCATION_EARNED_RUNTIME, 0.0f);
-	observation.authentication.issuer_life = Life(6U, 60U);
-	CHECK(SG_BeliefRuntimeObserve(&observation) == SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) != NULL);
-	fixture.snapshot.topology_revision = 8U;
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	fixture.snapshot.topology_revision = 7U;
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) != NULL);
-	SG_BeliefRuntimeRetireLife(&current_target);
-	CHECK(SG_BeliefRuntimeViewForClient(1U, 3U) == NULL);
-	CHECK(SG_BeliefRuntimeProviderSet(NULL));
-	CHECK(!SG_BeliefRuntimeProviderAvailable());
-	CHECK(SG_BeliefRuntimeSnapshot() == NULL);
+	*observation = Observation(NULL, 0U, sequence);
+	observation->source = SG_BELIEF_RUNTIME_SOURCE_SIGHT;
+	observation->evidence_kind = SG_BELIEF_RUNTIME_EVIDENCE_NEGATIVE;
+	observation->confidence = 1.0f;
+	observation->coverage = coverage;
+	observation->coverage_count = coverage_count;
 }
 
 int main(void)
 {
-	TestRuntimeHorizonScopeLifecycle();
-	TestRuntimeReplacementIsAtomic();
-	TestRuntimeLifeFencePreventsResurrection();
-	TestRuntimeIssuerLifeFences();
-	TestRuntimeIssuerGenerationInvalidatesTracks();
-	TestRuntimeIssuerGenerationReplacesSameTargetTrack();
-	TestRuntimeIssuerRolloverRejectsTimestampRollback();
-	TestRuntimeIssuerRolloverRejectsEvidenceSequenceRollback();
-	TestRuntimeFrameWatermarkRejectsIssuerRollover();
-	TestRuntimeFrameWatermarkRejectsDelayedEvidence();
-	TestRuntimeFrameWatermarkRejectsTargetLifeRollover();
-	TestRuntimeFrameTimestampRegressionResetsTracks();
-	TestRuntimeAudienceClientWatermarkSurvivesRetirement();
-	TestRuntimeAudienceClientWatermarkSurvivesSupersession();
-	TestRuntimeAudienceClientWatermarkAdvancesEmptyFrame();
-	TestRuntimeAudienceClientWatermarkFailureDoesNotAdvance();
-	TestRuntimeAudienceClientWatermarkSurvivesProviderReplacement();
-	TestRuntimeAudienceClientWatermarkResetStartsUniverse();
-	TestRuntimeAudienceTargetSequenceSurvivesIssuerRetirement();
-	TestRuntimeAudienceTargetSequenceSurvivesProviderReplacement();
-	TestRuntimeAudienceTargetSequenceSurvivesFrameRegression();
-	TestRuntimeAudienceTargetSequenceResetsForNewGeneration();
-	TestRuntimeAudienceTargetSequenceStaysAudienceScoped();
-	TestRuntimeAudienceTargetSequenceResetStartsUniverse();
-	TestRuntimeAudienceTargetSequenceRejectedObserveDoesNotAdvance();
-	TestRuntimeAudienceTargetSequenceFailureDoesNotAdvance();
-	TestRuntimeFrameIsAtomic();
-	TestRuntimeRejectedObservationPreservesTrack();
-	TestRuntimeLocatorProviderChangeRejected();
-	TestRuntimeDelayedEvidenceConverges();
-	TestRuntimeFuturePredictionQuery();
-	TestRuntimeOwner();
-	TestRuntimeProviderReplacementPreservesLifeFences();
-	TestRuntimeProviderReplacementIsTransactional();
-	if (failures != 0)
+	sg_belief_runtime_provider_t provider;
+	sg_belief_runtime_hypothesis_t hypotheses[2];
+	sg_belief_runtime_observation_t observation;
+	sg_belief_runtime_coverage_t coverage[2];
+	const sg_belief_runtime_view_t *view;
+	float confidence_after_first_miss = 0.0f;
+	uint64_t original_updated_at_ms = 0U;
+	uint64_t original_valid_until_ms = 0U;
+
+	FixtureInit();
+	provider = Provider();
+	CHECK(SG_BeliefRuntimeProviderSet(&provider));
+	CHECK(SG_BeliefRuntimeProviderAvailable());
+	CHECK(SG_BeliefRuntimeProvider() != NULL);
+
+	hypotheses[0] = Hypothesis(10.0f, 4.0f, 1.0f);
+	hypotheses[1] = Hypothesis(200.0f, 4.0f, 3.0f);
+	observation = Observation(hypotheses, 2U, 1U);
+	CHECK(RawObserve(&observation) == SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeViewForClient(1U, 2U, 101U);
+	CHECK(view != NULL);
+	if (view)
 	{
-		fprintf(stderr, "sg_belief_runtime_test: %d failure(s)\n", failures);
-		return 1;
+		CHECK(view->particle_count == 2U);
+		CHECK(view->particles[0].cell.location.cell.value == 0U);
+		CHECK(view->particles[1].cell.location.cell.value == 1U);
+		CHECK(fabsf(view->particles[0].weight + view->particles[1].weight -
+			1.0f) < 0.0001f);
+		CHECK(view->exact_sight == 0U);
 	}
-	puts("sg_belief_runtime_test: ok");
-	return 0;
+
+	CHECK(SG_BeliefRuntimeFrame(1U, 600U) ==
+		SG_BELIEF_RUNTIME_FRAME_APPLIED);
+	view = SG_BeliefRuntimeViewForClient(1U, 2U, 600U);
+	CHECK(view != NULL);
+	if (view)
+	{
+		CHECK(view->confidence > 0.0f && view->confidence < 0.8f);
+		CHECK(view->particles[0].spread_radius > 4.0f);
+	}
+
+	/* A later coarse sound cannot erase a current exact sight. */
+	hypotheses[0] = Hypothesis(10.0f, 0.0f, 1.0f);
+	observation = Observation(hypotheses, 1U, 2U);
+	observation.source = SG_BELIEF_RUNTIME_SOURCE_SIGHT;
+	observation.confidence = 1.0f;
+	observation.observed_at_ms = 601U;
+	observation.authenticated_at_ms = 601U;
+	observation.valid_until_ms = 2000U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	hypotheses[0] = Hypothesis(200.0f, 64.0f, 1.0f);
+	observation = Observation(hypotheses, 1U, 3U);
+	observation.observed_at_ms = 602U;
+	observation.authenticated_at_ms = 602U;
+	observation.valid_until_ms = 2000U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeViewForClient(1U, 2U, 602U);
+	CHECK(view != NULL && view->exact_sight == 1U);
+	if (view)
+		CHECK(view->particles[0].position[0] == 10.0f);
+
+	/* Sound and damage are coarse evidence; exact zero-spread input is refused. */
+	hypotheses[0] = Hypothesis(10.0f, 0.0f, 1.0f);
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.target_life = Life(3U, 33U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+
+	/* Coverage removes only cells the host sensor actually inspected. */
+	hypotheses[0] = Hypothesis(10.0f, 16.0f, 1.0f);
+	hypotheses[1] = Hypothesis(200.0f, 16.0f, 1.0f);
+	observation = Observation(hypotheses, 2U, 1U);
+	observation.target_life = Life(4U, 44U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	memset(coverage, 0, sizeof(coverage));
+	coverage[0].location.cell.value = 0U;
+	coverage[0].location.valid_stances = SG_RUNE_STANCE_VALID_STANDING;
+	MakeNegative(&observation, coverage, 1U, 2U);
+	observation.target_life = Life(4U, 44U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeViewForClient(1U, 4U, 102U);
+	CHECK(view != NULL && view->particle_count == 1U);
+	if (view)
+		CHECK(view->particles[0].cell.location.cell.value == 1U);
+	coverage[0].location.cell.value = 1U;
+	MakeNegative(&observation, coverage, 1U, 3U);
+	observation.target_life = Life(4U, 44U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 4U, 103U) == NULL);
+
+	/* Repeated misses subtract only what was observed. They must not renew the
+	 * surviving estimate or stop its existing decay. */
+	hypotheses[0] = Hypothesis(10.0f, 16.0f, 1.0f);
+	hypotheses[1] = Hypothesis(200.0f, 16.0f, 1.0f);
+	observation = Observation(hypotheses, 2U, 1U);
+	observation.target_life = Life(6U, 66U);
+	observation.valid_until_ms = 1000U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	original_updated_at_ms = observation.authenticated_at_ms;
+	original_valid_until_ms = observation.valid_until_ms;
+	memset(coverage, 0, sizeof(coverage));
+	coverage[0].location.cell.value = 0U;
+	coverage[0].location.valid_stances = SG_RUNE_STANCE_VALID_STANDING;
+	MakeNegative(&observation, coverage, 1U, 2U);
+	observation.target_life = Life(6U, 66U);
+	observation.observed_at_ms = 600U;
+	observation.authenticated_at_ms = 600U;
+	observation.valid_until_ms = 2000U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeViewForClient(1U, 6U, 600U);
+	CHECK(view != NULL && view->particle_count == 1U);
+	if (view)
+	{
+		confidence_after_first_miss = view->confidence;
+		CHECK(view->updated_at_ms == original_updated_at_ms);
+		CHECK(view->valid_until_ms == original_valid_until_ms);
+	}
+	MakeNegative(&observation, coverage, 1U, 3U);
+	observation.target_life = Life(6U, 66U);
+	observation.observed_at_ms = 900U;
+	observation.authenticated_at_ms = 900U;
+	observation.valid_until_ms = 3000U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeViewForClient(1U, 6U, 900U);
+	CHECK(view != NULL && view->particle_count == 1U);
+	if (view)
+	{
+		CHECK(view->confidence > 0.0f);
+		CHECK(view->confidence < confidence_after_first_miss);
+		CHECK(view->updated_at_ms == original_updated_at_ms);
+		CHECK(view->valid_until_ms == original_valid_until_ms);
+	}
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 6U,
+		original_valid_until_ms) == NULL);
+
+	/* Coarse observations fuse sparse compact cells instead of replacing the
+	 * previous possibility set. */
+	hypotheses[0] = Hypothesis(10.0f, 16.0f, 1.0f);
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.target_life = Life(5U, 55U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	hypotheses[0] = Hypothesis(200.0f, 16.0f, 1.0f);
+	observation = Observation(hypotheses, 1U, 2U);
+	observation.target_life = Life(5U, 55U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeViewForClient(1U, 5U, 102U);
+	CHECK(view != NULL && view->particle_count == 2U);
+
+	/* A view must fail closed once its original validity window expires. */
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 2U, 2000U) == NULL);
+	CHECK(SG_BeliefRuntimeFrame(2U, 2000U) ==
+		SG_BELIEF_RUNTIME_FRAME_APPLIED);
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 2U, 2001U) == NULL);
+
+	/* A propagated sight belief branches only over the callback's published
+	 * compact portal.  It remains normalized, becomes predictive rather than
+	 * exact aim, and carries an explicit future-time bucket. */
+	propagation_enabled = 1;
+	hypotheses[0] = Hypothesis(10.0f, 0.0f, 1.0f);
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.source = SG_BELIEF_RUNTIME_SOURCE_SIGHT;
+	observation.confidence = 1.0f;
+	observation.target_life = Life(10U, 100U);
+	observation.observed_at_ms = 2100U;
+	observation.authenticated_at_ms = 2100U;
+	observation.valid_until_ms = 4000U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeFrame(3U, 2200U) ==
+		SG_BELIEF_RUNTIME_FRAME_APPLIED);
+	view = SG_BeliefRuntimeViewForClient(1U, 10U, 2200U);
+	CHECK(view != NULL && view->particle_count == 2U);
+	if (view)
+	{
+		CHECK(view->exact_sight == 0U);
+		CHECK(view->particles[0].cell.location.cell.value == 0U);
+		CHECK(view->particles[1].cell.location.cell.value == 1U);
+		CHECK(view->particles[0].future_at_ms == 2200U);
+		CHECK(view->particles[1].future_at_ms == 2200U);
+		CHECK(fabsf(view->particles[0].weight + view->particles[1].weight -
+			1.0f) < 0.0001f);
+	}
+	/* A provider that cannot represent every successor fails loudly and leaves
+	 * the prior sparse distribution available for the next valid frame. */
+	propagation_overflow = 1;
+	CHECK(SG_BeliefRuntimeFrame(4U, 2300U) ==
+		SG_BELIEF_RUNTIME_FRAME_OVERFLOW);
+	view = SG_BeliefRuntimeViewForClient(1U, 10U, 2200U);
+	CHECK(view != NULL && view->particle_count == 2U);
+	propagation_overflow = 0;
+	propagation_enabled = 0;
+
+	/* Each nonvisual runtime source stays diffuse.  Known item and flag events
+	 * can localize a cell, but neither is marked as visual exact aim. */
+	{
+		static const sg_belief_runtime_source_t diffuse_sources[] = {
+			SG_BELIEF_RUNTIME_SOURCE_SOUND,
+			SG_BELIEF_RUNTIME_SOURCE_DAMAGE,
+			SG_BELIEF_RUNTIME_SOURCE_WEAPON_FIRE,
+			SG_BELIEF_RUNTIME_SOURCE_HOOK,
+			SG_BELIEF_RUNTIME_SOURCE_MECHANISM,
+			SG_BELIEF_RUNTIME_SOURCE_WATER
+		};
+		size_t source_index;
+
+		for (source_index = 0U; source_index <
+			sizeof(diffuse_sources) / sizeof(diffuse_sources[0]); source_index++)
+		{
+			hypotheses[0] = Hypothesis(10.0f, 24.0f, 1.0f);
+			observation = Observation(hypotheses, 1U, 1U);
+			observation.source = diffuse_sources[source_index];
+			observation.target_life = Life((uint32_t)(20U + source_index),
+				(uint64_t)(200U + source_index));
+			CHECK(SG_BeliefRuntimeObserve(&observation) ==
+				SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+			view = SG_BeliefRuntimeViewForClient(1U,
+				observation.target_life.client_id,
+				observation.authenticated_at_ms);
+			CHECK(view != NULL && view->exact_sight == 0U &&
+				view->particles[0].spread_radius > 0.0f);
+			hypotheses[0].spread_radius = 0.0f;
+			observation = Observation(hypotheses, 1U, 2U);
+			observation.source = diffuse_sources[source_index];
+			observation.target_life = Life((uint32_t)(40U + source_index),
+				(uint64_t)(400U + source_index));
+			CHECK(SG_BeliefRuntimeObserve(&observation) ==
+				SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+		}
+		hypotheses[0] = Hypothesis(10.0f, 0.0f, 1.0f);
+		observation = Observation(hypotheses, 1U, 1U);
+		observation.source = SG_BELIEF_RUNTIME_SOURCE_ITEM;
+		observation.target_life = Life(30U, 300U);
+		CHECK(SG_BeliefRuntimeObserve(&observation) ==
+			SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+		view = SG_BeliefRuntimeViewForClient(1U, 30U,
+			observation.authenticated_at_ms);
+		CHECK(view != NULL && view->exact_sight == 0U);
+		observation = Observation(hypotheses, 1U, 1U);
+		observation.source = SG_BELIEF_RUNTIME_SOURCE_FLAG;
+		observation.target_life = Life(31U, 310U);
+		CHECK(SG_BeliefRuntimeObserve(&observation) ==
+			SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+		hypotheses[0] = Hypothesis(10.0f, 24.0f, 1.0f);
+		hypotheses[0].weapon_state = SG_BELIEF_RUNTIME_WEAPON_FIRING;
+		observation = Observation(hypotheses, 1U, 1U);
+		observation.source = SG_BELIEF_RUNTIME_SOURCE_WEAPON_FIRE;
+		observation.target_life = Life(32U, 320U);
+		CHECK(SG_BeliefRuntimeObserve(&observation) ==
+			SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+		view = SG_BeliefRuntimeViewForClient(1U, 32U,
+			observation.authenticated_at_ms);
+		CHECK(view != NULL && view->particles[0].weapon_state ==
+			SG_BELIEF_RUNTIME_WEAPON_FIRING);
+	}
+
+	/* Sound keeps every supplied region: no mean collapse means a sound-only
+	 * observation cannot turn into a justified single-cell aim target. */
+	hypotheses[0] = Hypothesis(10.0f, 32.0f, 1.0f);
+	hypotheses[1] = Hypothesis(200.0f, 32.0f, 3.0f);
+	observation = Observation(hypotheses, 2U, 1U);
+	observation.target_life = Life(60U, 600U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	view = SG_BeliefRuntimeViewForClient(1U, 60U,
+		observation.authenticated_at_ms);
+	CHECK(view != NULL && view->exact_sight == 0U &&
+		view->particle_count == 2U);
+	if (view)
+		CHECK(view->particles[1].weight > view->particles[0].weight);
+
+	/* Reports need the host's separate teammate-report authority and retain the
+	 * reported source's uncertainty rules.  Their audience key is independent
+	 * from an otherwise identical belief held by the other team. */
+	hypotheses[0] = Hypothesis(10.0f, 32.0f, 1.0f);
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.source = SG_BELIEF_RUNTIME_SOURCE_TEAMMATE;
+	observation.reported_source = SG_BELIEF_RUNTIME_SOURCE_SOUND;
+	observation.authority = SG_BELIEF_RUNTIME_AUTHORITY_HOST_TEAMMATE_REPORT;
+	observation.target_life = Life(70U, 700U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 70U,
+		observation.authenticated_at_ms) != NULL);
+	CHECK(SG_BeliefRuntimeViewForClient(2U, 70U,
+		observation.authenticated_at_ms) == NULL);
+	observation.authenticated = 0U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	observation.authenticated = 1U;
+	observation.authority = SG_BELIEF_RUNTIME_AUTHORITY_HOST_SENSOR;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+	observation.authority = SG_BELIEF_RUNTIME_AUTHORITY_HOST_TEAMMATE_REPORT;
+	observation.reported_source = SG_BELIEF_RUNTIME_SOURCE_TEAMMATE;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.audience_team = 2U;
+	observation.target_team = 1U;
+	observation.target_life = Life(70U, 700U);
+	observation.issuer_life = Life(71U, 710U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeViewForClient(2U, 70U,
+		observation.authenticated_at_ms) != NULL);
+
+	/* Life fences outlive sparse mass.  Retirement rejects the exact retired
+	 * target, a newer generation clears the old target track, and late issuer
+	 * generations cannot create fresh evidence. */
+	hypotheses[0] = Hypothesis(10.0f, 16.0f, 1.0f);
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.target_life = Life(80U, 800U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeRetireLife(&observation.target_life));
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 80U,
+		observation.authenticated_at_ms) == NULL);
+	observation = Observation(hypotheses, 1U, 2U);
+	observation.target_life = Life(80U, 800U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.target_life = Life(81U, 1U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.target_life = Life(81U, 2U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeView(1U, &((sg_belief_runtime_life_t){
+		.client_id = 81U, .spawn_generation = 1U}), 101U) == NULL);
+	observation = Observation(hypotheses, 1U, 2U);
+	observation.target_life = Life(81U, 1U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.issuer_life = Life(82U, 1U);
+	observation.target_life = Life(83U, 1U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.issuer_life = Life(82U, 2U);
+	observation.target_life = Life(84U, 1U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.issuer_life = Life(82U, 1U);
+	observation.target_life = Life(85U, 1U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+
+	/* Negative sight may clear every particle, never the replay fence. */
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.target_life = Life(86U, 1U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	memset(coverage, 0, sizeof(coverage));
+	coverage[0].location.cell.value = 0U;
+	coverage[0].location.valid_stances = SG_RUNE_STANCE_VALID_STANDING;
+	MakeNegative(&observation, coverage, 1U, 2U);
+	observation.target_life = Life(86U, 1U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 86U, 102U) == NULL);
+	observation = Observation(hypotheses, 1U, 2U);
+	observation.target_life = Life(86U, 1U);
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_REJECTED);
+
+	/* The runtime rejects a successor against a one-way portal in its forbidden
+	 * direction and a target cell that is not an endpoint of the named portal. */
+	portals[0].direction = SG_RUNE_PORTAL_CONTINUITY_NEGATIVE_TO_POSITIVE;
+	propagation_wrong_direction = 1;
+	hypotheses[0] = Hypothesis(200.0f, 16.0f, 1.0f);
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.target_life = Life(87U, 1U);
+	observation.observed_at_ms = 3000U;
+	observation.authenticated_at_ms = 3000U;
+	observation.valid_until_ms = 5000U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeFrame(5U, 3100U) ==
+		SG_BELIEF_RUNTIME_FRAME_REJECTED);
+	view = SG_BeliefRuntimeViewForClient(1U, 87U, 3000U);
+	CHECK(view != NULL && view->particles[0].future_at_ms == 3000U);
+	propagation_wrong_direction = 0;
+	CHECK(SG_BeliefRuntimeFrame(5U, 3100U) ==
+		SG_BELIEF_RUNTIME_FRAME_APPLIED);
+	portals[0].direction = SG_RUNE_PORTAL_CONTINUITY_BOTH;
+	propagation_nonadjacent = 1;
+	hypotheses[0] = Hypothesis(10.0f, 16.0f, 1.0f);
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.target_life = Life(88U, 1U);
+	observation.observed_at_ms = 3200U;
+	observation.authenticated_at_ms = 3200U;
+	observation.valid_until_ms = 5000U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	CHECK(SG_BeliefRuntimeFrame(6U, 3300U) ==
+		SG_BELIEF_RUNTIME_FRAME_REJECTED);
+	propagation_nonadjacent = 0;
+	CHECK(SG_BeliefRuntimeFrame(6U, 3300U) ==
+		SG_BELIEF_RUNTIME_FRAME_APPLIED);
+
+	/* Frame aging is all-or-nothing.  The first target stages successfully,
+	 * the second overflows, and neither future bucket advances until retry. */
+	CHECK(SG_BeliefRuntimeRetireLife(&((sg_belief_runtime_life_t){
+		.client_id = 87U, .spawn_generation = 1U})));
+	CHECK(SG_BeliefRuntimeRetireLife(&((sg_belief_runtime_life_t){
+		.client_id = 88U, .spawn_generation = 1U})));
+	hypotheses[0] = Hypothesis(200.0f, 16.0f, 1.0f);
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.target_life = Life(90U, 1U);
+	observation.observed_at_ms = 4000U;
+	observation.authenticated_at_ms = 4000U;
+	observation.valid_until_ms = 6000U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	hypotheses[0] = Hypothesis(10.0f, 16.0f, 1.0f);
+	observation = Observation(hypotheses, 1U, 1U);
+	observation.target_life = Life(91U, 1U);
+	observation.observed_at_ms = 4000U;
+	observation.authenticated_at_ms = 4000U;
+	observation.valid_until_ms = 6000U;
+	CHECK(SG_BeliefRuntimeObserve(&observation) ==
+		SG_BELIEF_RUNTIME_OBSERVE_APPLIED);
+	propagation_overflow = 1;
+	propagation_overflow_cell = 0;
+	CHECK(SG_BeliefRuntimeFrame(7U, 4100U) ==
+		SG_BELIEF_RUNTIME_FRAME_OVERFLOW);
+	view = SG_BeliefRuntimeViewForClient(1U, 90U, 4000U);
+	CHECK(view != NULL && view->particles[0].future_at_ms == 4000U);
+	view = SG_BeliefRuntimeViewForClient(1U, 91U, 4000U);
+	CHECK(view != NULL && view->particles[0].future_at_ms == 4000U);
+	propagation_overflow = 0;
+	propagation_overflow_cell = -1;
+	CHECK(SG_BeliefRuntimeFrame(7U, 4100U) ==
+		SG_BELIEF_RUNTIME_FRAME_APPLIED);
+	view = SG_BeliefRuntimeViewForClient(1U, 90U, 4100U);
+	CHECK(view != NULL && view->particles[0].future_at_ms == 4100U);
+	view = SG_BeliefRuntimeViewForClient(1U, 91U, 4100U);
+	CHECK(view != NULL && view->particles[0].future_at_ms == 4100U);
+
+	provider_current = 0;
+	CHECK(!SG_BeliefRuntimeProviderAvailable());
+	CHECK(SG_BeliefRuntimeViewForClient(1U, 2U, 2001U) == NULL);
+	CHECK(SG_BeliefRuntimeProviderSet(NULL));
+	return failures == 0 ? 0 : 1;
 }

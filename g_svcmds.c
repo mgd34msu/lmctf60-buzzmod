@@ -6,6 +6,7 @@
 #include "slipgate/sg_rocketjump_game.h"
 #include "slipgate/sg_compound_drop_game.h"
 #include "slipgate/sg_compound_hook_game.h"
+#include "slipgate/sg_rune_compact_game.h"
 #include "ctf_file_io.h"
 
 void SpawnLoadout_ListItems(void);
@@ -465,21 +466,13 @@ void	ServerCommand (void)
 		SVCmd_POVRecord_f ();
 	else if (Q_stricmp (cmd, "rune") == 0)
 	{
-		/* SLIPGATE: generation remains the default; human evidence is an
-		 * explicit, source-bound update transaction. */
 		if (gi.argc() == 2)
 		{
-			if (Rune_Generate(level.mapname))
-				SG_LevelSetupAfterRuneWrite();
-		}
-		else if (gi.argc() == 3 &&
-		         Q_stricmp(gi.argv(2), "update") == 0)
-		{
-			if (Rune_Update(level.mapname))
+			if (SG_RuneCompactGameGenerate(level.mapname))
 				SG_LevelSetupAfterRuneWrite();
 		}
 		else
-			gi.cprintf(NULL, PRINT_HIGH, "usage: sv rune [update]\n");
+			gi.cprintf(NULL, PRINT_HIGH, "usage: sv rune\n");
 	}
 	else
 		gi.cprintf (NULL, PRINT_HIGH, "Unknown server command \"%s\"\n", cmd);

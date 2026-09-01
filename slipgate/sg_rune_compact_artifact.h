@@ -18,7 +18,8 @@
 /* This is a format safety bound, not a generation or review deadline.  It is
  * aligned with the independent readers so a hostile length cannot turn a
  * file load into an unbounded allocation. */
-#define SG_RUNE_COMPACT_ARTIFACT_MAX_IMAGE_BYTES UINT64_C(4294967296)
+#define SG_RUNE_COMPACT_ARTIFACT_MAX_IMAGE_BYTES \
+	SG_RUNE_COMPACT_WIRE_MAX_IMAGE_BYTES
 
 typedef enum sg_rune_compact_artifact_load_diagnostic_e
 {
@@ -57,6 +58,8 @@ typedef struct sg_rune_compact_artifact_load_result_s
 	sg_rune_compact_artifact_load_diagnostic_t diagnostic;
 	sg_rune_compact_artifact_load_stage_t stage;
 	sg_rune_compact_wire_error_t wire_error;
+	/* Set only after the complete image passes the canonical inspector. */
+	sg_rune_compact_wire_info_t wire_info;
 	int os_error;
 	int close_error;
 	size_t file_size;
@@ -71,9 +74,10 @@ typedef struct sg_rune_compact_artifact_loader_s
 	uint32_t state;
 	uint32_t state_inverse;
 	sg_rune_compact_wire_decoded_t *published;
+	sg_rune_compact_wire_info_t published_info;
 } sg_rune_compact_artifact_loader_t;
 
-#define SG_RUNE_COMPACT_ARTIFACT_LOADER_INITIALIZER { 0U, 0U, NULL }
+#define SG_RUNE_COMPACT_ARTIFACT_LOADER_INITIALIZER { 0 }
 
 int SG_RuneCompactArtifactLoaderInit(
 	sg_rune_compact_artifact_loader_t *loader);
@@ -83,6 +87,9 @@ void SG_RuneCompactArtifactLoaderDestroy(
 	sg_rune_compact_artifact_loader_t *loader);
 const sg_rune_compact_model_t *SG_RuneCompactArtifactLoaderSnapshot(
 	const sg_rune_compact_artifact_loader_t *loader);
+int SG_RuneCompactArtifactLoaderSnapshotInfo(
+	const sg_rune_compact_artifact_loader_t *loader,
+	sg_rune_compact_wire_info_t *info_out);
 
 /* The supplied byte span is the complete file boundary.  No bytes outside it
  * are inspected.  Identity is mandatory and is checked by the wire decoder. */
@@ -121,6 +128,23 @@ sg_rune_compact_artifact_load_result_t
 SG_RuneCompactArtifactLoaderLoadFile(
 	sg_rune_compact_artifact_loader_t *loader, const char *path,
 	const sg_rune_compact_identity_t *expected_identity);
+
+/* Production acceptance first inspects the complete checksummed image, then
+ * uses that inspected identity for the owned decode.  The caller must still
+ * authenticate identity_out against the current host authority before the
+ * model is published to runtime consumers. */
+sg_rune_compact_artifact_load_result_t
+SG_RuneCompactArtifactLoaderLoadAcceptedFile(
+	sg_rune_compact_artifact_loader_t *loader, const char *path,
+	sg_rune_compact_identity_t *identity_out);
+
+/* This is the artifact-to-sidecar handoff.  identity_out and info_out name
+ * the one checked image that was atomically published to this loader. */
+sg_rune_compact_artifact_load_result_t
+SG_RuneCompactArtifactLoaderLoadAcceptedFileWithInfo(
+	sg_rune_compact_artifact_loader_t *loader, const char *path,
+	sg_rune_compact_identity_t *identity_out,
+	sg_rune_compact_wire_info_t *info_out);
 
 sg_rune_compact_artifact_load_result_t
 SG_RuneCompactArtifactLoaderLoadFileWithOps(
@@ -235,6 +259,8 @@ typedef struct sg_rune_compact_artifact_publication_result_s
 	sg_rune_compact_artifact_publication_diagnostic_t diagnostic;
 	sg_rune_compact_artifact_publication_stage_t stage;
 	sg_rune_compact_wire_error_t wire_error;
+	/* The canonical inspected identity/checksum of the candidate image. */
+	sg_rune_compact_wire_info_t wire_info;
 	int os_error;
 	int cleanup_error;
 	size_t image_size;

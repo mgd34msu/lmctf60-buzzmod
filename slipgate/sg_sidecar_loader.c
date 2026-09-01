@@ -1,4 +1,4 @@
-/* sg_sidecar_loader.c -- one-open immutable sidecar snapshot lifecycle. */
+/* sg_sidecar_loader.c -- one-open immutable compact sidecar snapshots. */
 #include "q_shared.h"
 #include "slipgate/sg_sidecar_loader.h"
 
@@ -19,11 +19,11 @@ static void *Loader_DefaultOpen(void *context, const char *path,
 	FILE *file;
 
 	(void)context;
-	if (os_error_out)
+	if (os_error_out != NULL)
 		*os_error_out = 0;
 	errno = 0;
 	file = fopen(path, "rb");
-	if (!file && os_error_out)
+	if (file == NULL && os_error_out != NULL)
 		*os_error_out = Loader_Error(errno);
 	return file;
 }
@@ -35,11 +35,11 @@ static size_t Loader_DefaultRead(void *context, void *handle,
 	size_t count;
 
 	(void)context;
-	if (os_error_out)
+	if (os_error_out != NULL)
 		*os_error_out = 0;
 	errno = 0;
-	count = fread(output, 1, output_size, file);
-	if (count != output_size && ferror(file) && os_error_out)
+	count = fread(output, 1U, output_size, file);
+	if (count != output_size && ferror(file) && os_error_out != NULL)
 		*os_error_out = Loader_Error(errno);
 	return count;
 }
@@ -52,20 +52,20 @@ static int Loader_DefaultSeek(void *context, void *handle,
 	int status;
 
 	(void)context;
-	if (os_error_out)
+	if (os_error_out != NULL)
 		*os_error_out = 0;
 	if (offset > (size_t)LONG_MAX ||
-	    (origin != SG_SIDECAR_SEEK_BEGIN &&
-	     origin != SG_SIDECAR_SEEK_END))
+		(origin != SG_SIDECAR_SEEK_BEGIN &&
+		 origin != SG_SIDECAR_SEEK_END))
 	{
-		if (os_error_out)
+		if (os_error_out != NULL)
 			*os_error_out = EINVAL;
 		return -1;
 	}
 	whence = origin == SG_SIDECAR_SEEK_BEGIN ? SEEK_SET : SEEK_END;
 	errno = 0;
 	status = fseek(file, (long)offset, whence);
-	if (status != 0 && os_error_out)
+	if (status != 0 && os_error_out != NULL)
 		*os_error_out = Loader_Error(errno);
 	return status;
 }
@@ -77,19 +77,19 @@ static int Loader_DefaultTell(void *context, void *handle,
 	long position;
 
 	(void)context;
-	if (os_error_out)
+	if (os_error_out != NULL)
 		*os_error_out = 0;
-	if (!offset_out)
+	if (offset_out == NULL)
 	{
-		if (os_error_out)
+		if (os_error_out != NULL)
 			*os_error_out = EINVAL;
 		return -1;
 	}
 	errno = 0;
 	position = ftell(file);
-	if (position < 0)
+	if (position < 0L)
 	{
-		if (os_error_out)
+		if (os_error_out != NULL)
 			*os_error_out = Loader_Error(errno);
 		return -1;
 	}
@@ -103,11 +103,11 @@ static int Loader_DefaultClose(void *context, void *handle,
 	int status;
 
 	(void)context;
-	if (os_error_out)
+	if (os_error_out != NULL)
 		*os_error_out = 0;
 	errno = 0;
 	status = fclose(handle);
-	if (status != 0 && os_error_out)
+	if (status != 0 && os_error_out != NULL)
 		*os_error_out = Loader_Error(errno);
 	return status;
 }
@@ -126,7 +126,7 @@ static void Loader_DefaultDeallocate(void *context, void *allocation)
 
 void SG_SidecarDefaultLoadOps(sg_sidecar_load_ops_t *ops_out)
 {
-	if (!ops_out)
+	if (ops_out == NULL)
 		return;
 	memset(ops_out, 0, sizeof(*ops_out));
 	ops_out->open_read = Loader_DefaultOpen;
@@ -140,35 +140,9 @@ void SG_SidecarDefaultLoadOps(sg_sidecar_load_ops_t *ops_out)
 
 static int Loader_OpsValid(const sg_sidecar_load_ops_t *ops)
 {
-	return ops && ops->open_read && ops->read && ops->seek && ops->tell &&
-	       ops->close_file && ops->allocate && ops->deallocate;
-}
-
-sg_sidecar_diagnostic_t SG_SidecarPath(char *output, size_t output_size,
-	const char *game_directory, sg_sidecar_kind_t kind,
-	const rune_artifact_t *artifact)
-{
-	const char *extension;
-	size_t ignored_size;
-	int written;
-
-	if (output && output_size > 0U)
-		output[0] = '\0';
-	if (!output || output_size == 0U || !game_directory ||
-	    game_directory[0] == '\0' || !artifact)
-		return SCD_INVALID_ARGUMENT;
-	extension = SG_SidecarKindExtension(kind);
-	if (!extension || SG_SidecarFileSize(kind, artifact, &ignored_size) !=
-	    SCD_OK)
-		return SCD_INVALID_ARGUMENT;
-	written = snprintf(output, output_size, "%s/maps/%s%s",
-		game_directory, artifact->identity.map_name, extension);
-	if (written < 0 || (size_t)written >= output_size)
-	{
-		output[0] = '\0';
-		return SCD_PATH_TOO_LONG;
-	}
-	return SCD_OK;
+	return ops != NULL && ops->open_read != NULL && ops->read != NULL &&
+		ops->seek != NULL && ops->tell != NULL && ops->close_file != NULL &&
+		ops->allocate != NULL && ops->deallocate != NULL;
 }
 
 static sg_sidecar_load_result_t Loader_Result(void)
@@ -178,8 +152,6 @@ static sg_sidecar_load_result_t Loader_Result(void)
 	memset(&result, 0, sizeof(result));
 	result.diagnostic = SCD_INVALID_ARGUMENT;
 	result.stage = SCS_ARGUMENT;
-	result.plane = SG_SIDECAR_INDEX_NONE;
-	result.index = SG_SIDECAR_INDEX_NONE;
 	return result;
 }
 
@@ -190,15 +162,13 @@ static sg_sidecar_stage_t Loader_InspectStage(
 	{
 	case SCD_BAD_HEADER_CRC:
 		return SCS_HEADER_CRC;
-	case SCD_NONZERO_RESERVED:
-	case SCD_BAD_SHAPE:
-	case SCD_BAD_COUNTS:
-	case SCD_BAD_PAYLOAD_SIZE:
-		return SCS_SHAPE;
-	case SCD_RUNE_PAYLOAD_MISMATCH:
-	case SCD_ACTION_CONTRACT_MISMATCH:
-	case SCD_RUNE_HEADER_MISMATCH:
+	case SCD_RUNE_VERSION_MISMATCH:
+	case SCD_RUNE_SCHEMA_MISMATCH:
+	case SCD_RUNE_IMAGE_MISMATCH:
+	case SCD_RUNE_CHECKSUM_MISMATCH:
+	case SCD_RUNE_IDENTITY_MISMATCH:
 		return SCS_RUNE_BINDING;
+	case SCD_BAD_PAYLOAD_SIZE:
 	case SCD_BAD_FILE_SIZE:
 		return SCS_FILE_SIZE;
 	default:
@@ -211,33 +181,13 @@ static sg_sidecar_stage_t Loader_DecodeStage(
 {
 	if (diagnostic == SCD_BAD_PAYLOAD_CRC)
 		return SCS_PAYLOAD_CRC;
-	if (diagnostic == SCD_BAD_PAYLOAD_VALUE)
-		return SCS_PAYLOAD_VALUE;
 	return Loader_InspectStage(diagnostic);
 }
 
-static int Loader_ArtifactSeedMarksValid(sg_sidecar_kind_t kind,
-	const rune_artifact_t *artifact, const uint8_t *marks,
-	size_t mark_capacity)
-{
-	uint32_t seed;
-
-	if (kind != SG_SIDECAR_DEFENSE && kind != SG_SIDECAR_DANGER)
-		return 1;
-	if (!artifact || !marks || mark_capacity < artifact->num_seeds)
-		return 0;
-	for (seed = 0U; seed < artifact->num_seeds; seed++)
-		if (marks[seed] > 1U)
-			return 0;
-	return 1;
-}
-
 sg_sidecar_load_result_t SG_SidecarLoadFile(
-	const char *game_directory, sg_sidecar_kind_t kind,
-	const rune_artifact_t *artifact,
-	const uint8_t *live_seed_marks, size_t live_seed_capacity,
-	unsigned char **payload_out, size_t *payload_size_out,
-	const sg_sidecar_load_ops_t *provided_ops)
+	const char *path, sg_sidecar_kind_t kind,
+	const sg_rune_compact_wire_info_t *info, unsigned char **payload_out,
+	size_t *payload_size_out, const sg_sidecar_load_ops_t *provided_ops)
 {
 	sg_sidecar_load_result_t result = Loader_Result();
 	sg_sidecar_load_ops_t default_ops;
@@ -247,66 +197,53 @@ sg_sidecar_load_result_t SG_SidecarLoadFile(
 	unsigned char trailing;
 	unsigned char *snapshot = NULL;
 	void *file = NULL;
-	char path[MAX_OSPATH];
-	size_t expected_file_size = 0;
+	size_t file_size;
 	size_t expected_payload_size;
 	size_t count;
-	size_t decoded_size = 0;
+	size_t decoded_size = 0U;
 	int os_error = 0;
 	int close_status;
 	int primary_failure = 0;
 
-	if (!ops)
+	if (payload_out != NULL)
+		*payload_out = NULL;
+	if (payload_size_out != NULL)
+		*payload_size_out = 0U;
+	if (path == NULL || path[0] == '\0' || info == NULL ||
+		payload_out == NULL || payload_size_out == NULL)
+		return result;
+	if (ops == NULL)
 	{
 		SG_SidecarDefaultLoadOps(&default_ops);
 		ops = &default_ops;
 	}
-	if (!game_directory || !artifact || !payload_out || !payload_size_out ||
-	    !Loader_OpsValid(ops) ||
-	    SG_SidecarFileSize(kind, artifact, &expected_file_size) != SCD_OK ||
-	    expected_file_size < SG_SIDECAR_HEADER_BYTES)
+	if (!Loader_OpsValid(ops))
 		return result;
-	expected_payload_size = expected_file_size - SG_SIDECAR_HEADER_BYTES;
-	result.expected_file_size = expected_file_size;
-	if (!Loader_ArtifactSeedMarksValid(kind, artifact, live_seed_marks,
-	        live_seed_capacity))
-		return result;
-	result.diagnostic = SG_SidecarPath(path, sizeof(path), game_directory,
-		kind, artifact);
-	if (result.diagnostic != SCD_OK)
-	{
-		result.stage = SCS_PATH;
-		return result;
-	}
 
 	os_error = 0;
 	file = ops->open_read(ops->context, path, &os_error);
-	if (!file)
+	if (file == NULL)
 	{
 		result.os_error = Loader_Error(os_error);
-		result.diagnostic = result.os_error == ENOENT
-			? SCD_ABSENT : SCD_IO_ERROR;
+		result.diagnostic = result.os_error == ENOENT ? SCD_ABSENT : SCD_IO_ERROR;
 		result.stage = SCS_OPEN;
 		return result;
 	}
 
 	os_error = 0;
-	count = ops->read(ops->context, file, header, sizeof(header),
-		&os_error);
+	count = ops->read(ops->context, file, header, sizeof(header), &os_error);
 	result.bytes_read = count;
 	if (count != sizeof(header))
 	{
 		result.os_error = os_error;
-		result.diagnostic = os_error != 0
-			? SCD_IO_ERROR : SCD_BAD_HEADER_SIZE;
+		result.diagnostic = os_error != 0 ? SCD_IO_ERROR : SCD_BAD_HEADER_SIZE;
 		result.stage = SCS_HEADER_READ;
 		primary_failure = 1;
 		goto close_file;
 	}
-
 	os_error = 0;
-	if (ops->seek(ops->context, file, SG_SIDECAR_SEEK_END, 0,
-	    &os_error) != 0)
+	if (ops->seek(ops->context, file, SG_SIDECAR_SEEK_END, 0U,
+		&os_error) != 0)
 	{
 		result.diagnostic = SCD_IO_ERROR;
 		result.stage = SCS_FILE_SIZE;
@@ -316,7 +253,7 @@ sg_sidecar_load_result_t SG_SidecarLoadFile(
 	}
 	os_error = 0;
 	if (ops->tell(ops->context, file, &result.observed_file_size,
-	    &os_error) != 0)
+		&os_error) != 0)
 	{
 		result.diagnostic = SCD_IO_ERROR;
 		result.stage = SCS_FILE_SIZE;
@@ -325,16 +262,19 @@ sg_sidecar_load_result_t SG_SidecarLoadFile(
 		goto close_file;
 	}
 	result.diagnostic = SG_SidecarInspect(header, sizeof(header),
-		result.observed_file_size, kind, artifact, &inspected);
+		result.observed_file_size, kind, info, &inspected);
 	if (result.diagnostic != SCD_OK)
 	{
 		result.stage = Loader_InspectStage(result.diagnostic);
 		primary_failure = 1;
 		goto close_file;
 	}
+	file_size = SG_SIDECAR_HEADER_BYTES + (size_t)inspected.payload_bytes;
+	result.expected_file_size = file_size;
+	expected_payload_size = (size_t)inspected.payload_bytes;
 	os_error = 0;
-	if (ops->seek(ops->context, file, SG_SIDECAR_SEEK_BEGIN,
-	    0, &os_error) != 0)
+	if (ops->seek(ops->context, file, SG_SIDECAR_SEEK_BEGIN, 0U,
+		&os_error) != 0)
 	{
 		result.diagnostic = SCD_IO_ERROR;
 		result.stage = SCS_FILE_SIZE;
@@ -343,8 +283,8 @@ sg_sidecar_load_result_t SG_SidecarLoadFile(
 		goto close_file;
 	}
 
-	snapshot = ops->allocate(ops->context, expected_file_size);
-	if (!snapshot)
+	snapshot = ops->allocate(ops->context, file_size);
+	if (snapshot == NULL)
 	{
 		result.diagnostic = SCD_ALLOCATION_FAILED;
 		result.stage = SCS_ALLOCATION;
@@ -352,14 +292,12 @@ sg_sidecar_load_result_t SG_SidecarLoadFile(
 		goto close_file;
 	}
 	os_error = 0;
-	count = ops->read(ops->context, file, snapshot, expected_file_size,
-		&os_error);
+	count = ops->read(ops->context, file, snapshot, file_size, &os_error);
 	result.bytes_read += count;
-	if (count != expected_file_size)
+	if (count != file_size)
 	{
 		result.os_error = os_error;
-		result.diagnostic = os_error != 0
-			? SCD_IO_ERROR : SCD_BAD_FILE_SIZE;
+		result.diagnostic = os_error != 0 ? SCD_IO_ERROR : SCD_BAD_FILE_SIZE;
 		result.stage = SCS_PAYLOAD_READ;
 		primary_failure = 1;
 		goto close_file;
@@ -371,14 +309,13 @@ sg_sidecar_load_result_t SG_SidecarLoadFile(
 		primary_failure = 1;
 		goto close_file;
 	}
-	/* A same-handle EOF probe rejects growth after the size preflight. */
+	/* A same-handle EOF probe catches growth after the size preflight. */
 	os_error = 0;
-	count = ops->read(ops->context, file, &trailing, 1, &os_error);
-	if (count != 0 || os_error != 0)
+	count = ops->read(ops->context, file, &trailing, 1U, &os_error);
+	if (count != 0U || os_error != 0)
 	{
 		result.os_error = os_error;
-		result.diagnostic = os_error != 0
-			? SCD_IO_ERROR : SCD_BAD_FILE_SIZE;
+		result.diagnostic = os_error != 0 ? SCD_IO_ERROR : SCD_BAD_FILE_SIZE;
 		result.stage = SCS_PAYLOAD_READ;
 		primary_failure = 1;
 		goto close_file;
@@ -401,23 +338,16 @@ close_file:
 	}
 	if (primary_failure)
 	{
-		if (snapshot)
+		if (snapshot != NULL)
 			ops->deallocate(ops->context, snapshot);
 		return result;
 	}
 
-	result.diagnostic = SG_SidecarDecode(snapshot, expected_file_size,
-		kind, artifact, live_seed_marks, live_seed_capacity, snapshot,
-		expected_payload_size, &decoded_size);
+	result.diagnostic = SG_SidecarDecode(snapshot, file_size, kind, info,
+		snapshot, expected_payload_size, &decoded_size);
 	if (result.diagnostic != SCD_OK)
 	{
 		result.stage = Loader_DecodeStage(result.diagnostic);
-		if (result.diagnostic == SCD_BAD_PAYLOAD_VALUE)
-			(void)SG_SidecarValidatePayload(kind, artifact,
-				live_seed_marks, live_seed_capacity,
-				snapshot + SG_SIDECAR_HEADER_BYTES,
-				expected_payload_size, &result.plane,
-				&result.index);
 		ops->deallocate(ops->context, snapshot);
 		return result;
 	}

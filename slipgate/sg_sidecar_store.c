@@ -1,4 +1,4 @@
-/* sg_sidecar_store.c -- failure-atomic authenticated sidecar replacement. */
+/* sg_sidecar_store.c -- failure-atomic compact sidecar replacement. */
 #ifndef _WIN32
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
@@ -7,7 +7,6 @@
 
 #include "q_shared.h"
 #include "slipgate/sg_crc32.h"
-#include "slipgate/sg_sidecar_loader.h"
 #include "slipgate/sg_sidecar_store.h"
 
 #include <errno.h>
@@ -35,30 +34,17 @@ static uint64_t Store_DefaultTempNonce(void *context)
 	uint64_t value;
 	uint64_t sequence;
 	time_t wall;
-	clock_t cpu;
 
 	(void)context;
 	wall = time(NULL);
-	cpu = clock();
 	sequence = ++sg_store_nonce_sequence;
-	value = (uint64_t)(uintmax_t)wall;
-	value ^= (uint64_t)(uintmax_t)cpu << 17;
+	value = (uint64_t)(uintmax_t)wall ^ sequence;
 #ifdef _WIN32
 	value ^= (uint64_t)(unsigned int)_getpid() << 32;
 #else
 	value ^= (uint64_t)(unsigned int)getpid() << 32;
 #endif
-	value ^= (uint64_t)(uintptr_t)&sg_store_nonce_sequence;
-	value ^= sequence * UINT64_C(0x9e3779b97f4a7c15);
-	/* SplitMix64 finalization turns the independent low-entropy sources into a
-	 * well-distributed transaction token.  This is collision resistance for
-	 * crash recovery, not a security boundary; O_EXCL remains authoritative. */
-	value ^= value >> 30;
-	value *= UINT64_C(0xbf58476d1ce4e5b9);
-	value ^= value >> 27;
-	value *= UINT64_C(0x94d049bb133111eb);
-	value ^= value >> 31;
-	return value ? value : sequence;
+	return value != 0U ? value : sequence;
 }
 
 static int Store_Error(int reported)
@@ -68,16 +54,16 @@ static int Store_Error(int reported)
 
 static void *Store_HandleFromFD(int fd)
 {
-	return (void *)((uintptr_t)(unsigned int)fd + (uintptr_t)1);
+	return (void *)((uintptr_t)(unsigned int)fd + (uintptr_t)1U);
 }
 
 static int Store_HandleFD(void *handle)
 {
 	uintptr_t value = (uintptr_t)handle;
 
-	if (value == 0 || value - (uintptr_t)1 > (uintptr_t)INT_MAX)
+	if (value == 0U || value - (uintptr_t)1U > (uintptr_t)INT_MAX)
 		return -1;
-	return (int)(value - (uintptr_t)1);
+	return (int)(value - (uintptr_t)1U);
 }
 
 static void *Store_DefaultOpenExclusive(void *context, const char *path,
@@ -86,7 +72,7 @@ static void *Store_DefaultOpenExclusive(void *context, const char *path,
 	int fd;
 
 	(void)context;
-	if (os_error_out)
+	if (os_error_out != NULL)
 		*os_error_out = 0;
 	errno = 0;
 #ifdef _WIN32
@@ -101,7 +87,7 @@ static void *Store_DefaultOpenExclusive(void *context, const char *path,
 #endif
 	if (fd < 0)
 	{
-		if (os_error_out)
+		if (os_error_out != NULL)
 			*os_error_out = Store_Error(errno);
 		return NULL;
 	}
@@ -112,17 +98,17 @@ static size_t Store_DefaultWrite(void *context, void *handle,
 	const unsigned char *data, size_t data_size, int *os_error_out)
 {
 	int fd = Store_HandleFD(handle);
-	size_t request = data_size > (size_t)INT_MAX
-		? (size_t)INT_MAX : data_size;
+	size_t request = data_size > (size_t)INT_MAX ?
+		(size_t)INT_MAX : data_size;
 
 	(void)context;
-	if (os_error_out)
+	if (os_error_out != NULL)
 		*os_error_out = 0;
-	if (fd < 0 || (!data && data_size != 0))
+	if (fd < 0 || (data == NULL && data_size != 0U))
 	{
-		if (os_error_out)
+		if (os_error_out != NULL)
 			*os_error_out = EINVAL;
-		return 0;
+		return 0U;
 	}
 #ifdef _WIN32
 	{
@@ -132,9 +118,9 @@ static size_t Store_DefaultWrite(void *context, void *handle,
 		count = _write(fd, data, (unsigned int)request);
 		if (count < 0)
 		{
-			if (os_error_out)
+			if (os_error_out != NULL)
 				*os_error_out = Store_Error(errno);
-			return 0;
+			return 0U;
 		}
 		return (size_t)count;
 	}
@@ -149,25 +135,23 @@ static size_t Store_DefaultWrite(void *context, void *handle,
 		} while (count < 0 && errno == EINTR);
 		if (count < 0)
 		{
-			if (os_error_out)
+			if (os_error_out != NULL)
 				*os_error_out = Store_Error(errno);
-			return 0;
+			return 0U;
 		}
 		return (size_t)count;
 	}
 #endif
 }
 
-/* The default descriptor path is unbuffered; the explicit flush stage remains
- * injectable and orders the transaction uniformly with buffered hosts. */
 static int Store_DefaultFlush(void *context, void *handle, int *os_error_out)
 {
 	(void)context;
-	if (os_error_out)
+	if (os_error_out != NULL)
 		*os_error_out = 0;
 	if (Store_HandleFD(handle) < 0)
 	{
-		if (os_error_out)
+		if (os_error_out != NULL)
 			*os_error_out = EINVAL;
 		return -1;
 	}
@@ -181,11 +165,11 @@ static int Store_DefaultSyncFile(void *context, void *handle,
 	int status;
 
 	(void)context;
-	if (os_error_out)
+	if (os_error_out != NULL)
 		*os_error_out = 0;
 	if (fd < 0)
 	{
-		if (os_error_out)
+		if (os_error_out != NULL)
 			*os_error_out = EINVAL;
 		return -1;
 	}
@@ -195,7 +179,7 @@ static int Store_DefaultSyncFile(void *context, void *handle,
 #else
 	status = fsync(fd);
 #endif
-	if (status != 0 && os_error_out)
+	if (status != 0 && os_error_out != NULL)
 		*os_error_out = Store_Error(errno);
 	return status;
 }
@@ -207,11 +191,11 @@ static int Store_DefaultClose(void *context, void *handle,
 	int status;
 
 	(void)context;
-	if (os_error_out)
+	if (os_error_out != NULL)
 		*os_error_out = 0;
 	if (fd < 0)
 	{
-		if (os_error_out)
+		if (os_error_out != NULL)
 			*os_error_out = EINVAL;
 		return -1;
 	}
@@ -221,7 +205,7 @@ static int Store_DefaultClose(void *context, void *handle,
 #else
 	status = close(fd);
 #endif
-	if (status != 0 && os_error_out)
+	if (status != 0 && os_error_out != NULL)
 		*os_error_out = Store_Error(errno);
 	return status;
 }
@@ -230,13 +214,13 @@ static int Store_DefaultReplace(void *context, const char *temporary_path,
 	const char *destination_path, int *os_error_out)
 {
 	(void)context;
-	if (os_error_out)
+	if (os_error_out != NULL)
 		*os_error_out = 0;
 #ifdef _WIN32
 	if (!MoveFileExA(temporary_path, destination_path,
 		MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
 	{
-		if (os_error_out)
+		if (os_error_out != NULL)
 			*os_error_out = Store_Error((int)GetLastError());
 		return -1;
 	}
@@ -245,7 +229,7 @@ static int Store_DefaultReplace(void *context, const char *temporary_path,
 	errno = 0;
 	if (rename(temporary_path, destination_path) != 0)
 	{
-		if (os_error_out)
+		if (os_error_out != NULL)
 			*os_error_out = Store_Error(errno);
 		return -1;
 	}
@@ -257,10 +241,9 @@ static int Store_DefaultSyncDirectory(void *context,
 	const char *directory_path, int *os_error_out)
 {
 	(void)context;
-	if (os_error_out)
+	if (os_error_out != NULL)
 		*os_error_out = 0;
 #ifdef _WIN32
-	/* Store_DefaultReplace's MOVEFILE_WRITE_THROUGH is the Windows barrier. */
 	(void)directory_path;
 	return 0;
 #else
@@ -280,7 +263,7 @@ static int Store_DefaultSyncDirectory(void *context,
 			);
 		if (fd < 0)
 		{
-			if (os_error_out)
+			if (os_error_out != NULL)
 				*os_error_out = Store_Error(errno);
 			return -1;
 		}
@@ -294,7 +277,7 @@ static int Store_DefaultSyncDirectory(void *context,
 			status = -1;
 			saved_error = Store_Error(errno);
 		}
-		if (status != 0 && os_error_out)
+		if (status != 0 && os_error_out != NULL)
 			*os_error_out = saved_error;
 		return status;
 	}
@@ -307,7 +290,7 @@ static int Store_DefaultRemove(void *context, const char *path,
 	int status;
 
 	(void)context;
-	if (os_error_out)
+	if (os_error_out != NULL)
 		*os_error_out = 0;
 	errno = 0;
 #ifdef _WIN32
@@ -315,14 +298,14 @@ static int Store_DefaultRemove(void *context, const char *path,
 #else
 	status = unlink(path);
 #endif
-	if (status != 0 && os_error_out)
+	if (status != 0 && os_error_out != NULL)
 		*os_error_out = Store_Error(errno);
 	return status;
 }
 
 void SG_SidecarDefaultStoreOps(sg_sidecar_store_ops_t *ops_out)
 {
-	if (!ops_out)
+	if (ops_out == NULL)
 		return;
 	memset(ops_out, 0, sizeof(*ops_out));
 	ops_out->temp_nonce = Store_DefaultTempNonce;
@@ -338,9 +321,11 @@ void SG_SidecarDefaultStoreOps(sg_sidecar_store_ops_t *ops_out)
 
 static int Store_OpsValid(const sg_sidecar_store_ops_t *ops)
 {
-	return ops && ops->temp_nonce && ops->open_exclusive && ops->write && ops->flush &&
-	       ops->sync_file && ops->close_file && ops->replace_file &&
-	       ops->sync_directory && ops->remove_file;
+	return ops != NULL && ops->temp_nonce != NULL &&
+		ops->open_exclusive != NULL && ops->write != NULL &&
+		ops->flush != NULL && ops->sync_file != NULL &&
+		ops->close_file != NULL && ops->replace_file != NULL &&
+		ops->sync_directory != NULL && ops->remove_file != NULL;
 }
 
 static sg_sidecar_store_result_t Store_Result(void)
@@ -350,8 +335,6 @@ static sg_sidecar_store_result_t Store_Result(void)
 	memset(&result, 0, sizeof(result));
 	result.diagnostic = SCD_INVALID_ARGUMENT;
 	result.stage = SCS_ARGUMENT;
-	result.plane = SG_SIDECAR_INDEX_NONE;
-	result.index = SG_SIDECAR_INDEX_NONE;
 	return result;
 }
 
@@ -362,15 +345,13 @@ static sg_sidecar_stage_t Store_InspectStage(
 	{
 	case SCD_BAD_HEADER_CRC:
 		return SCS_HEADER_CRC;
-	case SCD_NONZERO_RESERVED:
-	case SCD_BAD_SHAPE:
-	case SCD_BAD_COUNTS:
-	case SCD_BAD_PAYLOAD_SIZE:
-		return SCS_SHAPE;
-	case SCD_RUNE_PAYLOAD_MISMATCH:
-	case SCD_ACTION_CONTRACT_MISMATCH:
-	case SCD_RUNE_HEADER_MISMATCH:
+	case SCD_RUNE_VERSION_MISMATCH:
+	case SCD_RUNE_SCHEMA_MISMATCH:
+	case SCD_RUNE_IMAGE_MISMATCH:
+	case SCD_RUNE_CHECKSUM_MISMATCH:
+	case SCD_RUNE_IDENTITY_MISMATCH:
 		return SCS_RUNE_BINDING;
+	case SCD_BAD_PAYLOAD_SIZE:
 	case SCD_BAD_FILE_SIZE:
 		return SCS_FILE_SIZE;
 	default:
@@ -384,15 +365,29 @@ static int Store_DirectoryPath(char *output, size_t output_size,
 	const char *separator;
 	size_t length;
 
-	if (output && output_size > 0)
+	if (output != NULL && output_size > 0U)
 		output[0] = '\0';
-	if (!output || output_size == 0 || !destination)
+	if (output == NULL || output_size == 0U || destination == NULL)
 		return 0;
 	separator = strrchr(destination, '/');
-	if (!separator)
-		return 0;
+	if (separator == NULL)
+	{
+		if (output_size < 2U)
+			return 0;
+		output[0] = '.';
+		output[1] = '\0';
+		return 1;
+	}
+	if (separator == destination)
+	{
+		if (output_size < 2U)
+			return 0;
+		output[0] = '/';
+		output[1] = '\0';
+		return 1;
+	}
 	length = (size_t)(separator - destination);
-	if (length == 0 || length >= output_size)
+	if (length >= output_size)
 		return 0;
 	memcpy(output, destination, length);
 	output[length] = '\0';
@@ -404,10 +399,10 @@ static int Store_TempPath(char *output, size_t output_size,
 {
 	int written;
 
-	if (output && output_size > 0)
+	if (output != NULL && output_size > 0U)
 		output[0] = '\0';
-	if (!output || output_size == 0 || !destination ||
-	    attempt >= SG_SIDECAR_STORE_TEMP_ATTEMPTS)
+	if (output == NULL || output_size == 0U || destination == NULL ||
+		attempt >= SG_SIDECAR_STORE_TEMP_ATTEMPTS)
 		return 0;
 	written = snprintf(output, output_size, "%s.tmp.%016llx.%02u",
 		destination, (unsigned long long)nonce, attempt);
@@ -424,8 +419,8 @@ static void Store_Cleanup(sg_sidecar_store_result_t *result,
 {
 	int os_error = 0;
 
-	if (!result || !ops || !temporary_path || !result->temp_created ||
-	    result->replacement_complete)
+	if (result == NULL || ops == NULL || temporary_path == NULL ||
+		!result->temp_created || result->replacement_complete)
 		return;
 	result->cleanup_attempted = 1;
 	if (ops->remove_file(ops->context, temporary_path, &os_error) != 0)
@@ -437,9 +432,8 @@ static void Store_Cleanup(sg_sidecar_store_result_t *result,
 }
 
 sg_sidecar_store_result_t SG_SidecarStoreFile(
-	const char *game_directory, sg_sidecar_kind_t kind,
-	const rune_artifact_t *artifact,
-	const uint8_t *live_seed_marks, size_t live_seed_capacity,
+	const char *destination, sg_sidecar_kind_t kind,
+	const sg_rune_compact_wire_info_t *info,
 	const unsigned char *encoded, size_t encoded_size,
 	sg_sidecar_store_revalidate_fn revalidate, void *revalidate_context,
 	const sg_sidecar_store_ops_t *provided_ops)
@@ -448,13 +442,12 @@ sg_sidecar_store_result_t SG_SidecarStoreFile(
 	sg_sidecar_store_ops_t default_ops;
 	const sg_sidecar_store_ops_t *ops = provided_ops;
 	sg_sidecar_header_t inspected;
-	char destination[MAX_OSPATH];
 	char directory[MAX_OSPATH];
 	char temporary[MAX_OSPATH];
 	void *file = NULL;
-	size_t offset = 0;
+	size_t offset = 0U;
 	size_t count;
-	uint32_t payload_crc = 0;
+	uint32_t payload_crc = 0U;
 	uint64_t temp_nonce;
 	unsigned int attempt;
 	int os_error = 0;
@@ -462,30 +455,23 @@ sg_sidecar_store_result_t SG_SidecarStoreFile(
 	int close_status;
 	sg_sidecar_revalidate_t authority;
 
-	if (!ops)
+	if (ops == NULL)
 	{
 		SG_SidecarDefaultStoreOps(&default_ops);
 		ops = &default_ops;
 	}
-	if (!game_directory || !artifact || !encoded || !revalidate ||
-	    !Store_OpsValid(ops) ||
-	    SG_SidecarFileSize(kind, artifact, &result.expected_file_size) !=
-	    SCD_OK)
+	if (destination == NULL || destination[0] == '\0' || info == NULL ||
+		encoded == NULL || revalidate == NULL || !Store_OpsValid(ops) ||
+		encoded_size < SG_SIDECAR_HEADER_BYTES)
 		return result;
-	if (encoded_size != result.expected_file_size ||
-	    encoded_size < SG_SIDECAR_HEADER_BYTES)
-	{
-		result.diagnostic = SCD_BAD_FILE_SIZE;
-		result.stage = SCS_FILE_SIZE;
-		return result;
-	}
-	result.diagnostic = SG_SidecarInspect(encoded,
-		SG_SIDECAR_HEADER_BYTES, encoded_size, kind, artifact, &inspected);
+	result.diagnostic = SG_SidecarInspect(encoded, SG_SIDECAR_HEADER_BYTES,
+		encoded_size, kind, info, &inspected);
 	if (result.diagnostic != SCD_OK)
 	{
 		result.stage = Store_InspectStage(result.diagnostic);
 		return result;
 	}
+	result.expected_file_size = encoded_size;
 	if (!SG_CRC32Buffer(encoded + SG_SIDECAR_HEADER_BYTES,
 		inspected.payload_bytes, &payload_crc))
 	{
@@ -499,27 +485,14 @@ sg_sidecar_store_result_t SG_SidecarStoreFile(
 		result.stage = SCS_PAYLOAD_CRC;
 		return result;
 	}
-	result.diagnostic = SG_SidecarValidatePayload(kind, artifact,
-		live_seed_marks, live_seed_capacity,
-		encoded + SG_SIDECAR_HEADER_BYTES, inspected.payload_bytes,
-		&result.plane, &result.index);
-	if (result.diagnostic != SCD_OK)
+	if (!Store_DirectoryPath(directory, sizeof(directory), destination))
 	{
-		result.stage = result.diagnostic == SCD_BAD_PAYLOAD_VALUE
-			? SCS_PAYLOAD_VALUE : SCS_ARGUMENT;
-		return result;
-	}
-	result.diagnostic = SG_SidecarPath(destination, sizeof(destination),
-		game_directory, kind, artifact);
-	if (result.diagnostic != SCD_OK)
-	{
+		result.diagnostic = SCD_PATH_TOO_LONG;
 		result.stage = SCS_PATH;
 		return result;
 	}
 	temp_nonce = ops->temp_nonce(ops->context);
-	if (!Store_DirectoryPath(directory, sizeof(directory), destination) ||
-	    !Store_TempPath(temporary, sizeof(temporary), destination,
-		temp_nonce,
+	if (!Store_TempPath(temporary, sizeof(temporary), destination, temp_nonce,
 		SG_SIDECAR_STORE_TEMP_ATTEMPTS - 1U))
 	{
 		result.diagnostic = SCD_PATH_TOO_LONG;
@@ -527,7 +500,7 @@ sg_sidecar_store_result_t SG_SidecarStoreFile(
 		return result;
 	}
 
-	for (attempt = 0; attempt < SG_SIDECAR_STORE_TEMP_ATTEMPTS; attempt++)
+	for (attempt = 0U; attempt < SG_SIDECAR_STORE_TEMP_ATTEMPTS; attempt++)
 	{
 		if (!Store_TempPath(temporary, sizeof(temporary), destination,
 			temp_nonce, attempt))
@@ -539,7 +512,7 @@ sg_sidecar_store_result_t SG_SidecarStoreFile(
 		os_error = 0;
 		file = ops->open_exclusive(ops->context, temporary, &os_error);
 		result.temp_attempts++;
-		if (file)
+		if (file != NULL)
 			break;
 		if (os_error != EEXIST)
 		{
@@ -549,7 +522,7 @@ sg_sidecar_store_result_t SG_SidecarStoreFile(
 			return result;
 		}
 	}
-	if (!file)
+	if (file == NULL)
 	{
 		result.diagnostic = SCD_TEMP_EXHAUSTED;
 		result.stage = SCS_OPEN;
@@ -573,7 +546,7 @@ sg_sidecar_store_result_t SG_SidecarStoreFile(
 		}
 		result.bytes_written += count;
 		offset += count;
-		if (os_error != 0 || count == 0)
+		if (os_error != 0 || count == 0U)
 		{
 			result.diagnostic = SCD_IO_ERROR;
 			result.stage = SCS_WRITE;
@@ -626,7 +599,7 @@ sg_sidecar_store_result_t SG_SidecarStoreFile(
 	}
 
 	os_error = 0;
-	authority = revalidate(revalidate_context, artifact, &os_error);
+	authority = revalidate(revalidate_context, info, &os_error);
 	if (authority != SG_SIDECAR_REVALIDATE_MATCH)
 	{
 		result.stage = SCS_RECHECK;
@@ -649,11 +622,10 @@ sg_sidecar_store_result_t SG_SidecarStoreFile(
 		return result;
 	}
 
-	/* No filesystem or authority operation may occur between the successful
-	 * revalidation above and this atomic replacement. */
+	/* No filesystem or authority operation occurs between this match and
+	 * atomic replacement. */
 	os_error = 0;
-	if (ops->replace_file(ops->context, temporary, destination,
-		&os_error) != 0)
+	if (ops->replace_file(ops->context, temporary, destination, &os_error) != 0)
 	{
 		result.diagnostic = SCD_IO_ERROR;
 		result.stage = SCS_RENAME;

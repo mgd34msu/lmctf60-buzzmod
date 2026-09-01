@@ -112,8 +112,8 @@ static qboolean ThinkMissionHold(const sg_bot_t *bot, const sg_think_t *tc,
  * 0 centred on +x and buckets advancing counter-clockwise (E NE N NW W SW
  * S SE). The fold into 0..2pi happens BEFORE the scale for the same
  * reason Heading_Quantize (SG_Rune().c) folds -- a negative angle scaled and
- * truncated is not a wrap. escapepriors.py bearing_bucket() is this
- * function; the two must agree or the mined buckets name other exits.
+ * truncated is not a wrap. The producer and consumer must agree or the mined
+ * buckets name other exits.
  */
 static int SG_Bearing8(float dx, float dy)
 {

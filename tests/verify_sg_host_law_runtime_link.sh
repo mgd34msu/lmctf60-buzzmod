@@ -7,7 +7,7 @@ if [ "$#" -ne 1 ] || [ ! -r "$1" ]; then
 fi
 
 module=$1
-runtime_forbidden='SG_(ConfigurationAudit|ConfigurationSemanticsAudit|BspCompletenessProve|HostLawConstruction(ConfigurationAudit|SemanticsAudit|CompletenessProve))|isl_|__gmp'
+runtime_forbidden='SG_(Configuration|StaticVisibility|CellPhase|BspCompletenessProve|HostLawConstruction(ConfigurationAudit|SemanticsAudit|CompletenessProve)|RuneCompact(Builder|Generation|Geometry|ResponsePartition|Mechanisms|StaticMaterializer|MovementFields|WeaponRelations|WeaponField|Composer))|isl_|__gmp'
 
 ldd_output=$(ldd -r "$module" 2>&1) || {
 	printf '%s\n' "$ldd_output" >&2

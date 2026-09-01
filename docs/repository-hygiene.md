@@ -41,15 +41,13 @@ and `Makefile`. It excludes generated files and `tests/support/` imports. It doe
 not classify the root Quake II and LMCTF source or vendored SQLite as new project
 code.
 
-`tools/deslop_audit.py` reads `tools/source-size-budget.json`. Eight hundred
-lines is a review threshold, not a hard module limit. The audit reports how many
-authored files exceed that threshold without failing them. An authored file may
-contain at most 9,999 lines; the audit rejects files with 10,000 lines or more.
+`tools/source-size-budget.json` records reviewed line-length exceptions. Eight
+hundred lines is a review threshold, not a hard module limit. An authored file
+may contain at most 9,999 lines.
 
-The audit separately rejects lines over 100 columns in files that have no
-reviewed exception. Do not add unrelated overlong lines to an existing
-exception. Lower a stale allowance when a file has fewer overlong lines. Run
-`make deslop-test` with either Make dialect.
+The build rejects lines over 100 columns in files that have no reviewed
+exception. Do not add unrelated overlong lines to an existing exception. Lower
+a stale allowance when a file has fewer overlong lines.
 
 Split source at an ownership or lifecycle boundary. Keep the public interface in
 one header. Do not use arbitrary line ranges or numbered files as boundaries.
@@ -63,7 +61,7 @@ explicit data-provenance decision.
 
 Do not commit:
 
-- module objects, shared libraries, host-test binaries, or Python bytecode;
+- module objects, shared libraries, or host-test binaries;
 - temporary game roots, GL caches, launcher state, active locks, and stop files;
 - campaign, wave, auxiliary, RUNE-generation, or one-off server logs;
 - unaccepted demos, generated RUNEs, debugger scripts, or local diagnostics.

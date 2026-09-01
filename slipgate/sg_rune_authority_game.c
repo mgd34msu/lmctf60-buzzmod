@@ -93,7 +93,6 @@ qboolean SG_RuneAuthorityMatchesArtifact(
 {
 	return authority && authority->identity_status == SG_IDENTITY_OK &&
 	       artifact && artifact->magic == RUNE_ARTIFACT_MAGIC &&
-	       SG_RuneRouteContractValid(artifact->route_contract) &&
 	       artifact->action_contract_crc32 == SG_RUNE_ACTION_CONTRACT_CRC32 &&
 	       artifact->mechanism_contract_crc32 ==
 	           SG_RUNE_MECHANISM_CONTRACT_CRC32 &&

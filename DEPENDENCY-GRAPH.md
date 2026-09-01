@@ -21,9 +21,13 @@ intermediate version of the target RUNE. They are a rejected second navigation
 representation.
 
 The replacement connects `sv rune` directly to one compact BSP-derived field
-builder. It deletes legacy seed/link/action ownership and the unused exhaustive
-phase, dynamics, refinement, and proof-provider paths after their useful host,
-geometry, weapon-law, publication, and runtime-service pieces migrate.
+builder in an unshipped offline generator game module. The shipped Linux and
+Windows game modules retain only the compact loader/runtime and fail closed on
+generation; corpus staging installs the generator module only for the `sv rune`
+pass, then restores the runtime module for cold load. The split deletes legacy
+seed/link/action ownership and the unused exhaustive phase, dynamics,
+refinement, and proof-provider paths after their useful host, geometry,
+weapon-law, publication, and runtime-service pieces migrate.
 
 ## Core construction graph
 
@@ -165,15 +169,14 @@ wire contract
     +-- hostile-input validation
     +-- fail-closed loader
     +-- atomic publication
-    +-- independent GNU C reader
-    +-- independent Make C reader
-    +-- independent Python reader
+    +-- one production C wire inspector
+    +-- thin command-line caller of that inspector
     +-- linear identity, structure, checksum, and finite-value checks
     +-- sidecar migration
     +-- obsolete repair-sidecar deletion
     |
     v
-independently readable new-model artifact
+runtime-readable new-model artifact
 ```
 
 This branch can use synthetic structures before the generator exists. It joins
@@ -192,7 +195,7 @@ Shared files require designated integrators.
 | Navigation | `sg_bot.h`, `sg_arach.c`, `sg_fields.c`, `sg_goal.c`, `sg_descend.c`, `sg_move.c`, and `sg_price.c` |
 | Perception and combat | `sg_caco.c`, `sg_combat.c`, belief integration, and weapon policy |
 | Host | Human hook boundary, game lifecycle, event hooks, physics, weapons, and root host callers |
-| Tools | Controller, finalizer, corpus policy, bundle, installer, fleet, and provenance formats |
+| Tools | The minimum shell and Make generation, corpus, install, rollback, and release commands. Delete Python tools and optional fleet machinery that the final path does not use. |
 | Build | `GNUmakefile`, `Makefile`, generated source lists, and final test aggregation |
 | Documentation | `PROJECT-COMPLETION-PLAN.md`, `ARCHITECTURE.md`, tool documentation, and catalog status |
 
@@ -218,7 +221,7 @@ mandatory review of all retained code and callers
         |
         v
 delete seed/link/action ownership,
-objective validity, route-only handling,
+objective-derived artifact validity, release-routing branches,
 production Dijkstra repair, and obsolete tests
         |
         v
@@ -274,7 +277,7 @@ The Sol High review rejected these dependencies from the initial analyses:
 - Fleet is not a separate mandatory release phase unless it is the selected
   ordinary-match test system.
 - The completion plan does not require a post-fleet repair phase.
-- Every route-only release branch is obsolete and must be deleted.
+- Every objective-gated release branch is obsolete and must be deleted.
 - BSP-3 is full 3D configuration space. BSP-4 is hull-valid adjacency. BSP-7
   owns contents and static semantics.
 
@@ -294,7 +297,8 @@ The implementation wave is bound by these decisions:
 - Typed strategy authority and tactical suspend, resume, completion, and
   failure events.
 - Sparse runtime beliefs from authenticated observations only.
-- Versioned wire sections, checksums, hostile-count limits, and reader agreement.
+- Versioned wire sections, checksums, hostile-count limits, and one canonical C
+  inspector shared by runtime and command-line acceptance.
 - The obsolete seed/link repair sidecar is deleted; any future learned-cost
   sidecar requires its own stable-cell or capability-kernel contract.
 - The authoritative hard-regression map set and its strict wave barrier.

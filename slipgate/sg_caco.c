@@ -20,8 +20,310 @@
 #include "slipgate/sg_callout_random.h"
 #include "slipgate/sg_callout_policy.h"
 #include "slipgate/sg_ear_random.h"
+#include "slipgate/sg_compact_belief_perception.h"
+#include "slipgate/sg_compact_belief_perception_owner.h"
 
 sg_team_belief_t sg_caco_team_belief;   /* [0]=red beliefs about red flag etc */
+
+/* The compact path is deliberately a separate runtime owner from the legacy
+ * seed table below. It is enabled only after a level owner binds an accepted
+ * compact model and an exact compact-cell locator. */
+static sg_compact_belief_perception_binding_t sg_caco_compact_beliefs;
+static uint64_t sg_caco_compact_sequence;
+
+struct sg_compact_belief_perception_evidence_authority_s
+{
+	sg_belief_runtime_observation_t observation;
+	sg_belief_runtime_hypothesis_t
+		hypotheses[SG_BELIEF_RUNTIME_MAX_PARTICLES];
+	sg_belief_runtime_coverage_t coverage[SG_BELIEF_RUNTIME_MAX_COVERAGE];
+	size_t hypothesis_count;
+	size_t coverage_count;
+};
+
+static int Caco_CompactDecodeEvidence(void *context,
+	const sg_belief_runtime_provider_t *provider,
+	const sg_compact_belief_perception_evidence_authority_t *authority,
+	sg_compact_belief_perception_observation_consume_fn consume,
+	void *consume_context)
+{
+	const struct sg_compact_belief_perception_evidence_authority_s *evidence =
+		(const struct sg_compact_belief_perception_evidence_authority_s *)authority;
+
+	(void)context;
+	if (!provider || !evidence || !consume ||
+		evidence->observation.rune_identity != provider->rune_identity ||
+		evidence->observation.topology_revision != provider->topology_revision)
+		return 0;
+	if ((evidence->observation.evidence_kind ==
+		SG_BELIEF_RUNTIME_EVIDENCE_POSITIVE &&
+		(evidence->hypothesis_count == 0U ||
+			evidence->hypothesis_count > SG_BELIEF_RUNTIME_MAX_PARTICLES ||
+			evidence->coverage_count != 0U)) ||
+		(evidence->observation.evidence_kind ==
+		SG_BELIEF_RUNTIME_EVIDENCE_NEGATIVE &&
+		(evidence->hypothesis_count != 0U || evidence->coverage_count == 0U ||
+			evidence->coverage_count > SG_BELIEF_RUNTIME_MAX_COVERAGE)))
+		return 0;
+	return consume(consume_context, &evidence->observation);
+}
+
+static uint64_t Caco_CompactTimeMs(void)
+{
+	const sg_belief_runtime_provider_t *provider = SG_BeliefRuntimeProvider();
+	uint64_t frame;
+	uint32_t frame_ms;
+
+	if (!provider || level.framenum < 0)
+		return 0U;
+	frame_ms = provider->identity->physics.frame_ms;
+	if (frame_ms == 0U)
+		return 0U;
+	frame = (uint64_t)level.framenum + UINT64_C(1);
+	return frame <= UINT64_MAX / (uint64_t)frame_ms ?
+		frame * (uint64_t)frame_ms : 0U;
+}
+
+static int Caco_CompactLife(const edict_t *entity,
+	sg_belief_runtime_life_t *life_out)
+{
+	int client;
+
+	if (!entity || !entity->inuse || !entity->client || !life_out)
+		return 0;
+	client = (int)(entity - g_edicts) - 1;
+	if (client < 0 || client >= game.maxclients ||
+		entity->client->ctf.ctfid == 0U)
+		return 0;
+	memset(life_out, 0, sizeof(*life_out));
+	life_out->client_id = (uint32_t)client;
+	life_out->spawn_generation = entity->client->ctf.ctfid;
+	return 1;
+}
+
+static int Caco_CompactObservationBeginForLife(
+	struct sg_compact_belief_perception_evidence_authority_s *evidence,
+	sg_belief_runtime_source_t source,
+	sg_belief_runtime_evidence_kind_t evidence_kind, edict_t *issuer,
+	const sg_belief_runtime_life_t *target_life, int target_team,
+	float confidence)
+{
+	const sg_belief_runtime_provider_t *provider = SG_BeliefRuntimeProvider();
+	uint64_t at_ms;
+	uint64_t valid_until;
+	int audience_team;
+
+	if (!evidence || !provider || !issuer || !issuer->client || !target_life ||
+		target_life->reserved != 0U || target_life->client_id == UINT32_MAX ||
+		target_life->spawn_generation == 0U ||
+		evidence_kind >= SG_BELIEF_RUNTIME_EVIDENCE_KIND_COUNT ||
+		!isfinite(confidence) || confidence <= 0.0f ||
+		confidence > 1.0f)
+		return 0;
+	audience_team = issuer->client->ctf.teamnum;
+	if ((audience_team != CTF_TEAM_RED && audience_team != CTF_TEAM_BLUE) ||
+		(target_team != CTF_TEAM_RED && target_team != CTF_TEAM_BLUE) ||
+		audience_team == target_team)
+		return 0;
+	at_ms = Caco_CompactTimeMs();
+	if (at_ms == 0U || provider->policy.confidence_decay_ms >
+		UINT64_MAX - at_ms || sg_caco_compact_sequence == UINT64_MAX)
+		return 0;
+	valid_until = at_ms + provider->policy.confidence_decay_ms;
+	memset(evidence, 0, sizeof(*evidence));
+	evidence->observation.authenticated = 1U;
+	evidence->observation.authority = SG_BELIEF_RUNTIME_AUTHORITY_HOST_SENSOR;
+	evidence->observation.audience_team = (uint8_t)audience_team;
+	evidence->observation.target_team = (uint8_t)target_team;
+	evidence->observation.source = source;
+	evidence->observation.evidence_kind = evidence_kind;
+	if (!Caco_CompactLife(issuer, &evidence->observation.issuer_life))
+		return 0;
+	evidence->observation.target_life = *target_life;
+	sg_caco_compact_sequence++;
+	evidence->observation.event_id = sg_caco_compact_sequence;
+	evidence->observation.evidence_sequence = sg_caco_compact_sequence;
+	evidence->observation.observed_at_ms = at_ms;
+	evidence->observation.authenticated_at_ms = at_ms;
+	evidence->observation.valid_until_ms = valid_until;
+	evidence->observation.rune_identity = provider->rune_identity;
+	evidence->observation.topology_revision = provider->topology_revision;
+	evidence->observation.confidence = confidence;
+	evidence->observation.hypotheses = evidence_kind ==
+		SG_BELIEF_RUNTIME_EVIDENCE_POSITIVE ? evidence->hypotheses : NULL;
+	evidence->observation.coverage = evidence_kind ==
+		SG_BELIEF_RUNTIME_EVIDENCE_NEGATIVE ? evidence->coverage : NULL;
+	return 1;
+}
+
+static int Caco_CompactObservationBegin(
+	struct sg_compact_belief_perception_evidence_authority_s *evidence,
+	sg_belief_runtime_source_t source, edict_t *issuer, edict_t *target,
+	float confidence)
+{
+	sg_belief_runtime_life_t target_life;
+
+	return target && target->client && Caco_CompactLife(target, &target_life) &&
+		Caco_CompactObservationBeginForLife(evidence, source,
+			SG_BELIEF_RUNTIME_EVIDENCE_POSITIVE, issuer, &target_life,
+			target->client->ctf.teamnum, confidence);
+}
+
+static void Caco_CompactHypothesis(
+	sg_belief_runtime_hypothesis_t *hypothesis, const vec3_t position,
+	const vec3_t velocity, float spread_radius, float likelihood)
+{
+	if (!hypothesis)
+		return;
+	memset(hypothesis, 0, sizeof(*hypothesis));
+	VectorCopy(position, hypothesis->position);
+	if (velocity)
+		VectorCopy(velocity, hypothesis->velocity);
+	hypothesis->spread_radius = spread_radius;
+	hypothesis->likelihood = likelihood;
+}
+
+static void Caco_CompactObserveSight(edict_t *viewer, edict_t *target)
+{
+	struct sg_compact_belief_perception_evidence_authority_s evidence;
+
+	if (!SG_CacoCompactBeliefActive() || !Caco_CompactObservationBegin(
+		&evidence, SG_BELIEF_RUNTIME_SOURCE_SIGHT, viewer, target, 1.0f))
+		return;
+	Caco_CompactHypothesis(&evidence.hypotheses[0], target->s.origin,
+		target->velocity, 0.0f, 1.0f);
+	evidence.hypothesis_count = 1U;
+	evidence.observation.hypothesis_count = evidence.hypothesis_count;
+	(void)SG_CompactBeliefPerceptionObserve(&sg_caco_compact_beliefs,
+		(const sg_compact_belief_perception_evidence_authority_t *)&evidence);
+}
+
+static void Caco_CompactObserveSound(edict_t *listener, edict_t *emitter,
+	const vec3_t origin, float uncertainty, float confidence)
+{
+	struct sg_compact_belief_perception_evidence_authority_s evidence;
+
+	if (!isfinite(uncertainty) || uncertainty <= 0.0f ||
+		!SG_CacoCompactBeliefActive() || !Caco_CompactObservationBegin(
+		&evidence, SG_BELIEF_RUNTIME_SOURCE_SOUND, listener, emitter,
+		confidence))
+		return;
+	Caco_CompactHypothesis(&evidence.hypotheses[0], origin, NULL,
+		uncertainty, 1.0f);
+	evidence.hypothesis_count = 1U;
+	evidence.observation.hypothesis_count = evidence.hypothesis_count;
+	(void)SG_CompactBeliefPerceptionObserveSound(&sg_caco_compact_beliefs,
+		(const sg_compact_belief_perception_evidence_authority_t *)&evidence);
+}
+
+static void Caco_CompactObserveDamage(edict_t *victim, edict_t *attacker,
+	const vec3_t position, float uncertainty)
+{
+	struct sg_compact_belief_perception_evidence_authority_s evidence;
+
+	if (!isfinite(uncertainty) || uncertainty <= 0.0f ||
+		!SG_CacoCompactBeliefActive() || !Caco_CompactObservationBegin(
+		&evidence, SG_BELIEF_RUNTIME_SOURCE_DAMAGE, victim, attacker, 0.75f))
+		return;
+	Caco_CompactHypothesis(&evidence.hypotheses[0], position, NULL,
+		uncertainty, 1.0f);
+	evidence.hypothesis_count = 1U;
+	evidence.observation.hypothesis_count = evidence.hypothesis_count;
+	(void)SG_CompactBeliefPerceptionObserveDamage(&sg_caco_compact_beliefs,
+		(const sg_compact_belief_perception_evidence_authority_t *)&evidence);
+}
+
+/* Hitscan pain authenticates an incoming direction, not a hidden shooter
+ * origin.  Sample only along that bearing, retain a nonzero uncertainty, and
+ * let the accepted compact locator discard points outside the RUNE. */
+static void Caco_CompactObserveDamageBearing(edict_t *victim,
+	edict_t *attacker, const vec3_t eye, const vec3_t bearing)
+{
+	static const float distance[] = { 128.0f, 256.0f, 384.0f, 512.0f };
+	const sg_belief_runtime_provider_t *provider = SG_BeliefRuntimeProvider();
+	struct sg_compact_belief_perception_evidence_authority_s evidence;
+	size_t index;
+
+	if (!provider || !isfinite(eye[0]) || !isfinite(eye[1]) ||
+		!isfinite(eye[2]) || !isfinite(bearing[0]) ||
+		!isfinite(bearing[1]) || !isfinite(bearing[2]) ||
+		!SG_CacoCompactBeliefActive() || !Caco_CompactObservationBegin(
+			&evidence, SG_BELIEF_RUNTIME_SOURCE_DAMAGE, victim, attacker, 0.75f))
+		return;
+	for (index = 0U; index < sizeof(distance) / sizeof(distance[0]); index++)
+	{
+		vec3_t candidate;
+		sg_belief_runtime_cell_state_t localized;
+		int axis;
+
+		/* The compact locator is defined on its Q8 lattice. Rounding is bounded
+		 * by 1/16 unit and remains far inside this bearing hypothesis' radius. */
+		for (axis = 0; axis < 3; axis++)
+			candidate[axis] = roundf((eye[axis] +
+				distance[index] * bearing[axis]) * 8.0f) * 0.125f;
+		memset(&localized, 0, sizeof(localized));
+		localized.location.cell.value = SG_RUNE_COMPACT_INDEX_NONE;
+		if (!provider->locate(provider->context, provider->model, candidate,
+			&localized) ||
+			localized.location.cell.value == SG_RUNE_COMPACT_INDEX_NONE ||
+			localized.location.cell.value >= provider->model->cell_count ||
+			localized.location.valid_stances != provider->model->cells[
+				localized.location.cell.value].valid_stances)
+			continue;
+		Caco_CompactHypothesis(&evidence.hypotheses[evidence.hypothesis_count],
+			candidate, NULL, 128.0f + distance[index] * 0.5f, 1.0f);
+		VectorCopy(bearing,
+			evidence.hypotheses[evidence.hypothesis_count].orientation);
+		evidence.hypothesis_count++;
+	}
+	if (evidence.hypothesis_count == 0U)
+		return;
+	evidence.observation.hypothesis_count = evidence.hypothesis_count;
+	(void)SG_CompactBeliefPerceptionObserveDamage(&sg_caco_compact_beliefs,
+		(const sg_compact_belief_perception_evidence_authority_t *)&evidence);
+}
+
+int SG_CacoCompactBeliefProviderSet(
+	const sg_belief_runtime_provider_t *provider)
+{
+	sg_compact_belief_perception_result_t result;
+
+	SG_CompactBeliefPerceptionUnbind(&sg_caco_compact_beliefs);
+	(void)SG_BeliefRuntimeProviderSet(NULL);
+	sg_caco_compact_sequence = 0U;
+	if (!provider)
+	{
+		return 1;
+	}
+	if (!SG_BeliefRuntimeProviderSet(provider))
+	{
+		sg_caco_compact_sequence = 0U;
+		return 0;
+	}
+	result = SG_CompactBeliefPerceptionBindTrustedOwner(
+		&sg_caco_compact_beliefs,
+		provider, Caco_CompactDecodeEvidence, NULL);
+	if (result == SG_COMPACT_BELIEF_PERCEPTION_APPLIED)
+		return 1;
+	(void)SG_BeliefRuntimeProviderSet(NULL);
+	return 0;
+}
+
+int SG_CacoCompactBeliefActive(void)
+{
+	return SG_CompactBeliefPerceptionBindingCurrent(&sg_caco_compact_beliefs);
+}
+
+const sg_belief_runtime_view_t *SG_CacoCompactBeliefViewForClient(
+	uint8_t audience_team, uint32_t client_id)
+{
+	const uint64_t at_ms = Caco_CompactTimeMs();
+
+	if (at_ms == 0U)
+		return NULL;
+	return SG_CompactBeliefPerceptionViewForClient(&sg_caco_compact_beliefs,
+		audience_team, client_id, at_ms);
+}
 
 /* Last enemy death position known by each observing team.  The obituary
  * supplies identity/time; the seed must pre-exist in that team's sensor table. */
@@ -175,6 +477,83 @@ static qboolean Caco_Visible(edict_t *viewer, edict_t *target)
 
 	tr = sg_host.trace(eye, NULL, NULL, mid, viewer, MASK_OPAQUE);
 	return tr.fraction >= 1.0f;
+}
+
+/* Negative compact evidence is tied to a concrete particle cell.  The host
+ * checks whether that point was actually inspectable from this viewer; it
+ * never subtracts a guessed radius or consults a hidden target position. */
+static qboolean Caco_CompactPointVisible(edict_t *viewer,
+	const float position[3])
+{
+	vec3_t eye, to;
+	trace_t tr;
+
+	if (!viewer || !viewer->client || !position || !isfinite(position[0]) ||
+		!isfinite(position[1]) || !isfinite(position[2]))
+		return false;
+	VectorCopy(viewer->s.origin, eye);
+	eye[2] += viewer->viewheight;
+	if (!sg_host.in_pvs(eye, position))
+		return false;
+	VectorSubtract(position, eye, to);
+	if (sg_cv.beliefrange->value > 0.0f &&
+		VectorLength(to) > sg_cv.beliefrange->value)
+		return false;
+	if (sg_cv.beliefcone->value > 0.0f)
+	{
+		vec3_t fwd;
+
+		AngleVectors(viewer->client->v_angle, fwd, NULL, NULL);
+		VectorNormalize(to);
+		if (DotProduct(to, fwd) <
+			cos(sg_cv.beliefcone->value * 0.5f * M_PI / 180.0f))
+			return false;
+	}
+	tr = sg_host.trace(eye, NULL, NULL, position, viewer, MASK_OPAQUE);
+	return tr.fraction >= 1.0f;
+}
+
+static void Caco_CompactObserveNegativeSight(edict_t *viewer,
+	const sg_belief_runtime_view_t *view)
+{
+	sg_belief_runtime_coverage_t coverage[SG_BELIEF_RUNTIME_MAX_COVERAGE];
+	struct sg_compact_belief_perception_evidence_authority_s evidence;
+	size_t coverage_count = 0U;
+	size_t index;
+
+	if (!viewer || !view || view->particle_count == 0U ||
+		!SG_CacoCompactBeliefActive())
+		return;
+	for (index = 0U; index < view->particle_count; index++)
+	{
+		const sg_rune_compact_location_t *location =
+			&view->particles[index].cell.location;
+		size_t existing;
+
+		if (!Caco_CompactPointVisible(viewer, view->particles[index].position))
+			continue;
+		for (existing = 0U; existing < coverage_count; existing++)
+			if (coverage[existing].location.cell.value == location->cell.value &&
+				coverage[existing].location.valid_stances ==
+					location->valid_stances)
+				break;
+		if (existing == coverage_count &&
+			coverage_count < SG_BELIEF_RUNTIME_MAX_COVERAGE)
+			coverage[coverage_count++].location = *location;
+	}
+	if (coverage_count == 0U || !Caco_CompactObservationBeginForLife(
+		&evidence, SG_BELIEF_RUNTIME_SOURCE_SIGHT,
+		SG_BELIEF_RUNTIME_EVIDENCE_NEGATIVE, viewer, &view->target_life,
+		view->target_team, 1.0f))
+		return;
+	memcpy(evidence.coverage, coverage, coverage_count * sizeof(coverage[0]));
+	evidence.coverage_count = coverage_count;
+	evidence.observation.hypotheses = NULL;
+	evidence.observation.hypothesis_count = 0U;
+	evidence.observation.coverage = evidence.coverage;
+	evidence.observation.coverage_count = coverage_count;
+	(void)SG_CompactBeliefPerceptionObserve(&sg_caco_compact_beliefs,
+		(const sg_compact_belief_perception_evidence_authority_t *)&evidence);
 }
 
 /*
@@ -1392,7 +1771,13 @@ SG_CACO_PLACE_PRIVATE void Caco_EnemyPlace(rune_t *r, int team1, int client,
 
 static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
 {
+	uint8_t sighted[SG_DMG_CLIENTS] = { 0U };
 	int i;
+	const int compact = SG_CacoCompactBeliefActive();
+
+	if (!viewer || (viewer_team != CTF_TEAM_RED &&
+		viewer_team != CTF_TEAM_BLUE))
+		return;
 
 	for (i = 0; i < game.maxclients; i++)
 	{
@@ -1405,10 +1790,33 @@ static void Caco_ScanEnemies(rune_t *r, edict_t *viewer, int viewer_team)
 			continue;
 		if (!Caco_Visible(viewer, p))
 			continue;
+		if (i < SG_DMG_CLIENTS)
+			sighted[i] = 1U;
 
-		Caco_EnemyPlace(r, SG_TeamIdx(viewer_team), i,
-		                Rune_NearestSeed(r, p->s.origin), true,
-		                (p->s.renderfx & RF_GLOW) != 0);
+		/* Non-combat legacy consumers still own their seed table. The compact
+		 * observation is emitted from the same earned sight, never reconstructed
+		 * from that seed, and combat reads only the compact distribution when it
+		 * is bound. */
+		if (r)
+			Caco_EnemyPlace(r, SG_TeamIdx(viewer_team), i,
+				Rune_NearestSeed(r, p->s.origin), true,
+				(p->s.renderfx & RF_GLOW) != 0);
+		if (compact)
+			Caco_CompactObserveSight(viewer, p);
+	}
+	if (compact)
+	{
+		for (i = 0; i < game.maxclients && i < SG_DMG_CLIENTS; i++)
+		{
+			const sg_belief_runtime_view_t *view;
+
+			if (sighted[i] != 0U)
+				continue;
+			view = SG_CacoCompactBeliefViewForClient((uint8_t)viewer_team,
+				(uint32_t)i);
+			if (view)
+				Caco_CompactObserveNegativeSight(viewer, view);
+		}
 	}
 }
 
@@ -1430,8 +1838,8 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 	int best_client[2] = { -1, -1 };
 	int eteam, ecl, i, t;
 
-	if (!r)
-		return;                     /* no rune loaded: nowhere to place onto */
+	if (!r && !SG_CacoCompactBeliefActive())
+		return;                     /* no loaded spatial authority */
 	if (!emitter || !emitter->inuse || !emitter->client)
 		return;                     /* world noise names nobody */
 	/* player_die emits gib/death audio after the public obituary purges this
@@ -1507,33 +1915,38 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin_or_null, int channel,
 	}
 
 	/* Team belief is one shared callout, so file one observation: the closest
-	 * listener heard it most accurately.  Its noise comes from that team's
-	 * private sequence, independent of client-slot order and cosmetic RNG. */
+	 * listener heard it most accurately. */
 	for (t = 0; t < 2; t++)
 	{
 		edict_t *b = best_listener[t];
-		vec3_t guess;
 		float frac;
-		int seed;
+		int seed = -1;
 
 		if (!b)
 			continue;
 		frac = best_fraction[t];
-		sg_ear_random[t] = SG_EarRandomNext(sg_ear_random[t]);
-		guess[0] = sorg[0] + SG_EarRandomSigned(sg_ear_random[t]) *
-		    frac * SG_EAR_SPREAD;
-		sg_ear_random[t] = SG_EarRandomNext(sg_ear_random[t]);
-		guess[1] = sorg[1] + SG_EarRandomSigned(sg_ear_random[t]) *
-		    frac * SG_EAR_SPREAD;
-		sg_ear_random[t] = SG_EarRandomNext(sg_ear_random[t]);
-		guess[2] = sorg[2] + SG_EarRandomSigned(sg_ear_random[t]) *
-		    frac * SG_EAR_SPREAD;
+		if (SG_CacoCompactBeliefActive())
+			Caco_CompactObserveSound(b, emitter, sorg,
+				frac * SG_EAR_SPREAD, 1.0f - frac * 0.5f);
+		if (r)
+		{
+			vec3_t guess;
 
-		seed = Rune_NearestSeed(r, guess);
-		if (seed < 0)
-			continue;
-
-		Caco_EnemyPlace(r, t, ecl, seed, false, false);
+			sg_ear_random[t] = SG_EarRandomNext(sg_ear_random[t]);
+			guess[0] = sorg[0] + SG_EarRandomSigned(sg_ear_random[t]) *
+				frac * SG_EAR_SPREAD;
+			sg_ear_random[t] = SG_EarRandomNext(sg_ear_random[t]);
+			guess[1] = sorg[1] + SG_EarRandomSigned(sg_ear_random[t]) *
+				frac * SG_EAR_SPREAD;
+			sg_ear_random[t] = SG_EarRandomNext(sg_ear_random[t]);
+			guess[2] = sorg[2] + SG_EarRandomSigned(sg_ear_random[t]) *
+				frac * SG_EAR_SPREAD;
+			seed = Rune_NearestSeed(r, guess);
+			if (seed >= 0)
+				Caco_EnemyPlace(r, t, ecl, seed, false, false);
+			else if (!SG_CacoCompactBeliefActive())
+				continue;
+		}
 
 		/* the quad announcing its own ending (damage2 = the fade warning,
 		 * played once at 3s remaining). Index resolved lazily -- precache
@@ -1590,7 +2003,7 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker,
 {
 	sg_damage_hit_t	*ring, *slot;
 	vec3_t			eye, from;
-	qboolean		seen, hitscan;
+	qboolean		seen, hitscan, authenticated_bearing;
 	int				ci, ac, team, i;
 
 	if (!victim || !victim->inuse || !victim->client)
@@ -1643,9 +2056,12 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker,
 	VectorCopy(victim->s.origin, eye);
 	eye[2] += victim->viewheight;
 
-	/* A zero damage direction falls back to the attacker bearing. */
+	/* A supplied damage direction is authenticated hit geometry. The legacy
+	 * seed path may fall back to an actor bearing, but compact hitscan belief
+	 * must never turn that hidden actor origin into an exact observation. */
 	VectorNegate(dir, from);
-	if (VectorNormalize(from) < 0.1f)
+	authenticated_bearing = VectorNormalize(from) >= 0.1f;
+	if (!authenticated_bearing)
 	{
 		VectorSubtract(attacker->s.origin, eye, from);
 		if (VectorNormalize(from) < 1.0f)
@@ -1665,13 +2081,22 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker,
 	{
 		rune_t	*r = SG_Rune();
 		vec3_t	pos;
-		int		seed;
+		int		seed = -1;
+		qboolean	have_legacy_position = false;
 
-		if (!r)
+		if (!r && !SG_CacoCompactBeliefActive())
 			return;
 
 		if (hitscan)
-			VectorCopy(attacker->s.origin, pos);
+		{
+			/* The legacy seed table still uses the observed actor origin. Compact
+			 * damage below deliberately does not receive this point. */
+			if (r)
+			{
+				VectorCopy(attacker->s.origin, pos);
+				have_legacy_position = true;
+			}
+		}
 		else
 		{
 			trace_t	tr;
@@ -1683,25 +2108,40 @@ void SG_NoteDamage(edict_t *victim, edict_t *attacker,
 			/* off whatever surface it stopped against, so the seed lookup
 			 * cannot snap to a node on the far side of that wall */
 			VectorMA(pos, -16.0f, from, pos);
+			have_legacy_position = true;
 		}
 
-		seed = Rune_NearestSeed(r, pos);
-		if (seed >= 0)
+		if (SG_CacoCompactBeliefActive())
 		{
-			sg_belief_enemy_t	*tab = sg_caco_enemies[SG_TeamIdx(team)];
-			int					s = Caco_EnemySlot(tab, ac);
-
-			/* a fresh eye entry outranks a hit, the same way it outranks
-			 * an ear -- pain places a man coarsely at best */
-			if (!(tab[s].client == ac && !tab[s].heard_only &&
-			      level.time - tab[s].seen_time < 2.0f))
+			if (hitscan)
 			{
-				if (tab[s].client != ac)
-					tab[s].runed = false;	/* a hit says nothing about glow */
-				tab[s].client = ac;
-				tab[s].seed = seed;
-				tab[s].seen_time = level.time;
-				tab[s].heard_only = true;
+				if (authenticated_bearing)
+					Caco_CompactObserveDamageBearing(victim, attacker, eye,
+						from);
+			}
+			else
+				Caco_CompactObserveDamage(victim, attacker, pos, 64.0f);
+		}
+		if (r && have_legacy_position)
+		{
+			seed = Rune_NearestSeed(r, pos);
+			if (seed >= 0)
+			{
+				sg_belief_enemy_t	*tab = sg_caco_enemies[SG_TeamIdx(team)];
+				int					s = Caco_EnemySlot(tab, ac);
+
+				/* a fresh eye entry outranks a hit, the same way it outranks
+				 * an ear -- pain places a man coarsely at best */
+				if (!(tab[s].client == ac && !tab[s].heard_only &&
+				      level.time - tab[s].seen_time < 2.0f))
+				{
+					if (tab[s].client != ac)
+						tab[s].runed = false;	/* a hit says nothing about glow */
+					tab[s].client = ac;
+					tab[s].seed = seed;
+					tab[s].seen_time = level.time;
+					tab[s].heard_only = true;
+				}
 			}
 		}
 
@@ -1771,9 +2211,12 @@ qboolean SG_HurtSince(edict_t *self, float since)
 void Caco_ResetClient(edict_t *client)
 {
 	int ci, k, t, s, victim;
+	sg_belief_runtime_life_t compact_life;
 
 	if (!client)
 		return;
+	if (Caco_CompactLife(client, &compact_life))
+		SG_BeliefRuntimeRetireLife(&compact_life);
 	ci = (int)(client - g_edicts) - 1;
 	if (ci < 0 || ci >= SG_DMG_CLIENTS)
 		return;
@@ -2011,23 +2454,30 @@ void Caco_See(rune_t *r, edict_t *viewer)
 {
 	if (!viewer || !viewer->client)
 		return;
-	Caco_ScanFlags(r, viewer, viewer->client->ctf.teamnum);
-	Caco_ScanCarriers(r, viewer, viewer->client->ctf.teamnum);
+	if (r)
+	{
+		Caco_ScanFlags(r, viewer, viewer->client->ctf.teamnum);
+		Caco_ScanCarriers(r, viewer, viewer->client->ctf.teamnum);
+	}
 	Caco_ScanEnemies(r, viewer, viewer->client->ctf.teamnum);
-	Caco_ScanItems(r, viewer);
+	if (r)
+		Caco_ScanItems(r, viewer);
 	SG_ChatSee(viewer);                 /* body/power armour: not belief classes */
 }
 
 void Caco_Frame(rune_t *r)
 {
-	if (level.time >= caco_next_scan)
+	uint64_t frame_sequence;
+	uint64_t at_ms;
+
+	if (r && level.time >= caco_next_scan)
 	{
 		caco_next_scan = level.time + 0.5f;
 		Caco_ScanFlags(r, NULL, 0);     /* HUD-level state only */
 		Caco_Age(r);
 	}
 
-	if (level.time >= caco_next_human)
+	if (r && level.time >= caco_next_human)
 	{
 		caco_next_human = level.time + SG_HUMAN_SCAN;
 		Caco_HumanEyes(r, CTF_TEAM_RED);
@@ -2035,10 +2485,21 @@ void Caco_Frame(rune_t *r)
 	}
 
 	/* these two are per frame: a delay measured in tenths needs the clock */
-	Caco_RelayFlush(r);
-	Caco_Project(r);
+	if (r)
+	{
+		Caco_RelayFlush(r);
+		Caco_Project(r);
+	}
 	Caco_Speak();
 	SG_ChatFrame();
+	if (SG_CacoCompactBeliefActive() && level.framenum >= 0)
+	{
+		frame_sequence = (uint64_t)level.framenum + UINT64_C(1);
+		at_ms = Caco_CompactTimeMs();
+		if (at_ms != 0U)
+			(void)SG_CompactBeliefPerceptionFrame(&sg_caco_compact_beliefs,
+				frame_sequence, at_ms);
+	}
 }
 
 void Caco_Reset(void)

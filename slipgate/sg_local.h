@@ -573,6 +573,18 @@ qboolean	Caco_EnemyHasDamageRune(int team);
 
 extern sg_team_belief_t sg_caco_team_belief;
 
+struct sg_belief_runtime_provider_s;
+struct sg_belief_runtime_view_s;
+
+/* Compact belief registration is a level-owner boundary. The caller supplies
+ * an accepted compact model plus its compact-cell locator; CACO never derives
+ * a compact cell from a legacy seed. */
+int SG_CacoCompactBeliefProviderSet(
+	const struct sg_belief_runtime_provider_s *provider);
+int SG_CacoCompactBeliefActive(void);
+const struct sg_belief_runtime_view_s *SG_CacoCompactBeliefViewForClient(
+	uint8_t audience_team, uint32_t client_id);
+
 void Caco_See(rune_t *r, edict_t *viewer);      /* one bot's eyes, per frame */
 void Caco_HumanEyes(rune_t *r, int team);       /* what human teammates see */
 void Caco_Frame(rune_t *r);                     /* shared HUD scan + aging */
@@ -696,8 +708,6 @@ typedef struct
 	int		red_flag_seed, blue_flag_seed;
 
 	int		*to_red_flag, *to_blue_flag;        /* stands (capture points) */
-	int		*to_local_objective;                 /* nearest proved stand;
-	                                             * local-only RUNEs */
 	int		*to_flag_now[2][2];                 /* [believing team][flag colour] */
 	int		*item[SG_FIELD_CLASSES];
 	unsigned item_sig[SG_FIELD_CLASSES];
@@ -852,6 +862,12 @@ void		SG_NoteDropTriggerContact(edict_t *source, edict_t *activator);
 void		SG_NoteDropSolidContact(edict_t *source, edict_t *activator);
 qboolean	SG_RetireBotForClient(edict_t *ent);
 void		SG_DisownBot(edict_t *ent);
+/* Host lifecycle fence for one exact, currently owned fake-client life.
+ * Human clients and stale/recycled bot identities are deliberate no-ops. */
+void		SG_CancelCurrentBotTacticLife(edict_t *ent);
+/* Process-slot retirement may run after the edict stopped being a bot. It
+ * revokes only the exact subject still stored in the trusted SG slot. */
+void		SG_CancelBotSlotTacticLife(struct sg_bot_s *bot);
 qboolean	SG_AddBot(void);
 qboolean	SG_AddBotTeam(int teamnum);
 int			SG_RemoveBots(void);
@@ -875,8 +891,11 @@ qboolean	SG_LevelSetup(void);    /* publish this level's staged RUNE */
 void		SG_LevelSetupAfterRuneWrite(void); /* load a written RUNE when none is active */
 void		Botfill_Reset(void);    /* clear level-time cadence and hysteresis */
 void		SG_LevelChange(void);   /* forget level-tagged rune and fields */
-void		SG_DangerCheckpoint(const char *event); /* final dirty save */
-void		SG_DangerPersistenceReset(void); /* release lease, forget model */
+void		SG_CompactProductionStorageWillFree(void);
+/* Called after the recorder commits the terminal match trace, while this
+ * level's exact compact model remains owned and current. */
+void		SG_CompactProductionPostMatchLearning(void);
+uint32_t	SG_CompactProductionLearningPriorCount(void);
 
 rune_t		*Rune_Load(const char *mapname);
 int			Rune_NearestSeed(rune_t *r, vec3_t p);

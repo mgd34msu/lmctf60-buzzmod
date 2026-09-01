@@ -15,6 +15,14 @@ static int failures;
 	} \
 } while (0)
 
+static uint32_t FloatBits(float value)
+{
+	uint32_t bits;
+
+	memcpy(&bits, &value, sizeof(bits));
+	return bits;
+}
+
 typedef struct world_fixture_s
 {
 	sg_bsp_world_t world;
@@ -254,6 +262,7 @@ static void TestWorldAndMovementPhysics(void)
 		"{ \"classname\" \"trigger_monsterjump\" \"model\" \"*3\" \"angle\" \"180\" \"speed\" \"250\" \"height\" \"300\" }\n"
 		"{ \"classname\" \"trigger_hurt\" \"model\" \"*4\" \"dmg\" \"12\" }\n"
 		"{ \"classname\" \"func_conveyor\" \"model\" \"*5\" \"speed\" \"140\" }\n"
+		"{ \"classname\" \"trigger_push\" \"model\" \"*6\" \"angle\" \"17\" }\n"
 		"{ \"classname\" \"target_laser\" \"angle\" \"45\" \"dmg\" \"9\" }\n";
 	world_fixture_t fixture;
 	sg_bsp_entity_semantics_t *semantics;
@@ -274,7 +283,7 @@ static void TestWorldAndMovementPhysics(void)
 		CHECK(record && record->landmark_kind == SG_RUNE_LANDMARK_TRIGGER);
 		CHECK(record && (record->flags & SG_BSP_ENTITY_GRAVITY_DEFINED));
 		CHECK(record && (record->flags & SG_BSP_ENTITY_INITIALLY_ACTIVE));
-		record = FindEntity(semantics, "trigger_push");
+		record = FindModel(semantics, 2U);
 		CHECK(record && record->mechanism_kind == SG_RUNE_MECHANISM_PUSH);
 		CHECK(record && record->physics_kind == SG_BSP_ENTITY_PHYSICS_PUSH);
 		CHECK(record && record->speed == 1200.0f);
@@ -307,6 +316,13 @@ static void TestWorldAndMovementPhysics(void)
 		CHECK(record && record->physics_kind ==
 			SG_BSP_ENTITY_PHYSICS_DAMAGE_BEAM);
 		CHECK(record && record->mechanism_role == SG_MECH_NODE_TARGET_LASER);
+		record = FindModel(semantics, 6U);
+		CHECK(record && FloatBits(record->move_direction.value[0]) ==
+			UINT32_C(0x3f74d064));
+		CHECK(record && FloatBits(record->move_direction.value[1]) ==
+			UINT32_C(0x3e95b1be));
+		CHECK(record && FloatBits(record->move_direction.value[2]) ==
+			UINT32_C(0x80000000));
 	}
 	SG_BspEntitySemanticsDestroy(semantics);
 	DestroyWorld(&fixture);
@@ -371,7 +387,7 @@ static void TestTeamsAndFanout(void)
 	DestroyWorld(&fixture);
 }
 
-static void TestSourceFirstTargets(void)
+static void TestTeleporterFanoutAndSourceFirstTargets(void)
 {
 	static const char text[] =
 		"{ \"classname\" \"worldspawn\" }\n"
@@ -412,8 +428,12 @@ static void TestSourceFirstTargets(void)
 			if (teleporter && edge->source == teleporter->canonical_ordinal)
 			{
 				teleporter_edges++;
-				CHECK(destination_source == 2U);
-				CHECK(edge->fanout_ordinal == 0U);
+				if (destination_source == 2U)
+					CHECK(edge->fanout_ordinal == 0U);
+				else if (destination_source == 3U)
+					CHECK(edge->fanout_ordinal == 1U);
+				else
+					CHECK(0);
 			}
 			if (laser && edge->source == laser->canonical_ordinal)
 			{
@@ -422,7 +442,7 @@ static void TestSourceFirstTargets(void)
 				CHECK(edge->fanout_ordinal == 0U);
 			}
 		}
-		CHECK(teleporter_edges == 1U);
+		CHECK(teleporter_edges == 2U);
 		CHECK(laser_edges == 1U);
 	}
 	SG_BspEntitySemanticsDestroy(semantics);
@@ -997,6 +1017,91 @@ static void TestFailClosedInputs(void)
 		0U, 0U, (size_t)UINT32_MAX + 1U));
 }
 
+static void TestAngularMoverSpawnProjection(void)
+{
+	static const char text[] =
+		"{ \"classname\" \"worldspawn\" }\n"
+		"{ \"classname\" \"func_door_rotating\" \"model\" \"*1\" "
+		"\"angles\" \"1 2 3\" \"distance\" \"45\" "
+		"\"speed\" \"120\" \"accel\" \"80\" \"decel\" \"70\" "
+		"\"spawnflags\" \"99\" }\n"
+		"{ \"classname\" \"func_rotating\" \"model\" \"*2\" "
+		"\"angles\" \"1 2 3\" \"speed\" \"120\" "
+		"\"spawnflags\" \"55\" }\n";
+	world_fixture_t fixture;
+	sg_bsp_entity_semantics_t *semantics;
+	const sg_bsp_entity_semantic_t *door;
+	const sg_bsp_entity_semantic_t *rotator;
+	const sg_bsp_entity_angular_mover_t *mover;
+
+	InitWorld(&fixture, text);
+	semantics = Build(&fixture);
+	CHECK(semantics != NULL);
+	if (semantics)
+	{
+		door = FindModel(semantics, 1U);
+		rotator = FindModel(semantics, 2U);
+		CHECK(door && door->mechanism_kind == SG_RUNE_MECHANISM_ROTATOR);
+		CHECK(door && door->angular_mover.kind ==
+			SG_BSP_ENTITY_ANGULAR_MOVER_FINITE_DOOR);
+		mover = door ? SG_BspEntitySemanticsAngularMover(semantics,
+			door->canonical_ordinal) : NULL;
+		CHECK(mover == (door ? &door->angular_mover : NULL));
+		if (mover)
+		{
+			const sg_bsp_entity_angular_door_schedule_t *schedule =
+				&mover->schedule.finite_door;
+
+			CHECK(mover->flags ==
+				(SG_BSP_ENTITY_ANGULAR_MOVER_START_OPEN |
+				SG_BSP_ENTITY_ANGULAR_MOVER_REVERSE |
+				SG_BSP_ENTITY_ANGULAR_MOVER_TOGGLE));
+			CHECK(schedule->inactive_angles.value[0] == 0.0f);
+			CHECK(schedule->inactive_angles.value[1] == 0.0f);
+			CHECK(schedule->inactive_angles.value[2] == -45.0f);
+			CHECK(schedule->active_angles.value[0] == 0.0f);
+			CHECK(schedule->active_angles.value[1] == 0.0f);
+			CHECK(schedule->active_angles.value[2] == 0.0f);
+			CHECK(schedule->axis.value[0] == 0.0f);
+			CHECK(schedule->axis.value[1] == 0.0f);
+			CHECK(schedule->axis.value[2] == 1.0f);
+			CHECK(schedule->angular_displacement.value[2] == 45.0f);
+			CHECK(schedule->speed == 120.0f);
+			CHECK(schedule->acceleration == 80.0f);
+			CHECK(schedule->deceleration == 70.0f);
+			CHECK(schedule->frame_ms == 100U);
+		}
+		CHECK(rotator && rotator->angular_mover.kind ==
+			SG_BSP_ENTITY_ANGULAR_MOVER_CONTINUOUS_ROTATOR);
+		mover = rotator ? SG_BspEntitySemanticsAngularMover(semantics,
+			rotator->canonical_ordinal) : NULL;
+		CHECK(mover == (rotator ? &rotator->angular_mover : NULL));
+		if (mover)
+		{
+			const sg_bsp_entity_continuous_angular_schedule_t *schedule =
+				&mover->schedule.continuous_rotator;
+
+			CHECK(mover->flags ==
+				(SG_BSP_ENTITY_ANGULAR_MOVER_START_ON |
+				SG_BSP_ENTITY_ANGULAR_MOVER_REVERSE |
+				SG_BSP_ENTITY_ANGULAR_MOVER_TOUCH_DAMAGE |
+				SG_BSP_ENTITY_ANGULAR_MOVER_STOP_ON_BLOCK));
+			CHECK(schedule->initial_angles.value[0] == 1.0f);
+			CHECK(schedule->initial_angles.value[1] == 2.0f);
+			CHECK(schedule->initial_angles.value[2] == 3.0f);
+			CHECK(schedule->axis.value[0] == 0.0f);
+			CHECK(schedule->axis.value[1] == 0.0f);
+			CHECK(schedule->axis.value[2] == -1.0f);
+			CHECK(schedule->angular_velocity.value[2] == -120.0f);
+			CHECK(schedule->frame_angular_delta.value[2] == -12.0f);
+			CHECK(schedule->speed == 120.0f);
+			CHECK(schedule->frame_ms == 100U);
+		}
+	}
+	SG_BspEntitySemanticsDestroy(semantics);
+	DestroyWorld(&fixture);
+}
+
 static void TestRuntimeStateCannotEnterOutput(void)
 {
 	static const char text[] =
@@ -1043,7 +1148,7 @@ int main(void)
 	TestMechanismsAndTopology();
 	TestWorldAndMovementPhysics();
 	TestTeamsAndFanout();
-	TestSourceFirstTargets();
+	TestTeleporterFanoutAndSourceFirstTargets();
 	TestHostOrderedPickFanout();
 	TestHostSpawnClassSemantics();
 	TestHostTopologyPolicy();
@@ -1054,6 +1159,7 @@ int main(void)
 	TestOrderIndependentTargetSemantics();
 	TestHostParserIdentityParity();
 	TestFailClosedInputs();
+	TestAngularMoverSpawnProjection();
 	TestRuntimeStateCannotEnterOutput();
 	if (failures)
 	{

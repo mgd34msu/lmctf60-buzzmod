@@ -56,7 +56,7 @@ typedef struct sg_rune_artifact_write_result_s
 
 
 sg_rune_artifact_write_result_t SG_RuneArtifactWrite(
-	uint16_t route_contract, const sg_rune_codec_identity_t *identity,
+	const sg_rune_codec_identity_t *identity,
 	const sg_rune_codec_seed_t *seeds, uint32_t num_seeds,
 	const sg_rune_codec_link_t *links, uint32_t num_links,
 	const sg_rune_codec_activation_node_t *nodes, uint32_t num_nodes,

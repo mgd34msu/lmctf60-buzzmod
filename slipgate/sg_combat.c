@@ -1,19 +1,24 @@
 
-
 #include "g_local.h"
 #include "g_ctffunc.h"
+#include "slipgate/sg_belief_runtime.h"
 #include "slipgate/sg_combat.h"
-#include "slipgate/sg_combat_alert_policy.h"
 #include "slipgate/sg_combat_commit_policy.h"
 #include "slipgate/sg_combat_land_lead.h"
 #include "slipgate/sg_combat_target_policy.h"
+#include "slipgate/sg_client_ownership.h"
 #include "slipgate/sg_item_route.h"
 #include "slipgate/sg_persona.h"    /* who is holding the gun, not just how well */
+#include "slipgate/sg_rune_compact_weapon_field.h"
 
+#include <float.h>
 #include <math.h>
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_util.h"
 #include "slipgate/sg_hooks.h"
+
+static qboolean Combat_CompactBeliefRange(const edict_t *self,
+	float *range_out);
 
 /* ------------------------------------------------------------------- facts
  *
@@ -79,6 +84,423 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 	{ "BFG10K",             400.0f,  0.8f,    0.0f,   50 },
 	{ "Plasma Rifle",      1200.0f,  0.0f,    0.0f,   34 }
 };
+
+/* A v12 attachment is a static preference only.  Each attachment carries one
+ * source cell / source-surface / relation-class fact set, shared by every
+ * kernel in that class.  It cannot know the current actor, mover, or
+ * obstruction state.  That is why this check insists on the artifact's
+ * exact-pre-fire contract and why trigger admission still reaches the live
+ * MASK_SHOT traces below. */
+qboolean SG_CombatCompactWeaponFieldSupports(
+	const sg_rune_compact_model_t *model, uint32_t source_cell,
+	uint32_t target_cell, uint32_t source_profile,
+	sg_rune_weapon_response_family_t family)
+{
+	uint32_t profile_index;
+	uint32_t attachment_index;
+	sg_rune_compact_weapon_relation_class_t relation_class;
+	qboolean kernel_present = false;
+	uint32_t kernel_index;
+
+	if (!model || model->version != SG_RUNE_COMPACT_MODEL_VERSION ||
+		model->schema_tag != SG_RUNE_COMPACT_MODEL_SCHEMA_TAG ||
+		model->identity.weapon_law_id == 0U ||
+		source_profile == 0U ||
+		source_profile >= (uint32_t)SG_WEAPON_PROFILE_COUNT ||
+		(uint32_t)family >=
+			(uint32_t)SG_RUNE_WEAPON_RESPONSE_FAMILY_COUNT ||
+		source_cell >= model->cell_count || target_cell >= model->cell_count ||
+		!model->cells || !model->source_surfaces ||
+		model->response.exact_live_prefire_trace_required != 1U ||
+		!model->weapon_profiles || !model->weapon_kernels ||
+		!model->weapon_attachments || !model->weapon_relation_spans ||
+		!model->weapon_relation_refs ||
+		!model->response.source_fragments || !model->response.target_patches ||
+		!model->response.facts)
+		return false;
+	profile_index = source_profile - 1U;
+	if (profile_index >= model->weapon_profile_count ||
+		model->weapon_profiles[profile_index].source_profile != source_profile)
+		return false;
+	if (!SG_RuneCompactWeaponRelationClassForProfile(source_profile, family,
+		&relation_class))
+		return false;
+	for (kernel_index = 0U; kernel_index < model->weapon_kernel_count;
+		kernel_index++)
+	{
+		const sg_rune_weapon_response_kernel_t *kernel =
+			&model->weapon_kernels[kernel_index];
+
+		if (kernel->profile == profile_index && kernel->family == family) {
+			kernel_present = true;
+			break;
+		}
+	}
+	if (!kernel_present)
+		return false;
+	for (attachment_index = 0U;
+		attachment_index < model->weapon_attachment_count;
+		attachment_index++)
+	{
+		const sg_rune_compact_weapon_field_attachment_t *attachment =
+			&model->weapon_attachments[attachment_index];
+		const sg_rune_compact_weapon_relation_span_t *relation_span;
+		uint32_t relation_offset;
+
+		if (attachment->cell.value != source_cell ||
+			attachment->relation_class != relation_class)
+			continue;
+		if (attachment->source_surface >= model->source_surface_count ||
+			attachment->reserved0 != 0U || attachment->reserved1 != 0U ||
+			attachment->relation_span >= model->weapon_relation_span_count ||
+			attachment->relations.count == 0U ||
+			attachment->relations.first >= model->weapon_relation_ref_count ||
+			attachment->relations.count > model->weapon_relation_ref_count -
+				attachment->relations.first)
+			return false;
+		relation_span = &model->weapon_relation_spans[attachment->relation_span];
+		if (relation_span->references.first != attachment->relations.first ||
+			relation_span->references.count != attachment->relations.count)
+			return false;
+		for (relation_offset = 0U;
+			relation_offset < attachment->relations.count;
+			relation_offset++)
+		{
+			const sg_rune_compact_response_ref_t *reference =
+				&model->weapon_relation_refs[attachment->relations.first +
+					relation_offset];
+			const sg_rune_compact_response_fact_t *fact;
+			const sg_rune_compact_response_fragment_t *fragment;
+			const sg_rune_compact_response_patch_t *patch;
+
+			if (reference->kind !=
+				SG_RUNE_COMPACT_RESPONSE_REF_CERTIFIED_FACT ||
+				reference->index >= model->response.fact_count)
+				return false;
+			fact = &model->response.facts[reference->index];
+			if (fact->source_fragment >= model->response.source_fragment_count ||
+				fact->target_patch >= model->response.target_patch_count)
+				return false;
+			fragment = &model->response.source_fragments[fact->source_fragment];
+			patch = &model->response.target_patches[fact->target_patch];
+			if (fragment->parent_cell.value != source_cell ||
+				patch->source_surface != attachment->source_surface)
+				return false;
+			if (patch->target_cell.value == target_cell)
+				return true;
+		}
+	}
+	return false;
+}
+
+float SG_CombatCompactWeaponFieldMass(
+	const sg_rune_compact_model_t *model, uint32_t source_cell,
+	uint32_t source_profile, sg_rune_weapon_response_family_t family,
+	const uint32_t *target_cells, const float *weights, size_t target_count)
+{
+	double supported = 0.0;
+	double total = 0.0;
+	size_t index;
+
+	if (!target_cells || !weights || target_count == 0U)
+		return 0.0f;
+	for (index = 0U; index < target_count; index++)
+	{
+		const float weight = weights[index];
+
+		if (!isfinite(weight) || weight <= 0.0f ||
+			!isfinite(total + (double)weight))
+			continue;
+		total += (double)weight;
+		if (SG_CombatCompactWeaponFieldSupports(model, source_cell,
+			target_cells[index], source_profile, family) &&
+			isfinite(supported + (double)weight))
+			supported += (double)weight;
+	}
+	if (total <= 0.0 || !isfinite(supported / total))
+		return 0.0f;
+	return (float)(supported / total);
+}
+
+static qboolean Combat_CompactWeaponProfile(const edict_t *self, int weapon,
+	sg_weapon_profile_id_t *profile_out,
+	sg_rune_weapon_response_family_t *family_out)
+{
+	sg_weapon_profile_id_t profile;
+	sg_rune_weapon_response_family_t family;
+
+	if (!self || !self->client || !profile_out || !family_out)
+		return false;
+	switch (weapon)
+	{
+	case SG_W_BLASTER:
+		profile = SG_WEAPON_PROFILE_BLASTER;
+		family = SG_RUNE_WEAPON_RESPONSE_STRAIGHT_BOLT;
+		break;
+	case SG_W_SHOTGUN:
+		profile = SG_WEAPON_PROFILE_SHOTGUN;
+		family = SG_RUNE_WEAPON_RESPONSE_SHOTGUN_CONE;
+		break;
+	case SG_W_SSHOTGUN:
+		profile = SG_WEAPON_PROFILE_SUPER_SHOTGUN;
+		family = SG_RUNE_WEAPON_RESPONSE_SHOTGUN_CONE;
+		break;
+	case SG_W_MACHINEGUN:
+		profile = SG_WEAPON_PROFILE_MACHINEGUN;
+		family = SG_RUNE_WEAPON_RESPONSE_AUTOMATIC_SPREAD;
+		break;
+	case SG_W_CHAINGUN:
+		profile = SG_WEAPON_PROFILE_CHAINGUN;
+		family = SG_RUNE_WEAPON_RESPONSE_AUTOMATIC_SPREAD;
+		break;
+	case SG_W_GRENADELAUNCHER:
+		profile = SG_WEAPON_PROFILE_GRENADE_LAUNCHER;
+		family = SG_RUNE_WEAPON_RESPONSE_GRENADE_BOUNCE_FUSE;
+		break;
+	case SG_W_ROCKETLAUNCHER:
+		profile = SG_WEAPON_PROFILE_ROCKET_LAUNCHER;
+		family = SG_RUNE_WEAPON_RESPONSE_ROCKET_SPLASH;
+		break;
+	case SG_W_HYPERBLASTER:
+		profile = SG_WEAPON_PROFILE_HYPERBLASTER;
+		family = SG_RUNE_WEAPON_RESPONSE_HYPERBLASTER;
+		break;
+	case SG_W_RAILGUN:
+		profile = SG_WEAPON_PROFILE_RAILGUN;
+		family = SG_RUNE_WEAPON_RESPONSE_RAIL;
+		break;
+	case SG_W_BFG:
+		profile = SG_WEAPON_PROFILE_BFG;
+		family = SG_RUNE_WEAPON_RESPONSE_BFG;
+		break;
+	case SG_W_PLASMA:
+		profile = self->client->plasma_mode != 0 ?
+			SG_WEAPON_PROFILE_PLASMA_REFLECT :
+			SG_WEAPON_PROFILE_PLASMA_SPREAD;
+		family = SG_RUNE_WEAPON_RESPONSE_SPECIAL;
+		break;
+	default:
+		return false;
+	}
+	*profile_out = profile;
+	*family_out = family;
+	return true;
+}
+
+/* Evaluate exactly one life-scoped distribution.  A response field is never
+ * allowed to borrow mass from a different opponent: each candidate aggregates
+ * every finite particle of this view before the ladder compares weapons. */
+static float Combat_CompactWeaponFieldMass(edict_t *self,
+	const sg_belief_runtime_view_t *view, int weapon)
+{
+	const sg_belief_runtime_provider_t *provider;
+	sg_belief_runtime_cell_state_t source;
+	sg_weapon_profile_id_t profile;
+	sg_rune_weapon_response_family_t family;
+	uint32_t target_cells[SG_BELIEF_RUNTIME_MAX_PARTICLES];
+	float weights[SG_BELIEF_RUNTIME_MAX_PARTICLES];
+	size_t particle;
+
+	if (!self || !self->inuse || !self->client || !SG_OwnsBot(self) ||
+		!view || !SG_CacoCompactBeliefActive() ||
+		!SG_BeliefRuntimeProviderAvailable() ||
+		view->target_team == (uint8_t)self->client->ctf.teamnum ||
+		view->target_life.reserved != 0U ||
+		view->target_life.client_id == UINT32_MAX ||
+		view->target_life.spawn_generation == 0U ||
+		!isfinite(view->confidence) || view->confidence <= 0.0f ||
+		view->confidence > 1.0f || !view->particles ||
+		view->particle_count == 0U ||
+		view->particle_count > SG_BELIEF_RUNTIME_MAX_PARTICLES ||
+		!Combat_CompactWeaponProfile(self, weapon, &profile, &family))
+		return 0.0f;
+	provider = SG_BeliefRuntimeProvider();
+	if (!provider || !provider->model || !provider->locate ||
+		provider->identity != &provider->model->identity)
+		return 0.0f;
+	memset(&source, 0, sizeof(source));
+	source.location.cell.value = SG_RUNE_COMPACT_INDEX_NONE;
+	if (!provider->locate(provider->context, provider->model, self->s.origin,
+		&source))
+		return 0.0f;
+	if (source.location.cell.value == SG_RUNE_COMPACT_INDEX_NONE)
+		return 0.0f;
+	for (particle = 0U; particle < view->particle_count; particle++)
+	{
+		target_cells[particle] = view->particles[particle].cell.location.cell.value;
+		weights[particle] = view->particles[particle].weight;
+	}
+	return view->confidence * SG_CombatCompactWeaponFieldMass(provider->model,
+		source.location.cell.value, (uint32_t)profile, family, target_cells,
+		weights, view->particle_count);
+}
+
+static qboolean Combat_CompactWeaponFieldCellSupports(edict_t *self,
+	int weapon, uint32_t target_cell)
+{
+	const sg_belief_runtime_provider_t *provider;
+	sg_belief_runtime_cell_state_t source;
+	sg_weapon_profile_id_t profile;
+	sg_rune_weapon_response_family_t family;
+
+	if (!self || !self->inuse || !self->client || !SG_OwnsBot(self) ||
+		!SG_CacoCompactBeliefActive() ||
+		!SG_BeliefRuntimeProviderAvailable() ||
+		!Combat_CompactWeaponProfile(self, weapon, &profile, &family))
+		return false;
+	provider = SG_BeliefRuntimeProvider();
+	if (!provider || !provider->model || !provider->locate ||
+		provider->identity != &provider->model->identity)
+		return false;
+	memset(&source, 0, sizeof(source));
+	source.location.cell.value = SG_RUNE_COMPACT_INDEX_NONE;
+	if (!provider->locate(provider->context, provider->model, self->s.origin,
+		&source) || source.location.cell.value == SG_RUNE_COMPACT_INDEX_NONE)
+		return false;
+	return SG_CombatCompactWeaponFieldSupports(provider->model,
+		source.location.cell.value, target_cell, (uint32_t)profile, family);
+}
+
+static const sg_belief_runtime_view_t *Combat_CompactBeliefForLife(
+	const edict_t *self, uint32_t client_id, uint64_t spawn_generation)
+{
+	const sg_belief_runtime_view_t *view;
+	int team;
+
+	if (!self || !self->inuse || !self->client ||
+		!SG_CacoCompactBeliefActive() || client_id >= (uint32_t)game.maxclients ||
+		spawn_generation == 0U)
+		return NULL;
+	team = self->client->ctf.teamnum;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return NULL;
+	view = SG_CacoCompactBeliefViewForClient((uint8_t)team, client_id);
+	if (!view || view->audience_team != (uint8_t)team ||
+		view->target_team == (uint8_t)team ||
+		view->target_life.reserved != 0U ||
+		view->target_life.client_id != client_id ||
+		view->target_life.spawn_generation != spawn_generation ||
+		!isfinite(view->confidence) || view->confidence <= 0.0f ||
+		view->confidence > 1.0f || !view->particles ||
+		view->particle_count == 0U ||
+		view->particle_count > SG_BELIEF_RUNTIME_MAX_PARTICLES)
+		return NULL;
+	return view;
+}
+
+static const sg_belief_runtime_view_t *Combat_CompactBeliefForEnemy(
+	const edict_t *self, const edict_t *enemy)
+{
+	const sg_belief_runtime_view_t *view;
+	int client;
+
+	if (!enemy || !enemy->inuse || !enemy->client ||
+		enemy->client->ctf.ctfid == 0U)
+		return NULL;
+	client = (int)(enemy - g_edicts) - 1;
+	if (client < 0 || client >= game.maxclients)
+		return NULL;
+	view = Combat_CompactBeliefForLife(self, (uint32_t)client,
+		enemy->client->ctf.ctfid);
+	return view && view->target_team == (uint8_t)enemy->client->ctf.teamnum ?
+		view : NULL;
+}
+
+static qboolean Combat_CompactBeliefExpected(const edict_t *self,
+	const sg_belief_runtime_view_t *view, vec3_t position_out,
+	float *range_out)
+{
+	double position[3] = { 0.0, 0.0, 0.0 };
+	double weighted_range = 0.0;
+	double total_weight = 0.0;
+	size_t particle;
+
+	if (!self || !view || !view->particles || view->particle_count == 0U ||
+		view->particle_count > SG_BELIEF_RUNTIME_MAX_PARTICLES)
+		return false;
+	for (particle = 0U; particle < view->particle_count; particle++)
+	{
+		const sg_belief_runtime_particle_t *entry = &view->particles[particle];
+		const double weight = (double)entry->weight;
+		vec3_t delta;
+		double distance;
+		int axis;
+
+		if (!isfinite(entry->weight) || entry->weight <= 0.0f)
+			continue;
+		for (axis = 0; axis < 3; axis++)
+			if (!isfinite(entry->position[axis]) ||
+				!isfinite(position[axis] + weight * entry->position[axis]))
+				break;
+		if (axis != 3 || !isfinite(total_weight + weight))
+			continue;
+		VectorSubtract(entry->position, self->s.origin, delta);
+		distance = (double)VectorLength(delta);
+		if (!isfinite(distance) || distance < 0.0 ||
+			!isfinite(weighted_range + distance * weight))
+			continue;
+		for (axis = 0; axis < 3; axis++)
+			position[axis] += weight * entry->position[axis];
+		weighted_range += distance * weight;
+		total_weight += weight;
+	}
+	if (total_weight <= 0.0 || !isfinite(weighted_range / total_weight) ||
+		weighted_range / total_weight > (double)FLT_MAX)
+		return false;
+	if (position_out)
+	{
+		int axis;
+
+		for (axis = 0; axis < 3; axis++)
+		{
+			if (!isfinite(position[axis] / total_weight) ||
+				position[axis] / total_weight > (double)FLT_MAX ||
+				position[axis] / total_weight < -(double)FLT_MAX)
+				return false;
+			position_out[axis] = (float)(position[axis] / total_weight);
+		}
+	}
+	if (range_out)
+		*range_out = (float)(weighted_range / total_weight);
+	return true;
+}
+
+static const sg_belief_runtime_view_t *Combat_CompactBeliefNearest(
+	const edict_t *self, float *range_out)
+{
+	const sg_belief_runtime_view_t *best_view = NULL;
+	float best_range = 0.0f;
+	int client;
+	int team;
+
+	if (!self || !self->client || !range_out || !SG_CacoCompactBeliefActive())
+		return NULL;
+	team = self->client->ctf.teamnum;
+	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
+		return NULL;
+	for (client = 0; client < game.maxclients; client++)
+	{
+		const sg_belief_runtime_view_t *view =
+			SG_CacoCompactBeliefViewForClient((uint8_t)team,
+				(uint32_t)client);
+		float range;
+
+		if (!view || view->target_life.client_id != (uint32_t)client ||
+			!Combat_CompactBeliefForLife(self, (uint32_t)client,
+				view->target_life.spawn_generation) ||
+			!Combat_CompactBeliefExpected(self, view, NULL, &range))
+			continue;
+		if (!best_view || range < best_range)
+		{
+			best_view = view;
+			best_range = range;
+		}
+	}
+	if (!best_view)
+		return NULL;
+	*range_out = best_range;
+	return best_view;
+}
 
 /*
  * WEAPONS.md 2.1 range bands, measured eye to target bbox centre:
@@ -233,26 +655,16 @@ static const sg_weapon_t sg_weapons[SG_NUM_WEAPONS] = {
 #define SG_WS_DECIDE_S4		0.20f
 #define SG_WS_COOLDOWN		4.0f
 #define SG_WS_PRE_MISS		0.33f
-#define SG_WS_PRE_FRESH		3.0f
 #define SG_WS_PRE_REACH		1200.0f
 
 #define SG_WEIGHT_TICK		1.0f	/* item worths, same cadence as Fields_Refresh */
 
 
-#define SG_DUEL_FRESH		2.0f
 #define SG_DUEL_MATCH_BIAS	0.25f
 
-/*
- * The corner hold. A target that walked out of sight is somewhere in the set
- * of seeds it could have reached since -- SG_LOST_HOLD seconds is how long
- * that set stays small enough to be worth aiming at. The BFS that builds it is
- * capped at SG_LOST_BFS seeds examined, which is also its trace count: one
- * MASK_OPAQUE ray per seed, per recompute, per bot. SG_LOST_TICK is the
- * recompute cadence -- the set only grows as the clock runs, so re-walking it
- * every frame buys nothing and costs ten times the traces.
- */
+/* A corner hold samples only the still-valid compact distribution for the
+ * exact lost life. It is aim-only and keeps its existing short shelf life. */
 #define SG_LOST_HOLD		3.0f
-#define SG_LOST_BFS			24
 #define SG_LOST_TICK		0.2f
 
 
@@ -404,15 +816,11 @@ typedef struct
 	float		worth_mega;		/* the overheal worth (sg_megaworth); not a
 	                             * class, so it sits beside them */
 
-	/* what the duel terms are about: the last look at the held target. org is
-	 * belief, not the live edict -- it ages instead of following. enemy_last
-	 * is kept where `enemy` above is cleared, because a target that walked
-	 * behind a wall is still the target the range is being held against; the
-	 * two are separate so the acquisition reset above keeps its exact meaning. */
+	/* Duel and pursuit retain only the exact life identity of the last target.
+	 * Their position comes back from the current compact distribution, never a
+	 * copied entity location. */
 	int			enemy_last;		/* edict index, outlives the sighting */
 	uint64_t	enemy_last_ctfid; /* life identity of that sighting */
-	vec3_t		enemy_org;
-	float		enemy_time;		/* level.time of the last successful scan */
 	int			enemy_weapon;	/* weapon index seen in their hands, -1 none */
 	float		enemy_want_range; /* range terms frozen at that sighting */
 
@@ -423,8 +831,6 @@ typedef struct
 	 * life in the same slot from inheriting the pursuit. */
 	int			lost_client;
 	uint64_t	lost_ctfid;		/* exact client life being pursued */
-	int			lost_seed;
-	float		lost_time;		/* when the target was lost */
 	float		lost_until;		/* when the hold expires; <= level.time = none */
 	float		lost_next;		/* when the emergence set goes stale */
 	vec3_t		lost_aim;		/* the point the view is held on */
@@ -1304,9 +1710,13 @@ static qboolean Combat_BandAllows(edict_t *self, int w, float dist)
  * the ladder has nothing to offer, which lets a doctrine ladder fall through
  * to its band ladder.
  */
-static int Combat_WalkLadder(edict_t *self, const int *ladder, float dist,
-                             qboolean stocked_only)
+static int Combat_WalkLadder(edict_t *self,
+	const sg_belief_runtime_view_t *belief, const int *ladder, float dist,
+	qboolean stocked_only)
 {
+	int fallback = -1;
+	int supported = -1;
+	float supported_mass = 0.0f;
 	int i;
 
 	for (i = 0; ladder[i] >= 0; i++)
@@ -1317,9 +1727,24 @@ static int Combat_WalkLadder(edict_t *self, const int *ladder, float dist,
 			continue;
 		if (stocked_only ? !Combat_Stocked(self, w) : !Combat_Avail(self, w))
 			continue;
-		return w;
+		if (fallback < 0)
+			fallback = w;
+		/* The field score is a weighted aggregate for this one exact target
+		 * life.  The live ammo, health, range, and hook gates above still admit
+		 * the candidate; teammate and obstruction truth remains the exact
+		 * pre-fire trace in the firing path. */
+		if (belief)
+		{
+			float mass = Combat_CompactWeaponFieldMass(self, belief, w);
+
+			if (mass > supported_mass)
+			{
+				supported = w;
+				supported_mass = mass;
+			}
+		}
 	}
-	return -1;
+	return supported >= 0 ? supported : fallback;
 }
 
 /*
@@ -1327,24 +1752,26 @@ static int Combat_WalkLadder(edict_t *self, const int *ladder, float dist,
  * Doctrine ladders first (2.4), then the band ladder (2.1), then the blaster,
  * which is always in inventory and never removable (p_client.c:1147-1151).
  */
-static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
+static int Combat_Choose(edict_t *self,
+	const sg_belief_runtime_view_t *belief, int band, float dist,
+	qboolean carrier)
 {
 	const int	*ladder;
 	int			w;
 
 	if (Combat_Carrying(self))
 	{
-		w = Combat_WalkLadder(self, sg_ladder_carry, dist, true);
+		w = Combat_WalkLadder(self, belief, sg_ladder_carry, dist, true);
 		if (w < 0)
-			w = Combat_WalkLadder(self, sg_ladder_carry, dist, false);
+			w = Combat_WalkLadder(self, belief, sg_ladder_carry, dist, false);
 		if (w >= 0)
 			return w;
 	}
 	else if (carrier && dist >= SG_INTERCEPT_MIN && dist <= SG_INTERCEPT_MAX)
 	{
-		w = Combat_WalkLadder(self, sg_ladder_intercept, dist, true);
+		w = Combat_WalkLadder(self, belief, sg_ladder_intercept, dist, true);
 		if (w < 0)
-			w = Combat_WalkLadder(self, sg_ladder_intercept, dist, false);
+			w = Combat_WalkLadder(self, belief, sg_ladder_intercept, dist, false);
 		if (w >= 0)
 			return w;
 	}
@@ -1369,9 +1796,9 @@ static int Combat_Choose(edict_t *self, int band, float dist, qboolean carrier)
 		}
 	}
 
-	w = Combat_WalkLadder(self, ladder, dist, true);
+	w = Combat_WalkLadder(self, belief, ladder, dist, true);
 	if (w < 0)
-		w = Combat_WalkLadder(self, ladder, dist, false);
+		w = Combat_WalkLadder(self, belief, ladder, dist, false);
 	if (w < 0)
 		w = SG_W_BLASTER;
 	return w;
@@ -1441,20 +1868,20 @@ static int Combat_PostWeapon(edict_t *self, float sightline,
 	else
 		stocked = stocked_long;
 
-	w = Combat_WalkLadder(self, want, sightline, true);
+	w = Combat_WalkLadder(self, NULL, want, sightline, true);
 	if (w >= 0)
 		return w;
 
 	/* the doctrine weapon is not in the pack: hold the band ladder's answer
 	 * for the sightline instead of standing there with a blaster */
 	if (sightline < SG_R_CLOSE)
-		w = Combat_Choose(self, SG_BAND_CONTACT, sightline, false);
+		w = Combat_Choose(self, NULL, SG_BAND_CONTACT, sightline, false);
 	else if (sightline < SG_R_MID)
-		w = Combat_Choose(self, SG_BAND_CLOSE, sightline, false);
+		w = Combat_Choose(self, NULL, SG_BAND_CLOSE, sightline, false);
 	else if (sightline < SG_R_LONG)
-		w = Combat_Choose(self, SG_BAND_MID, sightline, false);
+		w = Combat_Choose(self, NULL, SG_BAND_MID, sightline, false);
 	else
-		w = Combat_Choose(self, SG_BAND_LONG, sightline, false);
+		w = Combat_Choose(self, NULL, SG_BAND_LONG, sightline, false);
 
 	if (!stocked_fallback)
 		return w;
@@ -1465,7 +1892,7 @@ static int Combat_PostWeapon(edict_t *self, float sightline,
 	 * merely because the doctrine row was absent.  Prefer this exact-band
 	 * stocked read only when the ordinary answer is unstocked; the doctrine
 	 * answer remains authoritative when it already has a stocked gun. */
-	owned = Combat_WalkLadder(self, stocked, sightline, true);
+	owned = Combat_WalkLadder(self, NULL, stocked, sightline, true);
 	if (owned >= 0 && (w == SG_W_BLASTER || !Combat_Stocked(self, w)))
 		w = owned;
 	return w;
@@ -1709,39 +2136,14 @@ static void Combat_Arbitrate(edict_t *self, sg_combat_state_t *st, int want)
 
 static void Combat_PreSwitch(edict_t *self, sg_combat_state_t *st, int held)
 {
-	rune_t	*r = SG_Rune();
-	float	best = -1.0f, age = 0.0f, have, miss, bar;
-	int		team, s, band, want;
+	const sg_belief_runtime_view_t *belief;
+	float	best, have, miss, bar;
+	int		band, want;
 
-	if (held < 0 || !r || !r->seeds)
+	if (held < 0)
 		return;
-	team = self->client->ctf.teamnum;
-	if (team != CTF_TEAM_RED && team != CTF_TEAM_BLUE)
-		return;
-
-	for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
-	{
-		sg_belief_enemy_t	*en = &sg_caco_enemies[SG_TeamIdx(team)][s];
-		vec3_t				d;
-		float				dist;
-
-		if (en->client < 0 || en->seed < 0 || en->seed >= r->hdr.num_seeds)
-			continue;
-		if (level.time - en->seen_time > SG_WS_PRE_FRESH)
-			continue;
-
-		VectorSubtract(r->seeds[en->seed].origin, self->s.origin, d);
-		dist = VectorLength(d);
-		if (dist > SG_WS_PRE_REACH)
-			continue;			/* not a fight this bot is walking into */
-		if (best < 0.0f || dist < best)
-		{
-			best = dist;
-			age = level.time - en->seen_time;
-		}
-	}
-
-	if (best < 0.0f)
+	belief = Combat_CompactBeliefNearest(self, &best);
+	if (!belief || best > SG_WS_PRE_REACH)
 		return;					/* nobody believed to be anywhere near */
 
 	/*
@@ -1762,7 +2164,7 @@ static void Combat_PreSwitch(edict_t *self, sg_combat_state_t *st, int held)
 	     : (best < SG_R_MID)   ? SG_BAND_CLOSE
 	     : (best < SG_R_LONG)  ? SG_BAND_MID
 	                           : SG_BAND_LONG;
-	want = Combat_Choose(self, band, best, false);
+	want = Combat_Choose(self, belief, band, best, false);
 	if (want == held)
 	{
 		st->ws_pre = held;
@@ -1779,9 +2181,10 @@ static void Combat_PreSwitch(edict_t *self, sg_combat_state_t *st, int held)
 
 	if (want != st->ws_pre && sg_cv.debug->value)
 		sg_host.dprint("WSWITCH pre %s w%d->w%d expect=%.0f hand-wants=%.0f "
-		           "miss=%.0f bar=%.0f belief=%.1fs\n",
+		           "miss=%.0f bar=%.0f life=%u/%llu\n",
 		           self->client->pers.netname, held, want, best, have,
-		           miss, bar, age);
+		           miss, bar, belief->target_life.client_id,
+		           (unsigned long long)belief->target_life.spawn_generation);
 	st->ws_pre = want;
 
 	Combat_Arbitrate(self, st, want);
@@ -3113,24 +3516,29 @@ void SG_CombatAlert(edict_t *self, float expect_range)
 	st->alert_until = level.time + 3.0f;
 }
 
+/* This reads only the compact runtime distribution. It never looks a belief
+ * target back up in a live player slot, so stale or multimodal evidence cannot
+ * become an enemy-state oracle. */
+static qboolean Combat_CompactBeliefRange(const edict_t *self,
+	float *range_out)
+{
+	return Combat_CompactBeliefNearest(self, range_out) != NULL;
+}
+
 void SG_CombatAlertFromBeliefs(edict_t *self, const int *goal_field)
 {
-	rune_t *rune = SG_Rune();
-	int team = self->client->ctf.teamnum;
-	sg_combat_alert_selection_t selected;
+	float compact_range;
 
-	if ((team != CTF_TEAM_RED && team != CTF_TEAM_BLUE) ||
-	    !rune || sg_fields.item[0] == NULL)
+	(void)goal_field;
+	if (!self || !self->inuse || !self->client || !SG_OwnsBot(self))
 		return;
-	if (SG_CombatAlertSelect(sg_caco_enemies[SG_TeamIdx(team)],
-	    SG_MAX_ENEMY_TRACK, rune, goal_field, game.maxclients,
-	    self->s.origin, level.time, &selected))
-		SG_CombatAlert(self, selected.range);
+	if (Combat_CompactBeliefRange(self, &compact_range))
+		SG_CombatAlert(self, compact_range);
 }
 
 /* ------------------------------------------------------------- duel terms */
 
-/* Current live entity, not its retained seed belief. */
+/* Current live entity, not retained player state. */
 static edict_t *Combat_EnemyIdentityCurrent(edict_t *self, int enemy_index,
                                             uint64_t enemy_ctfid)
 {
@@ -3183,9 +3591,10 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
                        float *exposure_w)
 {
 	sg_combat_state_t	*st;
+	const sg_belief_runtime_view_t *belief;
 	vec3_t				org, eye, d;
 	float				dist, want;
-	int					held, team, s;
+	int					held;
 
 	if (want_range)
 		*want_range = 0.0f;
@@ -3200,39 +3609,15 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 	if (!st)
 		return false;
 
-	if (st->enemy_last <= 0 || level.time - st->enemy_time > SG_DUEL_FRESH)
+	if (st->enemy_last <= 0)
 		return false;
 	if (!Combat_EnemyIdentityCurrent(self, st->enemy_last,
 	                                 st->enemy_last_ctfid))
 		return false;
-	VectorCopy(st->enemy_org, org);
-
-	/*
-	 * The team may know better than this bot's own last look: a teammate
-	 * watching the same enemy right now is a fresher fix than a two-second-old
-	 * memory. Eyes only -- an ear places a contact well enough to warn a post
-	 * and never well enough to hold a range against (sg_local.h:87-88).
-	 */
-	team = self->client->ctf.teamnum;
-	if (team == CTF_TEAM_RED || team == CTF_TEAM_BLUE)
-	{
-		rune_t *r = SG_Rune();
-
-		for (s = 0; r && s < SG_MAX_ENEMY_TRACK; s++)
-		{
-			sg_belief_enemy_t *en = &sg_caco_enemies[SG_TeamIdx(team)][s];
-
-			if (en->client < 0 || en->heard_only)
-				continue;
-			if (1 + en->client != st->enemy_last)
-				continue;
-			if (en->seed < 0 || en->seed >= r->hdr.num_seeds)
-				continue;
-			if (en->seen_time <= st->enemy_time)
-				continue;
-			VectorCopy(r->seeds[en->seed].origin, org);
-		}
-	}
+	belief = Combat_CompactBeliefForLife(self,
+		(uint32_t)(st->enemy_last - 1), st->enemy_last_ctfid);
+	if (!belief || !Combat_CompactBeliefExpected(self, belief, org, NULL))
+		return false;
 
 	if (enemy_org)
 		VectorCopy(org, enemy_org);
@@ -3287,98 +3672,42 @@ qboolean SG_CombatDuel(edict_t *self, vec3_t enemy_org, float *want_range,
 
 static void Combat_LostAim(edict_t *self, sg_combat_state_t *st, vec3_t eye)
 {
-	rune_t	*r = SG_Rune();
-	int		q[SG_LOST_BFS], qc[SG_LOST_BFS];
-	int		head = 0, n = 0, best = -1;
-	float	bestd = 0.0f, budget;
-	vec3_t	probe, dv;
+	const sg_belief_runtime_view_t *belief;
+	float	best_weight = -1.0f;
+	vec3_t	probe;
 	int		held;
+	size_t	particle;
 
 	st->lost_have = false;
-	if (!r || st->lost_seed < 0 || st->lost_seed >= r->hdr.num_seeds)
+	if (st->lost_client < 0 || st->lost_ctfid == 0U)
 		return;
-
-	budget = (level.time - st->lost_time) * 1000.0f;
-	if (budget < 0.0f)
-		budget = 0.0f;
-
-	q[0] = st->lost_seed;
-	qc[0] = 0;
-	n = 1;
-
-	while (head < n)
+	belief = Combat_CompactBeliefForLife(self, (uint32_t)st->lost_client,
+		st->lost_ctfid);
+	if (!belief)
+		return;
+	held = Combat_Held(self);
+	if (held < 0)
+		held = SG_W_BLASTER;
+	for (particle = 0U; particle < belief->particle_count; particle++)
 	{
-		int		s = q[head];
-		int		c = qc[head];
-		int		li;
+		const sg_belief_runtime_particle_t *entry = &belief->particles[particle];
 		trace_t	tr;
 
-		head++;
-
-		/*
-		 * One ray per examined seed, aimed where a standing player's head
-		 * would be rather than at the floor sample itself -- a seed behind a
-		 * shin-high lip is still a place somebody walks out of.
-		 */
-		VectorCopy(r->seeds[s].origin, probe);
-		probe[2] += self->viewheight;
+		if (!isfinite(entry->weight) || entry->weight <= 0.0f ||
+			!Combat_CompactWeaponFieldCellSupports(self, held,
+				entry->cell.location.cell.value))
+			continue;
+		VectorCopy(entry->position, probe);
+		if (held != SG_W_ROCKETLAUNCHER && held != SG_W_GRENADELAUNCHER)
+			probe[2] += self->viewheight;
 		tr = sg_host.trace(eye, NULL, NULL, probe, self, MASK_OPAQUE);
-		if (tr.fraction >= 1.0f)
+		if (tr.fraction >= 1.0f && entry->weight > best_weight)
 		{
-			float d;
-
-			VectorSubtract(probe, eye, dv);
-			d = VectorLength(dv);
-			if (best < 0 || d < bestd)
-			{
-				best = s;
-				bestd = d;
-			}
-		}
-
-		for (li = r->first_link[s]; li >= 0 && n < SG_LOST_BFS;
-		     li = r->next_link[li])
-		{
-			rune_link_t *l = &r->links[li];
-			int			nc = c + (int)l->cost_ms;
-			int			j;
-
-			/*
-			 * First cost wins: this is a breadth walk, not a Dijkstra, so a
-			 * seed first reached the long way keeps the long way's cost and
-			 * may fall outside the budget it would have made by the short
-			 * one. The error is one-sided -- the set can only come out
-			 * SMALLER than the truth -- which is the safe direction for a
-			 * thing that decides where to point a gun.
-			 */
-			if ((float)nc > budget)
-				continue;		/* further than the clock allows, so far */
-			for (j = 0; j < n; j++)
-				if (q[j] == l->to)
-					break;
-			if (j < n)
-				continue;
-			q[n] = l->to;
-			qc[n] = nc;
-			n++;
+			VectorCopy(probe, st->lost_aim);
+			best_weight = entry->weight;
 		}
 	}
-
-	if (best < 0)
-		return;
-
-	/*
-	 * Where on that seed to point. A hitscan or a railgun wants the head that
-	 * will appear there; a rocket or a grenade wants the floor, because splash
-	 * pays 120 - 0.5*d from the impact point (1.10, g_combat.c:742) and a shot
-	 * into the ground greets an arrival that a shot at head height would have
-	 * already passed.
-	 */
-	held = Combat_Held(self);
-	VectorCopy(r->seeds[best].origin, st->lost_aim);
-	if (held != SG_W_ROCKETLAUNCHER && held != SG_W_GRENADELAUNCHER)
-		st->lost_aim[2] += self->viewheight;
-	st->lost_have = true;
+	st->lost_have = (qboolean)(best_weight > 0.0f);
 }
 
 
@@ -3540,50 +3869,20 @@ static void Cbt_Trigger(edict_t *self, usercmd_t *cmd,
 }
 
 
-/* Preserve the last belief and choose the no-target combat posture. */
+/* Preserve the exact last life-scoped belief and choose the no-target combat
+ * posture. */
 static void Cbt_Idle(edict_t *self, sg_combat_state_t *st, usercmd_t *cmd,
                      vec3_t eye)
 {
-	/*
-	 * Just lost one. Record where belief last put it, as a SEED rather
-	 * than a point: the emergence set is a walk over rune links, so its
-	 * root has to be a node of that graph. Rune_NearestSeed of the last
-	 * believed origin is the honest answer; the enemy table's own seed is
-	 * the fallback for the frame where a teammate's sighting is all there
-	 * is. Nothing is recorded when neither exists -- a hold rooted at a
-	 * guess is a bot staring at a wall.
-	 */
 	if (st->enemy > 0)
 	{
-		rune_t *r = SG_Rune();
-		int seed = r ? Rune_NearestSeed(r, st->enemy_org) : -1;
+		const sg_belief_runtime_view_t *belief = Combat_CompactBeliefForLife(
+			self, (uint32_t)(st->enemy - 1), st->enemy_ctfid);
 
-		if (seed < 0 && r)
-		{
-			int team = self->client->ctf.teamnum;
-			int s;
-
-			if (team == CTF_TEAM_RED || team == CTF_TEAM_BLUE)
-				for (s = 0; s < SG_MAX_ENEMY_TRACK; s++)
-				{
-					sg_belief_enemy_t *en =
-					    &sg_caco_enemies[SG_TeamIdx(team)][s];
-
-					if (en->client >= 0 && 1 + en->client == st->enemy &&
-					    en->seed >= 0 && en->seed < r->hdr.num_seeds)
-					{
-						seed = en->seed;
-						break;
-					}
-				}
-		}
-
-		if (seed >= 0)
+		if (belief)
 		{
 			st->lost_client = st->enemy - 1;
 			st->lost_ctfid = st->enemy_ctfid;
-			st->lost_seed = seed;
-			st->lost_time = level.time;
 			st->lost_until = level.time + SG_LOST_HOLD;
 			st->lost_next = 0.0f;
 			st->lost_have = false;
@@ -3610,17 +3909,24 @@ static void Cbt_Idle(edict_t *self, sg_combat_state_t *st, usercmd_t *cmd,
 		                 : Combat_PostWeapon(self, st->post_sight, false));
 	else if (Combat_Carrying(self))
 		Combat_Arbitrate(self, st,
-		                 Combat_Choose(self, SG_BAND_MID, SG_R_MID, false));
+		                 Combat_Choose(self, NULL, SG_BAND_MID, SG_R_MID,
+						   false));
 	else if (st->alert_range >= 0.0f && level.time < st->alert_until)
 	{
-		/* belief says contact is coming at roughly this range */
-		int ab = (st->alert_range < SG_R_CLOSE) ? SG_BAND_CONTACT
-		       : (st->alert_range < SG_R_MID)   ? SG_BAND_CLOSE
-		       : (st->alert_range < SG_R_LONG)  ? SG_BAND_MID
-		                                        : SG_BAND_LONG;
+		float belief_range;
+		const sg_belief_runtime_view_t *belief =
+			Combat_CompactBeliefNearest(self, &belief_range);
 
-		Combat_Arbitrate(self, st,
-		                 Combat_Choose(self, ab, st->alert_range, false));
+		if (belief)
+		{
+			int ab = (belief_range < SG_R_CLOSE) ? SG_BAND_CONTACT
+			       : (belief_range < SG_R_MID)   ? SG_BAND_CLOSE
+			       : (belief_range < SG_R_LONG)  ? SG_BAND_MID
+			                                        : SG_BAND_LONG;
+
+			Combat_Arbitrate(self, st,
+				Combat_Choose(self, belief, ab, belief_range, false));
+		}
 	}
 	else
 	{
@@ -3629,7 +3935,7 @@ static void Cbt_Idle(edict_t *self, sg_combat_state_t *st, usercmd_t *cmd,
 		if (h < 0 || !Combat_Avail(self, h) ||
 		    (h == SG_W_BLASTER && Weapon_Tier(self) > 1))
 			Combat_Arbitrate(self, st,
-			                 Combat_Choose(self, SG_BAND_MID, SG_R_MID,
+			                 Combat_Choose(self, NULL, SG_BAND_MID, SG_R_MID,
 			                               false));
 		else if (Combat_WSwitch())
 		{
@@ -3731,16 +4037,12 @@ static void Cbt_Track(edict_t *self, sg_combat_state_t *st,
 		*out_engaged = true;
 
 	/*
-	 * The record the duel terms read, written by the eye that just passed the
-	 * sight gate: where it is, when that was, and which weapon was on its
-	 * model. The weapon is ChangeWeapon's own s.modelindex2 (p_weapon.c:171-232)
-	 * seen from here as pers.weapon -- a thing in view, not an inventory this
-	 * bot has no business knowing. Anything the eye did not see stays unwritten.
+	 * The duel record keeps this exact target life and the weapon visibly held
+	 * at acquisition. Its position is intentionally read later from the current
+	 * compact distribution rather than copied from this entity.
 	 */
 	st->enemy_last = st->enemy;
 	st->enemy_last_ctfid = st->enemy_ctfid;
-	VectorCopy(mid, st->enemy_org);
-	st->enemy_time = level.time;
 	st->enemy_weapon = Combat_Held(enemy);
 	st->enemy_want_range = (st->enemy_weapon >= 0)
 	    ? Combat_WantRange(enemy, st->enemy_weapon) : 0.0f;
@@ -3765,6 +4067,7 @@ static void Cbt_ChooseWeapon(edict_t *self, sg_combat_state_t *st,
                              edict_t *enemy, float dist,
                              qboolean *carrier_out, int *band_out)
 {
+	const sg_belief_runtime_view_t *belief;
 	qboolean carrier;
 	int band, want;
 
@@ -3772,7 +4075,8 @@ static void Cbt_ChooseWeapon(edict_t *self, sg_combat_state_t *st,
 
 	carrier = Combat_IsEnemyCarrier(self, enemy);
 	band = Combat_Band(st, dist);
-	want = Combat_Choose(self, band, dist, carrier);
+	belief = Combat_CompactBeliefForEnemy(self, enemy);
+	want = Combat_Choose(self, belief, band, dist, carrier);
 
 	/*
 	 * WETWORK (sg_wetwork). The physics check that
@@ -3786,7 +4090,7 @@ static void Cbt_ChooseWeapon(edict_t *self, sg_combat_state_t *st,
 	    sg_cv.wetwork->value)
 	{
 		static const int wet_rg[] = { SG_W_RAILGUN, -1 };
-		int wr = Combat_WalkLadder(self, wet_rg, dist, false);
+		int wr = Combat_WalkLadder(self, belief, wet_rg, dist, false);
 
 		if (wr >= 0)
 			want = wr;

@@ -6,17 +6,18 @@ tmp_dir=$(mktemp -d)
 trap 'rm -r "$tmp_dir"' EXIT HUP INT TERM
 
 strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align'
-sources='tests/sg_rune_compact_wire_test.c slipgate/sg_rune_compact_wire.c slipgate/sg_rune_compact_model.c slipgate/sg_rune_compact_analytic.c slipgate/sg_rune_compact_static.c'
+sources='tests/sg_rune_compact_wire_test.c slipgate/sg_rune_compact_wire.c slipgate/sg_rune_compact_model.c slipgate/sg_rune_compact_source_surface_catalog.c slipgate/sg_rune_compact_weapon_catalog.c slipgate/sg_rune_compact_analytic.c slipgate/sg_rune_compact_static.c'
+testing='-DSG_RUNE_COMPACT_WIRE_TESTING'
 
 cd "$repo_dir"
 for cc in gcc clang
 do
-	$cc $strict -I. $sources -o "$tmp_dir/rune-compact-wire-$cc"
+	$cc $strict $testing -I. $sources -Wl,--wrap=calloc -lm -o "$tmp_dir/rune-compact-wire-$cc"
 	"$tmp_dir/rune-compact-wire-$cc"
 done
 
-clang $strict -fno-omit-frame-pointer -fsanitize=address,undefined -I. \
-	$sources -o "$tmp_dir/rune-compact-wire-sanitize"
+clang $strict $testing -fno-omit-frame-pointer -fsanitize=address,undefined -I. \
+	$sources -Wl,--wrap=calloc -lm -o "$tmp_dir/rune-compact-wire-sanitize"
 ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 	"$tmp_dir/rune-compact-wire-sanitize"

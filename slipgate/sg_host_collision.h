@@ -10,10 +10,13 @@
 
 #define SG_HOST_COLLISION_MODEL_WORLD UINT32_C(0)
 #define SG_HOST_COLLISION_TEXINFO_NONE UINT32_MAX
+#define SG_HOST_COLLISION_BRUSH_NONE UINT32_MAX
 #define SG_HOST_GROUND_PROBE 0.25f
 #define SG_HOST_GROUND_NORMAL_Z 0.7f
 #define SG_HOST_STANDING_VIEW_HEIGHT 22.0f
 #define SG_HOST_CROUCHING_VIEW_HEIGHT (-2.0f)
+/* Exact stationary-trace expansion used by the host brush classifier. */
+#define SG_HOST_COLLISION_TRACE_EPSILON (1.0f / 32.0f)
 
 typedef uint32_t sg_host_collision_contents_t;
 enum
@@ -62,6 +65,15 @@ typedef struct sg_host_collision_transform_s
 	float angles[3];
 } sg_host_collision_transform_t;
 
+/* A collision-derived world transform suitable for persisted witnesses.
+ * `axis[local_component][world_component]` is the exact AngleAxis basis used
+ * by model-to-world conversion; it avoids any reader-side trigonometry. */
+typedef struct sg_host_collision_world_transform_s
+{
+	float origin[3];
+	float axis[3][3];
+} sg_host_collision_world_transform_t;
+
 typedef struct sg_host_collision_instance_s
 {
 	/* Nonzero stable identity; scene evaluation is ordered by this value. */
@@ -95,6 +107,11 @@ typedef struct sg_host_collision_trace_s
 	int32_t surface_flags;
 	uint32_t model_index;
 	uint64_t instance_id;
+	/* Exact model-local provenance for a blocking brush-side.  A trace that
+	 * reaches its endpoint or begins in solid leaves both fields at
+	 * SG_HOST_COLLISION_BRUSH_NONE. */
+	uint32_t brush;
+	uint32_t brush_side;
 } sg_host_collision_trace_t;
 
 typedef struct sg_host_collision_authority_s
@@ -133,6 +150,39 @@ typedef struct sg_host_collision_transition_s
 int SG_HostCollisionInit(sg_host_collision_authority_t *authority,
 	const sg_bsp_world_t *world, const sg_rune_model_identity_t *identity,
 	sg_host_collision_error_t *error_out);
+
+/* Apply the exact collision model-to-world transform.  This is the sole
+ * forward counterpart to the model-space transform used by collision queries;
+ * model zero accepts only an identity transform. */
+int SG_HostCollisionModelToWorldPoint(
+	const sg_host_collision_authority_t *authority, uint32_t model_index,
+	const sg_host_collision_transform_t *transform, const float local[3],
+	float world_out[3]);
+/* Materialize the exact host AngleAxis/origin representation used for a
+ * model-to-world witness.  All output floats are finite and canonicalize
+ * signed zero to +0. */
+int SG_HostCollisionWorldTransform(
+	const sg_host_collision_transform_t *transform,
+	sg_host_collision_world_transform_t *world_transform_out);
+
+/* Apply one stock SV_Push rider displacement.  `move` has already passed
+ * the pusher's one-eighth-unit clamp and `amove` is that server frame's
+ * angular delta.  This deliberately follows g_phys.c's relative-vector
+ * rotation rather than inferring rider motion from a renderer transform. */
+int SG_HostCollisionPusherCarry(
+	const sg_host_collision_transform_t *pusher_transform,
+	const float move[3], const float amove[3], const float rider_start[3],
+	float rider_end_out[3]);
+
+/* Tests the complete world-space convex polygon against the authenticated
+ * brush volume of one transformed collision model.  overlap_out is true only
+ * when their intersection has nonzero area in the polygon plane; a boundary
+ * touch, point touch, or AABB overlap is false. */
+int SG_HostCollisionModelPositiveAreaPolygonOverlap(
+	const sg_host_collision_authority_t *authority, uint32_t model_index,
+	const sg_host_collision_transform_t *transform,
+	const sg_rune_vec3_t *world_vertices, uint32_t world_vertex_count,
+	sg_host_collision_contents_t mask, int *overlap_out);
 
 sg_host_collision_contents_t SG_HostCollisionPointContentsModel(
 	const sg_host_collision_authority_t *authority, uint32_t model_index,

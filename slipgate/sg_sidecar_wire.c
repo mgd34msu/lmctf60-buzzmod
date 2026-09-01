@@ -1,4 +1,4 @@
-/* sg_sidecar_wire.c -- allocation-free authenticated artifact sidecars. */
+/* sg_sidecar_wire.c -- allocation-free compact-artifact-bound sidecars. */
 #include "q_shared.h"
 
 #include <limits.h>
@@ -7,40 +7,25 @@
 #include "slipgate/sg_crc32.h"
 #include "slipgate/sg_sidecar_wire.h"
 
-typedef enum sidecar_axis_e
-{
-	SIDECAR_AXIS_LINK = 0,
-	SIDECAR_AXIS_SEED
-} sidecar_axis_t;
-
 typedef struct sidecar_descriptor_s
 {
 	uint32_t magic;
-	uint16_t element_bytes;
-	uint16_t planes;
-	sidecar_axis_t axis;
 	const char *name;
 	const char *extension;
 } sidecar_descriptor_t;
-
-static const sidecar_descriptor_t sidecar_descriptors[] = {
-	{ SG_SIDECAR_HMN_MAGIC, 1, 1, SIDECAR_AXIS_LINK,
-	  "human", ".hmn" },
-	{ SG_SIDECAR_HML_MAGIC, 1, 1, SIDECAR_AXIS_LINK,
-	  "flag-live", ".hml" },
-	{ SG_SIDECAR_HME_MAGIC, 1, 1, SIDECAR_AXIS_LINK,
-	  "escape", ".hme" },
-	{ SG_SIDECAR_DPO_MAGIC, 1, 4, SIDECAR_AXIS_SEED,
-	  "defense", ".dpo" },
-	{ SG_SIDECAR_DNG_MAGIC, 4, 2, SIDECAR_AXIS_SEED,
-	  "danger", ".rune.danger" }
-};
 
 typedef struct sidecar_name_s
 {
 	const char *symbol;
 	const char *message;
 } sidecar_name_t;
+
+static const sidecar_descriptor_t sidecar_descriptors[] = {
+	{ SG_SIDECAR_HMN_MAGIC, "human", ".hmn" },
+	{ SG_SIDECAR_HML_MAGIC, "flag-live", ".hml" },
+	{ SG_SIDECAR_HME_MAGIC, "escape", ".hme" },
+	{ SG_SIDECAR_DPO_MAGIC, "defense", ".dpo" }
+};
 
 static const sidecar_name_t sidecar_diagnostics[] = {
 	{ "SCD_OK", "ok" },
@@ -49,29 +34,29 @@ static const sidecar_name_t sidecar_diagnostics[] = {
 	{ "SCD_PATH_TOO_LONG", "path too long" },
 	{ "SCD_IO_ERROR", "I/O error" },
 	{ "SCD_BAD_MAGIC", "bad magic" },
+	{ "SCD_UNSUPPORTED_VERSION", "unsupported sidecar version" },
 	{ "SCD_BAD_HEADER_SIZE", "bad header size" },
 	{ "SCD_BAD_HEADER_CRC", "bad header CRC" },
 	{ "SCD_NONZERO_RESERVED", "nonzero reserved field" },
-	{ "SCD_BAD_SHAPE", "bad sidecar shape" },
-	{ "SCD_BAD_COUNTS", "rune count mismatch" },
+	{ "SCD_RUNE_VERSION_MISMATCH", "RUNE version mismatch" },
+	{ "SCD_RUNE_SCHEMA_MISMATCH", "RUNE schema mismatch" },
+	{ "SCD_RUNE_IMAGE_MISMATCH", "RUNE image size mismatch" },
+	{ "SCD_RUNE_CHECKSUM_MISMATCH", "RUNE checksum mismatch" },
+	{ "SCD_RUNE_IDENTITY_MISMATCH", "RUNE identity mismatch" },
 	{ "SCD_BAD_PAYLOAD_SIZE", "bad payload size" },
 	{ "SCD_BAD_FILE_SIZE", "bad file size" },
-	{ "SCD_RUNE_PAYLOAD_MISMATCH", "rune payload mismatch" },
-	{ "SCD_ACTION_CONTRACT_MISMATCH", "action contract mismatch" },
-	{ "SCD_RUNE_HEADER_MISMATCH", "rune header mismatch" },
 	{ "SCD_BAD_PAYLOAD_CRC", "bad payload CRC" },
-	{ "SCD_BAD_PAYLOAD_VALUE", "bad payload value" },
 	{ "SCD_ALLOCATION_FAILED", "allocation failed" },
 	{ "SCD_TEMP_EXHAUSTED", "temporary names exhausted" },
-	{ "SCD_STATE_DRIFT", "bound rune state changed" },
+	{ "SCD_STATE_DRIFT", "bound RUNE state changed" },
 	{ "SCD_INTERNAL_ERROR", "internal error" }
 };
 
 static const char *const sidecar_stages[] = {
 	"argument", "path", "open", "header-read", "header", "header-crc",
-	"shape", "rune-binding", "file-size", "allocation", "payload-read",
-	"payload-crc", "payload-value", "write", "flush", "file-sync",
-	"close", "recheck", "rename", "directory-sync", "cleanup", "done"
+	"rune-binding", "file-size", "allocation", "payload-read",
+	"payload-crc", "write", "flush", "file-sync", "close", "recheck",
+	"rename", "directory-sync", "cleanup", "done"
 };
 
 _Static_assert(sizeof(sidecar_descriptors) / sizeof(sidecar_descriptors[0]) ==
@@ -81,15 +66,14 @@ _Static_assert(sizeof(sidecar_diagnostics) / sizeof(sidecar_diagnostics[0]) ==
 _Static_assert(sizeof(sidecar_stages) / sizeof(sidecar_stages[0]) ==
 	SCS_STAGE_COUNT, "sidecar stage inventory drift");
 _Static_assert(CHAR_BIT == 8, "sidecar format requires 8-bit bytes");
-_Static_assert(SIZE_MAX >=
-	(size_t)RUNE_MAX_LINKS + SG_SIDECAR_HEADER_BYTES,
-	"sidecar format requires a size_t that holds its bounded payload");
+_Static_assert(SG_SIDECAR_HEADER_BYTES == 304U,
+	"sidecar byte layout drift");
 
 static const sidecar_descriptor_t *Sidecar_Descriptor(sg_sidecar_kind_t kind)
 {
 	if (kind < SG_SIDECAR_HUMAN || kind >= SG_SIDECAR_KIND_COUNT)
 		return NULL;
-	return &sidecar_descriptors[(int)kind];
+	return &sidecar_descriptors[(uint32_t)kind];
 }
 
 static void Sidecar_PutU16(unsigned char *out, uint16_t value)
@@ -106,6 +90,14 @@ static void Sidecar_PutU32(unsigned char *out, uint32_t value)
 	out[3] = (unsigned char)(value >> 24);
 }
 
+static void Sidecar_PutU64(unsigned char *out, uint64_t value)
+{
+	uint32_t index;
+
+	for (index = 0U; index < 8U; index++)
+		out[index] = (unsigned char)(value >> (index * 8U));
+}
+
 static uint16_t Sidecar_GetU16(const unsigned char *in)
 {
 	return (uint16_t)((uint16_t)in[0] | ((uint16_t)in[1] << 8));
@@ -114,7 +106,208 @@ static uint16_t Sidecar_GetU16(const unsigned char *in)
 static uint32_t Sidecar_GetU32(const unsigned char *in)
 {
 	return (uint32_t)in[0] | ((uint32_t)in[1] << 8) |
-	       ((uint32_t)in[2] << 16) | ((uint32_t)in[3] << 24);
+		((uint32_t)in[2] << 16) | ((uint32_t)in[3] << 24);
+}
+
+static uint64_t Sidecar_GetU64(const unsigned char *in)
+{
+	uint64_t value = 0U;
+	uint32_t index;
+
+	for (index = 0U; index < 8U; index++)
+		value |= (uint64_t)in[index] << (index * 8U);
+	return value;
+}
+
+static void Sidecar_EncodeIdentity(const sg_rune_compact_identity_t *identity,
+	unsigned char *out)
+{
+	uint32_t index;
+	size_t offset = 0U;
+	const uint64_t ids[] = {
+		identity->entity_semantics_id, identity->physics_abi_id,
+		identity->collision_law_id, identity->pmove_law_id,
+		identity->gravity_law_id, identity->hook_law_id,
+		identity->mechanism_law_id, identity->weapon_law_id,
+		identity->construction_id, identity->schema_id,
+		identity->producer_identity
+	};
+	const uint32_t counts[] = {
+		identity->source_counts.model_count, identity->source_counts.leaf_count,
+		identity->source_counts.area_count, identity->source_counts.plane_count,
+		identity->source_counts.brush_count,
+		identity->source_counts.brush_side_count,
+		identity->source_counts.entity_count
+	};
+	const uint32_t standing[] = {
+		(uint32_t)identity->standing_hull.mins.value[0],
+		(uint32_t)identity->standing_hull.mins.value[1],
+		(uint32_t)identity->standing_hull.mins.value[2],
+		(uint32_t)identity->standing_hull.maxs.value[0],
+		(uint32_t)identity->standing_hull.maxs.value[1],
+		(uint32_t)identity->standing_hull.maxs.value[2]
+	};
+	const uint32_t crouching[] = {
+		(uint32_t)identity->crouching_hull.mins.value[0],
+		(uint32_t)identity->crouching_hull.mins.value[1],
+		(uint32_t)identity->crouching_hull.mins.value[2],
+		(uint32_t)identity->crouching_hull.maxs.value[0],
+		(uint32_t)identity->crouching_hull.maxs.value[1],
+		(uint32_t)identity->crouching_hull.maxs.value[2]
+	};
+	const uint32_t physics[] = {
+		identity->physics.gravity_bits,
+		identity->physics.ground_acceleration_bits,
+		identity->physics.air_acceleration_bits,
+		identity->physics.water_acceleration_bits,
+		identity->physics.hook_acceleration_bits,
+		identity->physics.external_acceleration_bits,
+		identity->physics.water_drag_bits, identity->physics.max_velocity_bits,
+		identity->physics.frame_ms, identity->physics.substep_ms
+	};
+
+	memcpy(out + offset, identity->bsp_sha256, 32U);
+	offset += 32U;
+	Sidecar_PutU64(out + offset, identity->bsp_bytes);
+	offset += 8U;
+	Sidecar_PutU32(out + offset, identity->bsp_checksum);
+	offset += 4U;
+	Sidecar_PutU32(out + offset, identity->entity_crc32);
+	offset += 4U;
+	for (index = 0U; index < 11U; index++)
+	{
+		Sidecar_PutU64(out + offset, ids[index]);
+		offset += 8U;
+	}
+	for (index = 0U; index < 7U; index++)
+	{
+		Sidecar_PutU32(out + offset, counts[index]);
+		offset += 4U;
+	}
+	for (index = 0U; index < 6U; index++)
+	{
+		Sidecar_PutU32(out + offset, standing[index]);
+		offset += 4U;
+	}
+	for (index = 0U; index < 6U; index++)
+	{
+		Sidecar_PutU32(out + offset, crouching[index]);
+		offset += 4U;
+	}
+	for (index = 0U; index < 10U; index++)
+	{
+		Sidecar_PutU32(out + offset, physics[index]);
+		offset += 4U;
+	}
+	Sidecar_PutU64(out + offset, identity->weapon_profile_catalog_id);
+}
+
+static void Sidecar_DecodeIdentity(const unsigned char *in,
+	sg_rune_compact_identity_t *identity)
+{
+	uint32_t index;
+	size_t offset = 0U;
+	uint64_t *const ids[] = {
+		&identity->entity_semantics_id, &identity->physics_abi_id,
+		&identity->collision_law_id, &identity->pmove_law_id,
+		&identity->gravity_law_id, &identity->hook_law_id,
+		&identity->mechanism_law_id, &identity->weapon_law_id,
+		&identity->construction_id, &identity->schema_id,
+		&identity->producer_identity
+	};
+	uint32_t *const counts[] = {
+		&identity->source_counts.model_count, &identity->source_counts.leaf_count,
+		&identity->source_counts.area_count, &identity->source_counts.plane_count,
+		&identity->source_counts.brush_count,
+		&identity->source_counts.brush_side_count,
+		&identity->source_counts.entity_count
+	};
+	int32_t *const standing[] = {
+		&identity->standing_hull.mins.value[0],
+		&identity->standing_hull.mins.value[1],
+		&identity->standing_hull.mins.value[2],
+		&identity->standing_hull.maxs.value[0],
+		&identity->standing_hull.maxs.value[1],
+		&identity->standing_hull.maxs.value[2]
+	};
+	int32_t *const crouching[] = {
+		&identity->crouching_hull.mins.value[0],
+		&identity->crouching_hull.mins.value[1],
+		&identity->crouching_hull.mins.value[2],
+		&identity->crouching_hull.maxs.value[0],
+		&identity->crouching_hull.maxs.value[1],
+		&identity->crouching_hull.maxs.value[2]
+	};
+	uint32_t *const physics[] = {
+		&identity->physics.gravity_bits,
+		&identity->physics.ground_acceleration_bits,
+		&identity->physics.air_acceleration_bits,
+		&identity->physics.water_acceleration_bits,
+		&identity->physics.hook_acceleration_bits,
+		&identity->physics.external_acceleration_bits,
+		&identity->physics.water_drag_bits, &identity->physics.max_velocity_bits,
+		&identity->physics.frame_ms, &identity->physics.substep_ms
+	};
+
+	memset(identity, 0, sizeof(*identity));
+	memcpy(identity->bsp_sha256, in + offset, 32U);
+	offset += 32U;
+	identity->bsp_bytes = Sidecar_GetU64(in + offset);
+	offset += 8U;
+	identity->bsp_checksum = Sidecar_GetU32(in + offset);
+	offset += 4U;
+	identity->entity_crc32 = Sidecar_GetU32(in + offset);
+	offset += 4U;
+	for (index = 0U; index < 11U; index++)
+	{
+		*ids[index] = Sidecar_GetU64(in + offset);
+		offset += 8U;
+	}
+	for (index = 0U; index < 7U; index++)
+	{
+		*counts[index] = Sidecar_GetU32(in + offset);
+		offset += 4U;
+	}
+	for (index = 0U; index < 6U; index++)
+	{
+		*standing[index] = (int32_t)Sidecar_GetU32(in + offset);
+		offset += 4U;
+	}
+	for (index = 0U; index < 6U; index++)
+	{
+		*crouching[index] = (int32_t)Sidecar_GetU32(in + offset);
+		offset += 4U;
+	}
+	for (index = 0U; index < 10U; index++)
+	{
+		*physics[index] = Sidecar_GetU32(in + offset);
+		offset += 4U;
+	}
+	identity->weapon_profile_catalog_id = Sidecar_GetU64(in + offset);
+}
+
+static int Sidecar_IdentityMatches(const sg_rune_compact_identity_t *left,
+	const sg_rune_compact_identity_t *right)
+{
+	unsigned char left_bytes[260];
+	unsigned char right_bytes[260];
+
+	if (left == NULL || right == NULL)
+		return 0;
+	Sidecar_EncodeIdentity(left, left_bytes);
+	Sidecar_EncodeIdentity(right, right_bytes);
+	return memcmp(left_bytes, right_bytes, sizeof(left_bytes)) == 0;
+}
+
+static int Sidecar_ArtifactInfoValid(const sg_rune_compact_wire_info_t *info)
+{
+	return info != NULL &&
+		info->wire_version == SG_RUNE_COMPACT_WIRE_VERSION &&
+		info->model_version == SG_RUNE_COMPACT_MODEL_VERSION &&
+		info->analytic_version == SG_RUNE_COMPACT_ANALYTIC_VERSION &&
+		info->schema_tag == SG_RUNE_COMPACT_MODEL_SCHEMA_TAG &&
+		info->image_bytes > 0U &&
+		info->image_bytes <= SG_RUNE_COMPACT_WIRE_MAX_IMAGE_BYTES;
 }
 
 static sg_sidecar_diagnostic_t Sidecar_HeaderCRC(
@@ -125,7 +318,7 @@ static sg_sidecar_diagnostic_t Sidecar_HeaderCRC(
 	if (!encoded || !crc_out || encoded_size != SG_SIDECAR_HEADER_BYTES)
 		return SCD_INVALID_ARGUMENT;
 	memcpy(canonical, encoded, sizeof(canonical));
-	memset(canonical + SG_SIDECAR_HEADER_CRC_OFFSET, 0, 4);
+	memset(canonical + SG_SIDECAR_HEADER_CRC_OFFSET, 0, 4U);
 	if (!SG_CRC32Buffer(canonical, sizeof(canonical), crc_out))
 		return SCD_INTERNAL_ERROR;
 	return SCD_OK;
@@ -135,39 +328,40 @@ static void Sidecar_EncodeHeaderBytes(const sg_sidecar_header_t *header,
 	unsigned char out[SG_SIDECAR_HEADER_BYTES])
 {
 	memset(out, 0, SG_SIDECAR_HEADER_BYTES);
-	Sidecar_PutU32(out + 0, header->magic);
-	Sidecar_PutU16(out + 4, 0U);
-	Sidecar_PutU16(out + 6, header->header_bytes);
-	Sidecar_PutU16(out + 8, 0U);
-	Sidecar_PutU16(out + 10, header->element_bytes);
-	Sidecar_PutU16(out + 12, header->planes);
-	Sidecar_PutU16(out + 14, 0U);
-	Sidecar_PutU32(out + 16, header->num_seeds);
-	Sidecar_PutU32(out + 20, header->num_links);
-	Sidecar_PutU32(out + 24, header->rune_payload_crc32);
-	Sidecar_PutU32(out + 28, header->action_contract_crc32);
-	Sidecar_PutU32(out + 32, header->rune_header_crc32);
-	Sidecar_PutU32(out + 36, header->payload_bytes);
-	Sidecar_PutU32(out + 40, header->payload_crc32);
-	Sidecar_PutU32(out + 44, header->header_crc32);
+	Sidecar_PutU32(out + 0U, header->magic);
+	Sidecar_PutU16(out + 4U, header->format_version);
+	Sidecar_PutU16(out + 6U, header->header_bytes);
+	Sidecar_PutU16(out + 8U, header->rune_wire_version);
+	Sidecar_PutU16(out + 10U, header->rune_model_version);
+	Sidecar_PutU16(out + 12U, header->rune_analytic_version);
+	Sidecar_PutU16(out + 14U, header->reserved);
+	Sidecar_PutU32(out + 16U, header->rune_schema_tag);
+	Sidecar_PutU64(out + 20U, header->rune_image_bytes);
+	Sidecar_PutU32(out + 28U, header->rune_checksum);
+	Sidecar_EncodeIdentity(&header->rune_identity, out + 32U);
+	Sidecar_PutU32(out + 292U, header->payload_bytes);
+	Sidecar_PutU32(out + 296U, header->payload_crc32);
+	Sidecar_PutU32(out + 300U, header->header_crc32);
 }
 
 static void Sidecar_DecodeHeaderBytes(const unsigned char *in,
 	sg_sidecar_header_t *header)
 {
 	memset(header, 0, sizeof(*header));
-	header->magic = Sidecar_GetU32(in + 0);
-	header->header_bytes = Sidecar_GetU16(in + 6);
-	header->element_bytes = Sidecar_GetU16(in + 10);
-	header->planes = Sidecar_GetU16(in + 12);
-	header->num_seeds = Sidecar_GetU32(in + 16);
-	header->num_links = Sidecar_GetU32(in + 20);
-	header->rune_payload_crc32 = Sidecar_GetU32(in + 24);
-	header->action_contract_crc32 = Sidecar_GetU32(in + 28);
-	header->rune_header_crc32 = Sidecar_GetU32(in + 32);
-	header->payload_bytes = Sidecar_GetU32(in + 36);
-	header->payload_crc32 = Sidecar_GetU32(in + 40);
-	header->header_crc32 = Sidecar_GetU32(in + 44);
+	header->magic = Sidecar_GetU32(in + 0U);
+	header->format_version = Sidecar_GetU16(in + 4U);
+	header->header_bytes = Sidecar_GetU16(in + 6U);
+	header->rune_wire_version = Sidecar_GetU16(in + 8U);
+	header->rune_model_version = Sidecar_GetU16(in + 10U);
+	header->rune_analytic_version = Sidecar_GetU16(in + 12U);
+	header->reserved = Sidecar_GetU16(in + 14U);
+	header->rune_schema_tag = Sidecar_GetU32(in + 16U);
+	header->rune_image_bytes = Sidecar_GetU64(in + 20U);
+	header->rune_checksum = Sidecar_GetU32(in + 28U);
+	Sidecar_DecodeIdentity(in + 32U, &header->rune_identity);
+	header->payload_bytes = Sidecar_GetU32(in + 292U);
+	header->payload_crc32 = Sidecar_GetU32(in + 296U);
+	header->header_crc32 = Sidecar_GetU32(in + 300U);
 }
 
 const char *SG_SidecarKindName(sg_sidecar_kind_t kind)
@@ -188,111 +382,75 @@ const char *SG_SidecarDiagnosticName(sg_sidecar_diagnostic_t diagnostic)
 {
 	if (diagnostic < SCD_OK || diagnostic >= SCD_DIAGNOSTIC_COUNT)
 		return "SCD_UNKNOWN";
-	return sidecar_diagnostics[(int)diagnostic].symbol;
+	return sidecar_diagnostics[(uint32_t)diagnostic].symbol;
 }
 
 const char *SG_SidecarDiagnosticMessage(sg_sidecar_diagnostic_t diagnostic)
 {
 	if (diagnostic < SCD_OK || diagnostic >= SCD_DIAGNOSTIC_COUNT)
 		return "unknown sidecar diagnostic";
-	return sidecar_diagnostics[(int)diagnostic].message;
+	return sidecar_diagnostics[(uint32_t)diagnostic].message;
 }
 
 const char *SG_SidecarStageName(sg_sidecar_stage_t stage)
 {
 	if (stage < SCS_ARGUMENT || stage >= SCS_STAGE_COUNT)
 		return "unknown";
-	return sidecar_stages[(int)stage];
-}
-
-static uint32_t Sidecar_Magic(sg_sidecar_kind_t kind)
-{
-	switch (kind)
-	{
-	case SG_SIDECAR_HUMAN: return SG_SIDECAR_HMN_MAGIC;
-	case SG_SIDECAR_FLAG_LIVE: return SG_SIDECAR_HML_MAGIC;
-	case SG_SIDECAR_ESCAPE: return SG_SIDECAR_HME_MAGIC;
-	case SG_SIDECAR_DEFENSE: return SG_SIDECAR_DPO_MAGIC;
-	case SG_SIDECAR_DANGER: return SG_SIDECAR_DNG_MAGIC;
-	default: return 0U;
-	}
-}
-
-static int Sidecar_ArtifactValid(const rune_artifact_t *artifact)
-{
-	return artifact && artifact->magic == RUNE_ARTIFACT_MAGIC &&
-		SG_RuneRouteContractValid(artifact->route_contract) &&
-		artifact->num_seeds > 0U &&
-		artifact->num_seeds <= RUNE_MAX_SEEDS &&
-		artifact->num_links <= RUNE_MAX_LINKS &&
-		artifact->num_mechanism_nodes <= RUNE_MAX_MECHANISM_NODES &&
-		artifact->num_mechanism_edges <= RUNE_MAX_MECHANISM_EDGES &&
-		artifact->num_inventory_edges <= artifact->num_mechanism_edges &&
-		artifact->num_mechanism_plans <= RUNE_MAX_MECHANISM_PLANS &&
-		artifact->string_bytes > 0U &&
-		artifact->string_bytes <= RUNE_MAX_MECHANISM_STRING_BYTES &&
-		artifact->identity.map_name[0] != '\0' &&
-		memchr(artifact->identity.map_name, '\0',
-			sizeof(artifact->identity.map_name)) != NULL;
-}
-
-static sg_sidecar_diagnostic_t Sidecar_PayloadBytes(
-	const sidecar_descriptor_t *descriptor,
-	const rune_artifact_t *artifact, uint32_t *payload_bytes_out)
-{
-	uint32_t count;
-	uint64_t bytes;
-
-	if (!descriptor || !Sidecar_ArtifactValid(artifact) ||
-	    !payload_bytes_out)
-		return SCD_INVALID_ARGUMENT;
-	count = descriptor->axis == SIDECAR_AXIS_LINK
-		? artifact->num_links : artifact->num_seeds;
-	bytes = (uint64_t)count * descriptor->element_bytes *
-		descriptor->planes;
-	if (bytes > UINT32_MAX || bytes > SIZE_MAX)
-		return SCD_BAD_PAYLOAD_SIZE;
-	*payload_bytes_out = (uint32_t)bytes;
-	return SCD_OK;
+	return sidecar_stages[(uint32_t)stage];
 }
 
 sg_sidecar_diagnostic_t SG_SidecarFileSize(sg_sidecar_kind_t kind,
-	const rune_artifact_t *artifact, size_t *size_out)
+	const sg_rune_compact_wire_info_t *info, size_t payload_size,
+	size_t *size_out)
 {
-	const sidecar_descriptor_t *descriptor = Sidecar_Descriptor(kind);
-	uint32_t payload_bytes;
-	sg_sidecar_diagnostic_t diagnostic;
-
-	if (!size_out)
+	if (!Sidecar_Descriptor(kind) || !Sidecar_ArtifactInfoValid(info) ||
+		!size_out)
 		return SCD_INVALID_ARGUMENT;
-	diagnostic = Sidecar_PayloadBytes(descriptor, artifact,
-		&payload_bytes);
-	if (diagnostic != SCD_OK)
-		return diagnostic;
-	*size_out = SG_SIDECAR_HEADER_BYTES + (size_t)payload_bytes;
+	if (payload_size > SG_SIDECAR_MAX_PAYLOAD_BYTES)
+		return SCD_BAD_PAYLOAD_SIZE;
+	*size_out = SG_SIDECAR_HEADER_BYTES + payload_size;
 	return SCD_OK;
+}
+
+static sg_sidecar_diagnostic_t Sidecar_BindingMatches(
+	const sg_sidecar_header_t *header,
+	const sg_rune_compact_wire_info_t *info)
+{
+	if (header->rune_wire_version != info->wire_version ||
+		header->rune_model_version != info->model_version ||
+		header->rune_analytic_version != info->analytic_version)
+		return SCD_RUNE_VERSION_MISMATCH;
+	if (header->rune_schema_tag != info->schema_tag)
+		return SCD_RUNE_SCHEMA_MISMATCH;
+	if (header->rune_image_bytes != info->image_bytes)
+		return SCD_RUNE_IMAGE_MISMATCH;
+	if (header->rune_checksum != info->checksum)
+		return SCD_RUNE_CHECKSUM_MISMATCH;
+	return Sidecar_IdentityMatches(&header->rune_identity, &info->identity)
+		? SCD_OK : SCD_RUNE_IDENTITY_MISMATCH;
 }
 
 sg_sidecar_diagnostic_t SG_SidecarInspect(
 	const unsigned char *encoded_header, size_t encoded_header_size,
 	size_t full_file_size, sg_sidecar_kind_t kind,
-	const rune_artifact_t *artifact, sg_sidecar_header_t *header_out)
+	const sg_rune_compact_wire_info_t *info, sg_sidecar_header_t *header_out)
 {
 	const sidecar_descriptor_t *descriptor = Sidecar_Descriptor(kind);
 	sg_sidecar_header_t header;
-	uint32_t expected_payload;
 	uint32_t computed_crc;
 	size_t expected_file_size;
 	sg_sidecar_diagnostic_t diagnostic;
 
-	if (!encoded_header || !descriptor || !Sidecar_ArtifactValid(artifact) ||
-	    !header_out)
+	if (!encoded_header || !descriptor || !Sidecar_ArtifactInfoValid(info) ||
+		!header_out)
 		return SCD_INVALID_ARGUMENT;
 	if (encoded_header_size != SG_SIDECAR_HEADER_BYTES)
 		return SCD_BAD_HEADER_SIZE;
 	Sidecar_DecodeHeaderBytes(encoded_header, &header);
-	if (header.magic != Sidecar_Magic(kind))
+	if (header.magic != descriptor->magic)
 		return SCD_BAD_MAGIC;
+	if (header.format_version != SG_SIDECAR_FORMAT_VERSION)
+		return SCD_UNSUPPORTED_VERSION;
 	if (header.header_bytes != SG_SIDECAR_HEADER_BYTES)
 		return SCD_BAD_HEADER_SIZE;
 	diagnostic = Sidecar_HeaderCRC(encoded_header, encoded_header_size,
@@ -301,137 +459,57 @@ sg_sidecar_diagnostic_t SG_SidecarInspect(
 		return diagnostic;
 	if (computed_crc != header.header_crc32)
 		return SCD_BAD_HEADER_CRC;
-	if (Sidecar_GetU16(encoded_header + 4) != 0U ||
-	    Sidecar_GetU16(encoded_header + 8) != 0U ||
-	    Sidecar_GetU16(encoded_header + 14) != 0U)
+	if (header.reserved != 0U)
 		return SCD_NONZERO_RESERVED;
-	if (header.element_bytes != descriptor->element_bytes ||
-	    header.planes != descriptor->planes)
-		return SCD_BAD_SHAPE;
-	diagnostic = Sidecar_PayloadBytes(descriptor, artifact,
-		&expected_payload);
+	diagnostic = Sidecar_BindingMatches(&header, info);
 	if (diagnostic != SCD_OK)
 		return diagnostic;
-	if (header.num_seeds != artifact->num_seeds ||
-	    header.num_links != artifact->num_links)
-		return SCD_BAD_COUNTS;
-	if (header.payload_bytes != expected_payload)
+	if (header.payload_bytes > SG_SIDECAR_MAX_PAYLOAD_BYTES)
 		return SCD_BAD_PAYLOAD_SIZE;
 	expected_file_size = SG_SIDECAR_HEADER_BYTES +
-		(size_t)expected_payload;
+		(size_t)header.payload_bytes;
 	if (full_file_size != expected_file_size)
 		return SCD_BAD_FILE_SIZE;
-	if (header.action_contract_crc32 != artifact->action_contract_crc32)
-		return SCD_ACTION_CONTRACT_MISMATCH;
-	if (header.rune_payload_crc32 != artifact->payload_crc32)
-		return SCD_RUNE_PAYLOAD_MISMATCH;
-	if (header.rune_header_crc32 != artifact->header_crc32)
-		return SCD_RUNE_HEADER_MISMATCH;
 	*header_out = header;
 	return SCD_OK;
 }
 
-sg_sidecar_diagnostic_t SG_SidecarValidatePayload(
-	sg_sidecar_kind_t kind, const rune_artifact_t *artifact,
-	const uint8_t *live_seed_marks, size_t live_seed_capacity,
-	const unsigned char *payload, size_t payload_size,
-	uint32_t *plane_out, uint32_t *index_out)
-{
-	const sidecar_descriptor_t *descriptor = Sidecar_Descriptor(kind);
-	uint32_t expected_payload;
-	uint32_t plane;
-	uint32_t seed;
-	sg_sidecar_diagnostic_t diagnostic;
-
-	if (plane_out)
-		*plane_out = SG_SIDECAR_INDEX_NONE;
-	if (index_out)
-		*index_out = SG_SIDECAR_INDEX_NONE;
-	if (!descriptor || !Sidecar_ArtifactValid(artifact) ||
-	    (payload_size > 0U && !payload))
-		return SCD_INVALID_ARGUMENT;
-	diagnostic = Sidecar_PayloadBytes(descriptor, artifact,
-		&expected_payload);
-	if (diagnostic != SCD_OK)
-		return diagnostic;
-	if (payload_size != expected_payload)
-		return SCD_BAD_PAYLOAD_SIZE;
-	if (descriptor->axis != SIDECAR_AXIS_SEED)
-		return SCD_OK;
-	if (!live_seed_marks || live_seed_capacity < artifact->num_seeds)
-		return SCD_INVALID_ARGUMENT;
-	for (seed = 0U; seed < artifact->num_seeds; seed++)
-		if (live_seed_marks[seed] > 1U)
-			return SCD_INVALID_ARGUMENT;
-	for (plane = 0U; plane < descriptor->planes; plane++)
-	{
-		for (seed = 0U; seed < artifact->num_seeds; seed++)
-		{
-			size_t offset = ((size_t)plane * artifact->num_seeds + seed) *
-				descriptor->element_bytes;
-			uint32_t value = descriptor->element_bytes == 1U
-				? payload[offset] : Sidecar_GetU32(payload + offset);
-
-			if ((kind == SG_SIDECAR_DANGER &&
-			     value > (uint32_t)SG_SIDECAR_DANGER_MAX) ||
-			    (!live_seed_marks[seed] && value != 0U))
-			{
-				if (plane_out)
-					*plane_out = plane;
-				if (index_out)
-					*index_out = seed;
-				return SCD_BAD_PAYLOAD_VALUE;
-			}
-		}
-	}
-	return SCD_OK;
-}
-
 sg_sidecar_diagnostic_t SG_SidecarEncode(sg_sidecar_kind_t kind,
-	const rune_artifact_t *artifact, const uint8_t *live_seed_marks,
-	size_t live_seed_capacity, const unsigned char *payload,
+	const sg_rune_compact_wire_info_t *info, const unsigned char *payload,
 	size_t payload_size, unsigned char *encoded, size_t encoded_capacity,
 	size_t *encoded_size_out)
 {
 	const sidecar_descriptor_t *descriptor = Sidecar_Descriptor(kind);
 	sg_sidecar_header_t header;
 	unsigned char raw_header[SG_SIDECAR_HEADER_BYTES];
-	uint32_t expected_payload;
-	uint32_t payload_crc;
 	uint32_t header_crc;
+	uint32_t payload_crc;
 	size_t file_size;
 	sg_sidecar_diagnostic_t diagnostic;
 
-	if (!descriptor || !Sidecar_ArtifactValid(artifact) || !encoded ||
-	    !encoded_size_out)
+	if (!descriptor || !Sidecar_ArtifactInfoValid(info) ||
+		(payload_size != 0U && payload == NULL) || encoded == NULL ||
+		encoded_size_out == NULL)
 		return SCD_INVALID_ARGUMENT;
-	diagnostic = Sidecar_PayloadBytes(descriptor, artifact,
-		&expected_payload);
+	diagnostic = SG_SidecarFileSize(kind, info, payload_size, &file_size);
 	if (diagnostic != SCD_OK)
 		return diagnostic;
-	if (payload_size != (size_t)expected_payload)
-		return SCD_BAD_PAYLOAD_SIZE;
-	diagnostic = SG_SidecarValidatePayload(kind, artifact,
-		live_seed_marks, live_seed_capacity, payload, payload_size,
-		NULL, NULL);
-	if (diagnostic != SCD_OK)
-		return diagnostic;
-	file_size = SG_SIDECAR_HEADER_BYTES + payload_size;
 	if (encoded_capacity < file_size)
 		return SCD_BAD_FILE_SIZE;
 	if (!SG_CRC32Buffer(payload, payload_size, &payload_crc))
 		return SCD_INTERNAL_ERROR;
 	memset(&header, 0, sizeof(header));
-	header.magic = Sidecar_Magic(kind);
+	header.magic = descriptor->magic;
+	header.format_version = SG_SIDECAR_FORMAT_VERSION;
 	header.header_bytes = SG_SIDECAR_HEADER_BYTES;
-	header.element_bytes = descriptor->element_bytes;
-	header.planes = descriptor->planes;
-	header.num_seeds = artifact->num_seeds;
-	header.num_links = artifact->num_links;
-	header.rune_payload_crc32 = artifact->payload_crc32;
-	header.action_contract_crc32 = artifact->action_contract_crc32;
-	header.rune_header_crc32 = artifact->header_crc32;
-	header.payload_bytes = expected_payload;
+	header.rune_wire_version = info->wire_version;
+	header.rune_model_version = info->model_version;
+	header.rune_analytic_version = info->analytic_version;
+	header.rune_schema_tag = info->schema_tag;
+	header.rune_image_bytes = info->image_bytes;
+	header.rune_checksum = info->checksum;
+	header.rune_identity = info->identity;
+	header.payload_bytes = (uint32_t)payload_size;
 	header.payload_crc32 = payload_crc;
 	Sidecar_EncodeHeaderBytes(&header, raw_header);
 	diagnostic = Sidecar_HeaderCRC(raw_header, sizeof(raw_header),
@@ -449,8 +527,7 @@ sg_sidecar_diagnostic_t SG_SidecarEncode(sg_sidecar_kind_t kind,
 
 sg_sidecar_diagnostic_t SG_SidecarDecode(const unsigned char *encoded,
 	size_t encoded_size, sg_sidecar_kind_t kind,
-	const rune_artifact_t *artifact, const uint8_t *live_seed_marks,
-	size_t live_seed_capacity, unsigned char *payload_out,
+	const sg_rune_compact_wire_info_t *info, unsigned char *payload_out,
 	size_t payload_capacity, size_t *payload_size_out)
 {
 	sg_sidecar_header_t header;
@@ -458,13 +535,13 @@ sg_sidecar_diagnostic_t SG_SidecarDecode(const unsigned char *encoded,
 	uint32_t payload_crc;
 	sg_sidecar_diagnostic_t diagnostic;
 
-	if (!encoded || !Sidecar_ArtifactValid(artifact) || !payload_out ||
-	    !payload_size_out)
+	if (!encoded || !Sidecar_ArtifactInfoValid(info) || !payload_out ||
+		!payload_size_out)
 		return SCD_INVALID_ARGUMENT;
 	if (encoded_size < SG_SIDECAR_HEADER_BYTES)
 		return SCD_BAD_FILE_SIZE;
 	diagnostic = SG_SidecarInspect(encoded, SG_SIDECAR_HEADER_BYTES,
-		encoded_size, kind, artifact, &header);
+		encoded_size, kind, info, &header);
 	if (diagnostic != SCD_OK)
 		return diagnostic;
 	payload = encoded + SG_SIDECAR_HEADER_BYTES;
@@ -472,14 +549,10 @@ sg_sidecar_diagnostic_t SG_SidecarDecode(const unsigned char *encoded,
 		return SCD_INTERNAL_ERROR;
 	if (payload_crc != header.payload_crc32)
 		return SCD_BAD_PAYLOAD_CRC;
-	diagnostic = SG_SidecarValidatePayload(kind, artifact,
-		live_seed_marks, live_seed_capacity, payload, header.payload_bytes,
-		NULL, NULL);
-	if (diagnostic != SCD_OK)
-		return diagnostic;
 	if (payload_capacity < header.payload_bytes)
 		return SCD_BAD_PAYLOAD_SIZE;
-	memmove(payload_out, payload, header.payload_bytes);
+	if (header.payload_bytes != 0U)
+		memmove(payload_out, payload, header.payload_bytes);
 	*payload_size_out = header.payload_bytes;
 	return SCD_OK;
 }

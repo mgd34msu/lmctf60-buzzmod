@@ -52,6 +52,7 @@ static sg_rune_compact_artifact_load_result_t LoadResult(
 	result.diagnostic = diagnostic;
 	result.stage = stage;
 	ClearWireError(&result.wire_error);
+	result.wire_info.wire_version = 0U;
 	return result;
 }
 
@@ -85,6 +86,7 @@ void SG_RuneCompactArtifactLoaderReset(
 		return;
 	old = loader->published;
 	loader->published = NULL;
+	memset(&loader->published_info, 0, sizeof(loader->published_info));
 	SG_RuneCompactWireDestroy(old);
 }
 
@@ -104,6 +106,18 @@ const sg_rune_compact_model_t *SG_RuneCompactArtifactLoaderSnapshot(
 		? SG_RuneCompactWireModel(loader->published) : NULL;
 }
 
+int SG_RuneCompactArtifactLoaderSnapshotInfo(
+	const sg_rune_compact_artifact_loader_t *loader,
+	sg_rune_compact_wire_info_t *info_out)
+{
+	if (info_out != NULL)
+		memset(info_out, 0, sizeof(*info_out));
+	if (!LoaderReady(loader) || loader->published == NULL || info_out == NULL)
+		return 0;
+	*info_out = loader->published_info;
+	return 1;
+}
+
 sg_rune_compact_artifact_load_result_t
 SG_RuneCompactArtifactLoaderLoadBytes(
 	sg_rune_compact_artifact_loader_t *loader,
@@ -113,6 +127,7 @@ SG_RuneCompactArtifactLoaderLoadBytes(
 	sg_rune_compact_artifact_load_result_t result;
 	sg_rune_compact_wire_decoded_t *candidate = NULL;
 	sg_rune_compact_wire_decoded_t *old;
+	sg_rune_compact_wire_info_t info;
 	sg_rune_compact_wire_error_t wire_error;
 
 	result = LoadResult(SG_RUNE_COMPACT_ARTIFACT_LOAD_INVALID_ARGUMENT,
@@ -132,8 +147,10 @@ SG_RuneCompactArtifactLoaderLoadBytes(
 			SG_RUNE_COMPACT_WIRE_ERROR_LIMIT_EXCEEDED);
 		return result;
 	}
+	memset(&info, 0, sizeof(info));
 	ClearWireError(&wire_error);
-	if (!SG_RuneCompactWireDecode(image, image_size, expected_identity,
+	if (!SG_RuneCompactWireInspect(image, image_size, &info, &wire_error) ||
+		!SG_RuneCompactWireDecode(image, image_size, expected_identity,
 		&candidate, &wire_error))
 	{
 		result.diagnostic = wire_error.code ==
@@ -147,9 +164,11 @@ SG_RuneCompactArtifactLoaderLoadBytes(
 	/* Pointer replacement is the sole publication operation. */
 	old = loader->published;
 	loader->published = candidate;
+	loader->published_info = info;
 	SG_RuneCompactWireDestroy(old);
 	result.diagnostic = SG_RUNE_COMPACT_ARTIFACT_LOAD_OK;
 	result.stage = SG_RUNE_COMPACT_ARTIFACT_LOAD_STAGE_PUBLICATION;
+	result.wire_info = info;
 	return result;
 }
 
@@ -351,10 +370,11 @@ static int LoadOpsValid(const sg_rune_compact_artifact_load_ops_t *ops)
 		ops->read != NULL && ops->probe != NULL && ops->close_file != NULL;
 }
 
-sg_rune_compact_artifact_load_result_t
-SG_RuneCompactArtifactLoaderLoadFileWithOps(
+static sg_rune_compact_artifact_load_result_t LoadFile(
 	sg_rune_compact_artifact_loader_t *loader, const char *path,
 	const sg_rune_compact_identity_t *expected_identity,
+	sg_rune_compact_identity_t *inspected_identity_out,
+	sg_rune_compact_wire_info_t *inspected_info_out,
 	const sg_rune_compact_artifact_load_ops_t *provided_ops)
 {
 	sg_rune_compact_artifact_load_ops_t default_ops;
@@ -370,8 +390,13 @@ SG_RuneCompactArtifactLoaderLoadFileWithOps(
 	int has_extra = 0;
 	int close_status;
 
+	if (inspected_identity_out != NULL)
+		memset(inspected_identity_out, 0, sizeof(*inspected_identity_out));
+	if (inspected_info_out != NULL)
+		memset(inspected_info_out, 0, sizeof(*inspected_info_out));
 	if (loader == NULL || path == NULL || path[0] == '\0' ||
-		expected_identity == NULL)
+		(expected_identity == NULL) == (inspected_identity_out == NULL) ||
+		(inspected_info_out != NULL && inspected_identity_out == NULL))
 		return LoadResult(SG_RUNE_COMPACT_ARTIFACT_LOAD_INVALID_ARGUMENT,
 			SG_RUNE_COMPACT_ARTIFACT_LOAD_STAGE_ARGUMENT);
 	if (!LoaderReady(loader))
@@ -498,8 +523,39 @@ SG_RuneCompactArtifactLoaderLoadFileWithOps(
 		result.close_error = error != 0 ? error : EIO;
 		return result;
 	}
-	result = SG_RuneCompactArtifactLoaderLoadBytes(loader, image, file_size,
-		expected_identity);
+	if (expected_identity != NULL)
+		result = SG_RuneCompactArtifactLoaderLoadBytes(loader, image, file_size,
+			expected_identity);
+	else
+	{
+		sg_rune_compact_wire_info_t info;
+		sg_rune_compact_wire_error_t wire_error;
+
+		memset(&info, 0, sizeof(info));
+		ClearWireError(&wire_error);
+		if (!SG_RuneCompactWireInspect(image, file_size, &info, &wire_error))
+		{
+			result = LoadResult(
+				wire_error.code == SG_RUNE_COMPACT_WIRE_ERROR_OUT_OF_MEMORY ?
+					SG_RUNE_COMPACT_ARTIFACT_LOAD_ALLOCATION_FAILED :
+					SG_RUNE_COMPACT_ARTIFACT_LOAD_WIRE_REJECTED,
+				SG_RUNE_COMPACT_ARTIFACT_LOAD_STAGE_WIRE);
+			result.wire_error = wire_error;
+			result.file_size = file_size;
+			result.bytes_read = bytes_read;
+		}
+		else
+		{
+			result = SG_RuneCompactArtifactLoaderLoadBytes(loader, image,
+				file_size, &info.identity);
+			if (result.diagnostic == SG_RUNE_COMPACT_ARTIFACT_LOAD_OK)
+			{
+				*inspected_identity_out = info.identity;
+				if (inspected_info_out != NULL)
+					*inspected_info_out = result.wire_info;
+			}
+		}
+	}
 	result.file_size = file_size;
 	result.bytes_read = bytes_read;
 	free(image);
@@ -507,12 +563,37 @@ SG_RuneCompactArtifactLoaderLoadFileWithOps(
 }
 
 sg_rune_compact_artifact_load_result_t
+SG_RuneCompactArtifactLoaderLoadFileWithOps(
+	sg_rune_compact_artifact_loader_t *loader, const char *path,
+	const sg_rune_compact_identity_t *expected_identity,
+	const sg_rune_compact_artifact_load_ops_t *provided_ops)
+{
+	return LoadFile(loader, path, expected_identity, NULL, NULL, provided_ops);
+}
+
+sg_rune_compact_artifact_load_result_t
 SG_RuneCompactArtifactLoaderLoadFile(
 	sg_rune_compact_artifact_loader_t *loader, const char *path,
 	const sg_rune_compact_identity_t *expected_identity)
 {
-	return SG_RuneCompactArtifactLoaderLoadFileWithOps(loader, path,
-		expected_identity, NULL);
+	return LoadFile(loader, path, expected_identity, NULL, NULL, NULL);
+}
+
+sg_rune_compact_artifact_load_result_t
+SG_RuneCompactArtifactLoaderLoadAcceptedFile(
+	sg_rune_compact_artifact_loader_t *loader, const char *path,
+	sg_rune_compact_identity_t *identity_out)
+{
+	return LoadFile(loader, path, NULL, identity_out, NULL, NULL);
+}
+
+sg_rune_compact_artifact_load_result_t
+SG_RuneCompactArtifactLoaderLoadAcceptedFileWithInfo(
+	sg_rune_compact_artifact_loader_t *loader, const char *path,
+	sg_rune_compact_identity_t *identity_out,
+	sg_rune_compact_wire_info_t *info_out)
+{
+	return LoadFile(loader, path, NULL, identity_out, info_out, NULL);
 }
 
 const char *SG_RuneCompactArtifactLoadDiagnosticString(
@@ -989,6 +1070,7 @@ static sg_rune_compact_artifact_publication_result_t PublicationResult(
 	result.diagnostic = diagnostic;
 	result.stage = stage;
 	ClearWireError(&result.wire_error);
+	result.wire_info.wire_version = 0U;
 	return result;
 }
 
@@ -1015,6 +1097,7 @@ SG_RuneCompactArtifactPublish(
 	const sg_rune_compact_artifact_fs_ops_t *ops = provided_ops;
 	sg_rune_compact_artifact_publication_result_t result;
 	sg_rune_compact_wire_decoded_t *decoded = NULL;
+	sg_rune_compact_wire_info_t wire_info;
 	sg_rune_compact_wire_error_t wire_error;
 	char *temp_path;
 	void *file = NULL;
@@ -1046,8 +1129,11 @@ SG_RuneCompactArtifactPublish(
 	}
 	if (!FsOpsValid(ops))
 		return result;
+	memset(&wire_info, 0, sizeof(wire_info));
 	ClearWireError(&wire_error);
-	if (!SG_RuneCompactWireDecode(image, image_size, expected_identity,
+	if (!SG_RuneCompactWireInspect(image, image_size, &wire_info,
+		&wire_error) ||
+		!SG_RuneCompactWireDecode(image, image_size, expected_identity,
 		&decoded, &wire_error))
 	{
 		result.diagnostic = wire_error.code ==
@@ -1059,6 +1145,7 @@ SG_RuneCompactArtifactPublish(
 		return result;
 	}
 	SG_RuneCompactWireDestroy(decoded);
+	result.wire_info = wire_info;
 	destination_size = strlen(destination);
 	if (destination_size > SIZE_MAX - 64U)
 	{

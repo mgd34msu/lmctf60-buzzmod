@@ -29,12 +29,26 @@ typedef struct config_poly_s
 	float exact_maxs[3];
 } config_poly_t;
 
-typedef struct config_brush_bounds_s
+typedef struct config_topology_region_s
 {
-	float mins[3];
-	float maxs[3];
-	int usable;
-} config_brush_bounds_t;
+	uint32_t final_cell;
+	uint32_t first_portal;
+	uint32_t active_portal_count;
+	uint8_t active;
+} config_topology_region_t;
+
+typedef struct config_topology_portal_s
+{
+	uint32_t first_region;
+	uint32_t second_region;
+	uint32_t next_first;
+	uint32_t next_second;
+	sg_configuration_plane_t first_plane;
+	sg_configuration_plane_t second_plane;
+	sg_rune_vec3_t *vertices;
+	uint32_t vertex_count;
+	uint8_t active;
+} config_topology_portal_t;
 
 typedef struct config_build_s
 {
@@ -42,13 +56,23 @@ typedef struct config_build_s
 	sg_configuration_limits_t limits;
 	sg_configuration_space_t *space;
 	uint8_t *world_brushes;
-	config_brush_bounds_t *brush_bounds[SG_RUNE_STANCE_COUNT];
+	sg_rune_compact_spatial_index_t *brush_index;
+	uint32_t *brush_sources;
+	uint32_t brush_source_count;
+	uint32_t *brush_candidates;
+	uint32_t brush_candidate_capacity;
 	uint32_t cell_capacity;
 	uint32_t face_capacity;
 	uint32_t vertex_capacity;
 	uint32_t portal_capacity;
 	uint32_t overlap_capacity;
 	uint32_t certificate_capacity;
+	config_topology_region_t *topology_regions;
+	uint32_t topology_region_count;
+	uint32_t topology_region_capacity;
+	config_topology_portal_t *topology_portals;
+	uint32_t topology_portal_count;
+	uint32_t topology_portal_capacity;
 	sg_configuration_error_t error;
 } config_build_t;
 
@@ -56,13 +80,6 @@ typedef struct config_face_ref_s
 {
 	uint32_t cell;
 	uint32_t face;
-	float mins[3];
-	float maxs[3];
-	float canonical_normal[3];
-	float canonical_distance;
-	int64_t bin[4];
-	float sweep_min;
-	float sweep_max;
 } config_face_ref_t;
 
 typedef struct config_cell_ref_s
@@ -76,6 +93,8 @@ static int CanonicalizeClip(config_build_t *build,
 	const config_poly_t *source, const sg_configuration_plane_t *clip,
 	int keep_back, config_poly_t *result);
 static int PlaneIsOpen(const sg_configuration_plane_t *plane);
+static int EquivalentPlaneGeometry(const sg_configuration_plane_t *a,
+	const sg_configuration_plane_t *b);
 static void AddLatticeStats(config_build_t *build,
 	const sg_configuration_lattice_stats_t *stats);
 
@@ -1578,6 +1597,497 @@ static int AppendCertificate(config_build_t *build,
 	return 1;
 }
 
+static int TopologyAppendRegion(config_build_t *build, uint32_t *region_out)
+{
+	config_topology_region_t *regions;
+	uint32_t region = build->topology_region_count;
+
+	if (region == UINT32_MAX || !GrowArray((void **)&build->topology_regions,
+			&build->topology_region_capacity, region + 1U, UINT32_MAX,
+			sizeof(*regions)))
+	{
+		SetError(build, region == UINT32_MAX ? SG_CONFIGURATION_ERROR_OVERFLOW :
+			SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, region);
+		return 0;
+	}
+	regions = build->topology_regions;
+	memset(&regions[region], 0, sizeof(regions[region]));
+	regions[region].active = 1U;
+	regions[region].final_cell = SG_CONFIGURATION_INDEX_NONE;
+	regions[region].first_portal = SG_CONFIGURATION_INDEX_NONE;
+	build->topology_region_count++;
+	*region_out = region;
+	return 1;
+}
+
+static int TopologyPolygonHasArea(const sg_rune_vec3_t *vertices,
+	uint32_t vertex_count)
+{
+	uint32_t vertex;
+
+	if (vertex_count < 3U)
+		return 0;
+	for (vertex = 1U; vertex + 1U < vertex_count; vertex++)
+	{
+		double first[3], second[3], cross[3];
+		uint32_t axis;
+
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			first[axis] = (double)vertices[vertex].value[axis] -
+				vertices[0].value[axis];
+			second[axis] = (double)vertices[vertex + 1U].value[axis] -
+				vertices[0].value[axis];
+		}
+		cross[0] = first[1] * second[2] - first[2] * second[1];
+		cross[1] = first[2] * second[0] - first[0] * second[2];
+		cross[2] = first[0] * second[1] - first[1] * second[0];
+		if (cross[0] != 0.0 || cross[1] != 0.0 || cross[2] != 0.0)
+			return 1;
+	}
+	return 0;
+}
+
+static int TopologyAppendPortal(config_build_t *build, uint32_t first_region,
+	uint32_t second_region, const sg_configuration_plane_t *first_plane,
+	const sg_configuration_plane_t *second_plane, const sg_rune_vec3_t *vertices,
+	uint32_t vertex_count)
+{
+	config_topology_portal_t *portals;
+	config_topology_portal_t *portal;
+	uint32_t index = build->topology_portal_count;
+	uint32_t existing;
+
+	if (first_region == second_region ||
+		first_region >= build->topology_region_count ||
+		second_region >= build->topology_region_count || index == UINT32_MAX ||
+		(vertex_count && !TopologyPolygonHasArea(vertices, vertex_count)))
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, index);
+		return 0;
+	}
+	for (existing = build->topology_regions[first_region].first_portal;
+		existing != SG_CONFIGURATION_INDEX_NONE; )
+	{
+		const config_topology_portal_t *value =
+			&build->topology_portals[existing];
+		uint32_t next = value->first_region == first_region ?
+			value->next_first : value->next_second;
+		int same_endpoints =
+			(value->first_region == first_region &&
+			 value->second_region == second_region) ||
+			(value->first_region == second_region &&
+			 value->second_region == first_region);
+
+		if (value->active && same_endpoints &&
+			value->first_plane.source_kind == first_plane->source_kind &&
+			value->first_plane.source_index == first_plane->source_index &&
+			value->first_plane.source_variant == first_plane->source_variant &&
+			value->second_plane.source_kind == second_plane->source_kind &&
+			value->second_plane.source_index == second_plane->source_index &&
+			value->second_plane.source_variant == second_plane->source_variant)
+		{
+			SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, existing);
+			return 0;
+		}
+		existing = next;
+	}
+	if (!GrowArray((void **)&build->topology_portals,
+			&build->topology_portal_capacity, index + 1U, UINT32_MAX,
+			sizeof(*portals)))
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, index);
+		return 0;
+	}
+	portals = build->topology_portals;
+	portal = &portals[index];
+	memset(portal, 0, sizeof(*portal));
+	portal->first_region = first_region;
+	portal->second_region = second_region;
+	portal->next_first = build->topology_regions[first_region].first_portal;
+	portal->next_second = build->topology_regions[second_region].first_portal;
+	portal->first_plane = *first_plane;
+	portal->second_plane = *second_plane;
+	if (vertex_count)
+	{
+		portal->vertices = malloc((size_t)vertex_count * sizeof(*portal->vertices));
+		if (!portal->vertices)
+		{
+			SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, index);
+			return 0;
+		}
+		memcpy(portal->vertices, vertices,
+			(size_t)vertex_count * sizeof(*portal->vertices));
+		portal->vertex_count = vertex_count;
+	}
+	portal->active = 1U;
+	if (build->topology_regions[first_region].active_portal_count == UINT32_MAX ||
+		build->topology_regions[second_region].active_portal_count == UINT32_MAX)
+	{
+		free(portal->vertices);
+		portal->vertices = NULL;
+		SetError(build, SG_CONFIGURATION_ERROR_OVERFLOW, index);
+		return 0;
+	}
+	build->topology_regions[first_region].first_portal = index;
+	build->topology_regions[second_region].first_portal = index;
+	build->topology_regions[first_region].active_portal_count++;
+	build->topology_regions[second_region].active_portal_count++;
+	build->topology_portal_count++;
+	return 1;
+}
+
+static int TopologyDeactivatePortal(config_build_t *build, uint32_t portal)
+{
+	config_topology_portal_t *record;
+	config_topology_region_t *first, *second;
+
+	if (portal >= build->topology_portal_count)
+		return 0;
+	record = &build->topology_portals[portal];
+	if (!record->active || record->first_region >= build->topology_region_count ||
+		record->second_region >= build->topology_region_count)
+		return 0;
+	first = &build->topology_regions[record->first_region];
+	second = &build->topology_regions[record->second_region];
+	if (!first->active_portal_count || !second->active_portal_count)
+		return 0;
+	first->active_portal_count--;
+	second->active_portal_count--;
+	record->active = 0U;
+	return 1;
+}
+
+static void TopologyDiscardRegion(config_build_t *build, uint32_t region)
+{
+	uint32_t portal;
+	uint32_t expected, processed = 0U;
+
+	if (region >= build->topology_region_count ||
+		!build->topology_regions[region].active)
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, region);
+		return;
+	}
+	expected = build->topology_regions[region].active_portal_count;
+	for (portal = build->topology_regions[region].first_portal;
+		portal != SG_CONFIGURATION_INDEX_NONE; )
+	{
+		config_topology_portal_t *record = &build->topology_portals[portal];
+		uint32_t next = record->first_region == region ?
+			record->next_first : record->next_second;
+
+		if (record->first_region != region && record->second_region != region)
+		{
+			SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, portal);
+			return;
+		}
+		if (record->active)
+		{
+			if (!TopologyDeactivatePortal(build, portal))
+			{
+				SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, portal);
+				return;
+			}
+			free(record->vertices);
+			record->vertices = NULL;
+			record->vertex_count = 0U;
+			processed++;
+		}
+		portal = next;
+	}
+	if (processed != expected || build->topology_regions[region].active_portal_count)
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, region);
+		return;
+	}
+	build->topology_regions[region].active = 0U;
+}
+
+static const config_mesh_face_t *TopologyBoundaryFace(const config_poly_t *poly,
+	const sg_configuration_plane_t *plane)
+{
+	const config_mesh_face_t *match = NULL;
+	uint32_t face;
+
+	for (face = 0U; face < poly->face_count; face++)
+		if (poly->faces[face].plane.source_kind == plane->source_kind &&
+			poly->faces[face].plane.source_index == plane->source_index &&
+			poly->faces[face].plane.source_variant == plane->source_variant)
+		{
+			if (match)
+				return NULL;
+			match = &poly->faces[face];
+		}
+	if (match)
+		return match;
+	for (face = 0U; face < poly->face_count; face++)
+		if (EquivalentPlaneGeometry(&poly->faces[face].plane, plane))
+		{
+			if (match)
+				return NULL;
+			match = &poly->faces[face];
+		}
+	return match;
+}
+
+static int TopologyCarryPortal(config_build_t *build,
+	const config_topology_portal_t *parent, uint32_t parent_region,
+	uint32_t front_region, uint32_t back_region, const config_poly_t *front,
+	const config_poly_t *back, const sg_configuration_plane_t *split)
+{
+	uint32_t peer = parent->first_region == parent_region ?
+		parent->second_region : parent->first_region;
+	const sg_configuration_plane_t *parent_plane =
+		parent->first_region == parent_region ?
+		&parent->first_plane : &parent->second_plane;
+	const sg_configuration_plane_t *peer_plane =
+		parent->first_region == parent_region ?
+		&parent->second_plane : &parent->first_plane;
+	const config_mesh_face_t *front_face =
+		TopologyBoundaryFace(front, parent_plane);
+	const config_mesh_face_t *back_face = TopologyBoundaryFace(back, parent_plane);
+	uint32_t mapped = 0U;
+	int same_boundary = parent_plane->source_kind == split->source_kind &&
+		parent_plane->source_index == split->source_index &&
+		parent_plane->source_variant == split->source_variant;
+
+	if (same_boundary)
+	{
+		if (parent->vertex_count && !TopologyPolygonHasArea(parent->vertices,
+				parent->vertex_count))
+			return 1;
+		if (front_face && !TopologyAppendPortal(build, peer,
+				front_region, peer_plane, &front_face->plane, parent->vertices,
+				parent->vertex_count))
+			return 0;
+		if (front_face)
+			mapped++;
+		if (back_face && !TopologyAppendPortal(build, peer,
+				back_region, peer_plane, &back_face->plane, parent->vertices,
+				parent->vertex_count))
+			return 0;
+		if (back_face)
+			mapped++;
+		if (mapped != 1U)
+		{
+			SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY,
+				parent_region);
+			return 0;
+		}
+		build->space->topology_carried_portal_count += mapped;
+		return 1;
+	}
+
+	if (!parent->vertex_count)
+	{
+		if (front_face && !TopologyAppendPortal(build, peer, front_region,
+				peer_plane, &front_face->plane, NULL, 0U))
+			return 0;
+		if (front_face)
+			mapped++;
+		if (back_face && !TopologyAppendPortal(build, peer, back_region,
+				peer_plane, &back_face->plane, NULL, 0U))
+			return 0;
+		if (back_face)
+			mapped++;
+	}
+	else
+	{
+		config_mesh_face_t source, clipped;
+		sg_rune_vec3_t *cuts = NULL;
+		uint32_t cut_count = 0U;
+
+		memset(&source, 0, sizeof(source));
+		source.plane = *parent_plane;
+		source.vertices = parent->vertices;
+		source.vertex_count = parent->vertex_count;
+		if (front_face && !ClipPolygon(&source, split, 0, &clipped,
+				&cuts, &cut_count))
+			return 0;
+		free(cuts);
+		cuts = NULL;
+		cut_count = 0U;
+		if (front_face && clipped.vertex_count &&
+			TopologyPolygonHasArea(clipped.vertices, clipped.vertex_count))
+		{
+			if (!TopologyAppendPortal(build, peer, front_region, peer_plane,
+					&front_face->plane, clipped.vertices, clipped.vertex_count))
+			{
+				free(clipped.vertices);
+				return 0;
+			}
+			mapped++;
+		}
+		if (front_face)
+			free(clipped.vertices);
+		if (back_face && !ClipPolygon(&source, split, 1, &clipped,
+				&cuts, &cut_count))
+			return 0;
+		free(cuts);
+		if (back_face && clipped.vertex_count &&
+			TopologyPolygonHasArea(clipped.vertices, clipped.vertex_count))
+		{
+			if (!TopologyAppendPortal(build, peer, back_region, peer_plane,
+					&back_face->plane, clipped.vertices, clipped.vertex_count))
+			{
+				free(clipped.vertices);
+				return 0;
+			}
+			mapped++;
+		}
+		if (back_face)
+			free(clipped.vertices);
+	}
+	if (!mapped)
+	{
+		return 1;
+	}
+	build->space->topology_carried_portal_count += mapped;
+	return 1;
+}
+
+static int TopologySplitRegion(config_build_t *build, uint32_t parent_region,
+	const sg_configuration_plane_t *plane, const config_poly_t *front,
+	const config_poly_t *back, int true_split, uint32_t *front_region_out,
+	uint32_t *back_region_out)
+{
+	const config_mesh_face_t *interface, *front_interface, *back_interface;
+	uint32_t front_region, back_region, portal, expected, processed = 0U;
+
+	if (parent_region >= build->topology_region_count ||
+		!build->topology_regions[parent_region].active ||
+		!TopologyAppendRegion(build, &front_region) ||
+		!TopologyAppendRegion(build, &back_region))
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, parent_region);
+		return 0;
+	}
+	if (!true_split)
+	{
+		uint32_t surviving_region;
+
+		if ((front->face_count != 0U) == (back->face_count != 0U))
+		{
+			SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, parent_region);
+			return 0;
+		}
+		surviving_region = front->face_count ? front_region : back_region;
+		for (portal = build->topology_regions[parent_region].first_portal;
+			portal != SG_CONFIGURATION_INDEX_NONE; )
+		{
+			config_topology_portal_t *record = &build->topology_portals[portal];
+			int parent_is_first = record->first_region == parent_region;
+			uint32_t next = parent_is_first ?
+				record->next_first : record->next_second;
+
+			if (!parent_is_first && record->second_region != parent_region)
+			{
+				SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, portal);
+				return 0;
+			}
+			if (record->active)
+			{
+				if (!build->topology_regions[parent_region].active_portal_count ||
+					build->topology_regions[surviving_region].active_portal_count ==
+						UINT32_MAX)
+				{
+					SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, portal);
+					return 0;
+				}
+				if (parent_is_first)
+				{
+					record->first_region = surviving_region;
+					record->next_first = build->topology_regions[
+						surviving_region].first_portal;
+				}
+				else
+				{
+					record->second_region = surviving_region;
+					record->next_second = build->topology_regions[
+						surviving_region].first_portal;
+				}
+				build->topology_regions[surviving_region].first_portal = portal;
+				build->topology_regions[parent_region].active_portal_count--;
+				build->topology_regions[surviving_region].active_portal_count++;
+			}
+			portal = next;
+		}
+		if (build->topology_regions[parent_region].active_portal_count)
+		{
+			SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, parent_region);
+			return 0;
+		}
+		build->topology_regions[parent_region].active = 0U;
+		*front_region_out = front_region;
+		*back_region_out = back_region;
+		return 1;
+	}
+	expected = build->topology_regions[parent_region].active_portal_count;
+	for (portal = build->topology_regions[parent_region].first_portal;
+		portal != SG_CONFIGURATION_INDEX_NONE; )
+	{
+		config_topology_portal_t parent;
+		uint32_t next;
+
+		parent = build->topology_portals[portal];
+		if (parent.first_region == parent_region)
+			next = parent.next_first;
+		else if (parent.second_region == parent_region)
+			next = parent.next_second;
+		else
+		{
+			SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, portal);
+			return 0;
+		}
+		if (parent.active)
+		{
+			if (!TopologyDeactivatePortal(build, portal))
+			{
+				SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, portal);
+				return 0;
+			}
+			processed++;
+			if (!TopologyCarryPortal(build, &parent, parent_region, front_region,
+				back_region, front, back, plane))
+				return 0;
+			free(build->topology_portals[portal].vertices);
+			build->topology_portals[portal].vertices = NULL;
+			build->topology_portals[portal].vertex_count = 0U;
+		}
+		portal = next;
+	}
+	if (processed != expected ||
+		build->topology_regions[parent_region].active_portal_count)
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, parent_region);
+		return 0;
+	}
+	if (front->face_count && back->face_count)
+	{
+		front_interface = TopologyBoundaryFace(front, plane);
+		back_interface = TopologyBoundaryFace(back, plane);
+		interface = back_interface;
+		if (!interface || !TopologyPolygonHasArea(interface->vertices,
+				interface->vertex_count))
+			interface = front_interface;
+		if (!front_interface || !back_interface || !interface ||
+			(TopologyPolygonHasArea(interface->vertices, interface->vertex_count) &&
+			 !TopologyAppendPortal(build, front_region, back_region,
+				&front_interface->plane, &back_interface->plane,
+				interface->vertices, interface->vertex_count)))
+		{
+			SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, parent_region);
+			return 0;
+		}
+	}
+	build->topology_regions[parent_region].active = 0U;
+	build->space->topology_split_count++;
+	*front_region_out = front_region;
+	*back_region_out = back_region;
+	return 1;
+}
+
 static int AppendCell(config_build_t *build, config_poly_t *poly,
 	sg_rune_stance_t stance, uint32_t leaf_index,
 	const float protocol_witness[3], uint32_t *cell_out)
@@ -1698,23 +2208,29 @@ static int AppendCell(config_build_t *build, config_poly_t *poly,
 }
 
 static int EmptyTerminal(config_build_t *build, sg_rune_stance_t stance,
-	uint32_t leaf, uint32_t *node_out)
+	uint32_t leaf, uint32_t region, uint32_t *node_out)
 {
+	TopologyDiscardRegion(build, region);
+	if (build->error.code != SG_CONFIGURATION_ERROR_NONE)
+		return 0;
 	return AppendCertificate(build, SG_CONFIGURATION_CERTIFICATE_EMPTY,
 		stance, leaf, node_out);
 }
 
 static int CarveBrushSide(config_build_t *build, config_poly_t *poly,
-	sg_rune_stance_t stance, uint32_t leaf, uint32_t brush_index,
+	sg_rune_stance_t stance, uint32_t leaf, uint32_t region, uint32_t brush_index,
 	uint32_t side_offset, uint32_t next_brush, uint32_t *node_out);
 
 static int CarveBrushes(config_build_t *build, config_poly_t *poly,
-	sg_rune_stance_t stance, uint32_t leaf, uint32_t first_brush,
+	sg_rune_stance_t stance, uint32_t leaf, uint32_t region, uint32_t first_brush,
 	uint32_t *node_out)
 {
 	const sg_bsp_world_t *world = build->authority->world;
+	sg_rune_compact_spatial_query_t query;
+	sg_rune_compact_spatial_query_statistics_t statistics;
+	sg_rune_compact_spatial_error_t spatial_error;
 	float poly_mins[3], poly_maxs[3];
-	uint32_t brush;
+	uint32_t candidate_count, candidate;
 	int bounds = AuthoritativePolyBounds(build, poly, poly_mins, poly_maxs);
 
 	if (bounds < 0)
@@ -1723,15 +2239,49 @@ static int CarveBrushes(config_build_t *build, config_poly_t *poly,
 		return 0;
 	}
 	if (!bounds)
-		return EmptyTerminal(build, stance, leaf, node_out);
-	for (brush = first_brush; brush < world->brush_count; brush++)
-		if (build->world_brushes[brush] && BlockingBrush(&world->brushes[brush]) &&
-			build->brush_bounds[stance][brush].usable &&
-			BoundsOverlap(poly_mins, poly_maxs,
-				build->brush_bounds[stance][brush].mins,
-				build->brush_bounds[stance][brush].maxs))
-			return CarveBrushSide(build, poly, stance, leaf, brush, 0,
+		return EmptyTerminal(build, stance, leaf, region, node_out);
+	memset(&query, 0, sizeof(query));
+	memcpy(query.origin_bounds.mins.value, poly_mins, sizeof(poly_mins));
+	memcpy(query.origin_bounds.maxs.value, poly_maxs, sizeof(poly_maxs));
+	query.hull = *StanceHull(build, stance);
+	if (!SG_RuneCompactSpatialIndexQueryWithStatistics(build->brush_index,
+			&query, build->brush_candidates, build->brush_candidate_capacity,
+			&candidate_count, &statistics, &spatial_error))
+	{
+		SetError(build, spatial_error.code ==
+			SG_RUNE_COMPACT_SPATIAL_ERROR_OUT_OF_MEMORY ?
+			SG_CONFIGURATION_ERROR_OUT_OF_MEMORY :
+			SG_CONFIGURATION_ERROR_INVALID_WORLD, spatial_error.record);
+		return 0;
+	}
+	if (!build->space->brush_index_queries || statistics.tested_entries <
+		build->space->brush_index_minimum_tested_entries)
+		build->space->brush_index_minimum_tested_entries =
+			statistics.tested_entries;
+	build->space->brush_index_queries++;
+	build->space->brush_index_visited_nodes += statistics.visited_nodes;
+	build->space->brush_index_tested_entries += statistics.tested_entries;
+	if (statistics.tested_entries >
+		build->space->brush_index_maximum_tested_entries)
+		build->space->brush_index_maximum_tested_entries =
+			statistics.tested_entries;
+	for (candidate = 0U; candidate < candidate_count; candidate++)
+	{
+		uint32_t indexed_brush = build->brush_candidates[candidate];
+		uint32_t brush;
+
+		if (indexed_brush >= build->brush_source_count)
+		{
+			SetError(build, SG_CONFIGURATION_ERROR_INVALID_WORLD, indexed_brush);
+			return 0;
+		}
+		brush = build->brush_sources[indexed_brush];
+
+		if (brush >= first_brush && build->world_brushes[brush] &&
+			BlockingBrush(&world->brushes[brush]))
+			return CarveBrushSide(build, poly, stance, leaf, region, brush, 0U,
 				brush + 1U, node_out);
+	}
 	{
 		uint32_t cell;
 		float witness[3];
@@ -1743,29 +2293,41 @@ static int CarveBrushes(config_build_t *build, config_poly_t *poly,
 			return 0;
 		}
 		if (!representable)
-			return EmptyTerminal(build, stance, leaf, node_out);
+			return EmptyTerminal(build, stance, leaf, region, node_out);
 		if (!AppendCell(build, poly, stance, leaf, witness, &cell) ||
 			!AppendCertificate(build, SG_CONFIGURATION_CERTIFICATE_VALID,
 				stance, leaf, node_out))
 			return 0;
+		if (region >= build->topology_region_count ||
+			!build->topology_regions[region].active ||
+			build->topology_regions[region].final_cell !=
+				SG_CONFIGURATION_INDEX_NONE)
+		{
+			SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, region);
+			return 0;
+		}
+		build->topology_regions[region].final_cell = cell;
 		build->space->certificate_nodes[*node_out].cell = cell;
 	}
 	return 1;
 }
 
 static int CarveBrushSide(config_build_t *build, config_poly_t *poly,
-	sg_rune_stance_t stance, uint32_t leaf, uint32_t brush_index,
+	sg_rune_stance_t stance, uint32_t leaf, uint32_t region, uint32_t brush_index,
 	uint32_t side_offset, uint32_t next_brush, uint32_t *node_out)
 {
 	const sg_bsp_brush_t *brush =
 		&build->authority->world->brushes[brush_index];
 	sg_configuration_plane_t plane;
 	config_poly_t front, back;
-	uint32_t node, front_node, back_node;
+	uint32_t node, front_node, back_node, front_region, back_region;
 	int split;
 
 	if (side_offset == brush->side_count)
 	{
+		TopologyDiscardRegion(build, region);
+		if (build->error.code != SG_CONFIGURATION_ERROR_NONE)
+			return 0;
 		if (!AppendCertificate(build, SG_CONFIGURATION_CERTIFICATE_BLOCKED,
 				stance, leaf, node_out))
 			return 0;
@@ -1779,6 +2341,13 @@ static int CarveBrushSide(config_build_t *build, config_poly_t *poly,
 		SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, brush_index);
 		return 0;
 	}
+	if (!TopologySplitRegion(build, region, &plane, &front, &back, split == 1,
+			&front_region, &back_region))
+	{
+		FreePoly(&front);
+		FreePoly(&back);
+		return 0;
+	}
 	if (!AppendCertificate(build, SG_CONFIGURATION_CERTIFICATE_SPLIT,
 			stance, leaf, &node))
 	{
@@ -1789,18 +2358,19 @@ static int CarveBrushSide(config_build_t *build, config_poly_t *poly,
 	build->space->certificate_nodes[node].plane = plane;
 	if (front.face_count)
 	{
-		if (!CarveBrushes(build, &front, stance, leaf, next_brush, &front_node))
+		if (!CarveBrushes(build, &front, stance, leaf, front_region, next_brush,
+				&front_node))
 			goto failure;
 	}
-	else if (!EmptyTerminal(build, stance, leaf, &front_node))
+	else if (!EmptyTerminal(build, stance, leaf, front_region, &front_node))
 		goto failure;
 	if (back.face_count)
 	{
-		if (!CarveBrushSide(build, &back, stance, leaf, brush_index,
+		if (!CarveBrushSide(build, &back, stance, leaf, back_region, brush_index,
 				side_offset + 1U, next_brush, &back_node))
 			goto failure;
 	}
-	else if (!EmptyTerminal(build, stance, leaf, &back_node))
+	else if (!EmptyTerminal(build, stance, leaf, back_region, &back_node))
 		goto failure;
 	build->space->certificate_nodes[node].front = front_node;
 	build->space->certificate_nodes[node].back = back_node;
@@ -1816,19 +2386,19 @@ failure:
 }
 
 static int BuildBsp(config_build_t *build, config_poly_t *poly,
-	sg_rune_stance_t stance, int32_t child, uint32_t *node_out)
+	sg_rune_stance_t stance, uint32_t region, int32_t child, uint32_t *node_out)
 {
 	const sg_bsp_world_t *world = build->authority->world;
 	sg_configuration_plane_t plane;
 	config_poly_t front, back;
-	uint32_t node, front_node, back_node;
+	uint32_t node, front_node, back_node, front_region, back_region;
 	int split;
 
 	if (child < 0)
 	{
 		uint32_t leaf = (uint32_t)(-1 - child);
 
-		return CarveBrushes(build, poly, stance, leaf, 0, node_out);
+		return CarveBrushes(build, poly, stance, leaf, region, 0U, node_out);
 	}
 	plane = BspPlane(world, world->nodes[(uint32_t)child].plane);
 	split = SplitPoly(build, poly, &plane, &front, &back);
@@ -1837,27 +2407,34 @@ static int BuildBsp(config_build_t *build, config_poly_t *poly,
 		SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, (uint32_t)child);
 		return 0;
 	}
+	if (!TopologySplitRegion(build, region, &plane, &front, &back, split == 1,
+			&front_region, &back_region))
+	{
+		FreePoly(&front);
+		FreePoly(&back);
+		return 0;
+	}
 	if (!AppendCertificate(build, SG_CONFIGURATION_CERTIFICATE_SPLIT,
 			stance, SG_CONFIGURATION_INDEX_NONE, &node))
 		goto failure;
 	build->space->certificate_nodes[node].plane = plane;
 	if (front.face_count)
 	{
-		if (!BuildBsp(build, &front, stance,
+		if (!BuildBsp(build, &front, stance, front_region,
 				world->nodes[(uint32_t)child].children[0], &front_node))
 			goto failure;
 	}
 	else if (!EmptyTerminal(build, stance, SG_CONFIGURATION_INDEX_NONE,
-			&front_node))
+			front_region, &front_node))
 		goto failure;
 	if (back.face_count)
 	{
-		if (!BuildBsp(build, &back, stance,
+		if (!BuildBsp(build, &back, stance, back_region,
 				world->nodes[(uint32_t)child].children[1], &back_node))
 			goto failure;
 	}
 	else if (!EmptyTerminal(build, stance, SG_CONFIGURATION_INDEX_NONE,
-			&back_node))
+			back_region, &back_node))
 		goto failure;
 	build->space->certificate_nodes[node].front = front_node;
 	build->space->certificate_nodes[node].back = back_node;
@@ -1906,97 +2483,142 @@ static int MarkWorldBrushes(config_build_t *build)
 	return 1;
 }
 
-static int ComputeBrushBounds(config_build_t *build, uint32_t brush_index,
-	sg_rune_stance_t stance)
+/* The compact index requires finite brushes.  Quake BSPs normally provide
+ * them, but the collision contract also permits a brush with fewer than four
+ * sides.  Cap every indexed brush at the finite pmove-origin domain.  Query
+ * hull expansion moves these caps away from that domain, so they cannot alter
+ * any configuration-space result. */
+static int BuildBrushIndex(config_build_t *build)
 {
-	const sg_bsp_brush_t *brush =
-		&build->authority->world->brushes[brush_index];
-	config_poly_t domain, clipped, next;
-	uint32_t side;
+	const sg_bsp_world_t *source = build->authority->world;
+	sg_bsp_world_t indexed = *source;
+	sg_bsp_plane_t *planes = NULL;
+	sg_bsp_brush_t *brushes = NULL;
+	sg_bsp_brush_side_t *sides = NULL;
+	sg_rune_compact_spatial_error_t spatial_error;
+	uint32_t brush, indexed_brush = 0U, indexed_brush_count = 0U;
+	uint32_t side_cursor = 0U, indexed_side_count = 0U, axis;
+	int result = 0;
 
-	if (!BoxPoly(&build->space->domain, &domain))
+	if (source->plane_count > UINT32_MAX - 6U)
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_OVERFLOW, source->brush_count);
 		return 0;
-	clipped = domain;
-	for (side = 0; side < brush->side_count; side++)
-	{
-		sg_configuration_plane_t plane =
-			BrushPlane(build, brush_index, side, stance);
-
-		if (!ClipPoly(&clipped, &plane, 1, &next))
-		{
-			FreePoly(&clipped);
-			return 0;
-		}
-		FreePoly(&clipped);
-		clipped = next;
-		if (!clipped.face_count)
-			break;
 	}
-	if (clipped.face_count)
-	{
-		config_brush_bounds_t *bounds =
-			&build->brush_bounds[stance][brush_index];
-
-		int bounded = AuthoritativePolyBounds(build, &clipped, bounds->mins,
-			bounds->maxs);
-
-		if (bounded < 0)
+	for (brush = 0U; brush < source->brush_count; brush++)
+		if (build->world_brushes[brush] && BlockingBrush(&source->brushes[brush]))
 		{
-			FreePoly(&clipped);
-			return 0;
+			if (indexed_brush_count == UINT32_MAX ||
+				indexed_side_count > UINT32_MAX - 6U ||
+				source->brushes[brush].side_count >
+					UINT32_MAX - indexed_side_count - 6U)
+			{
+				SetError(build, SG_CONFIGURATION_ERROR_OVERFLOW, brush);
+				return 0;
+			}
+			indexed_brush_count++;
+			indexed_side_count += source->brushes[brush].side_count + 6U;
 		}
-		bounds->usable = bounded != 0;
+	planes = malloc((size_t)(source->plane_count + 6U) * sizeof(*planes));
+	brushes = malloc((size_t)indexed_brush_count * sizeof(*brushes));
+	sides = malloc((size_t)indexed_side_count * sizeof(*sides));
+	build->brush_sources = malloc((size_t)indexed_brush_count *
+		sizeof(*build->brush_sources));
+	build->brush_candidates = malloc((size_t)indexed_brush_count *
+		sizeof(*build->brush_candidates));
+	if ((!planes && source->plane_count + 6U) ||
+		(!brushes && indexed_brush_count) || (!sides && indexed_side_count) ||
+		(!build->brush_sources && indexed_brush_count) ||
+		(!build->brush_candidates && indexed_brush_count))
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, 0U);
+		goto done;
 	}
-	FreePoly(&clipped);
-	return 1;
+	if (source->plane_count)
+		memcpy(planes, source->planes,
+			(size_t)source->plane_count * sizeof(*planes));
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		sg_bsp_plane_t *maximum = &planes[source->plane_count + axis * 2U];
+		sg_bsp_plane_t *minimum = maximum + 1U;
+
+		memset(maximum, 0, sizeof(*maximum));
+		memset(minimum, 0, sizeof(*minimum));
+		maximum->normal.value[axis] = 1.0f;
+		maximum->distance = SG_CONFIGURATION_PMOVE_ORIGIN_MAX;
+		minimum->normal.value[axis] = -1.0f;
+		minimum->distance = -SG_CONFIGURATION_PMOVE_ORIGIN_MIN;
+		maximum->type = (int32_t)axis;
+		minimum->type = (int32_t)axis;
+	}
+	for (brush = 0U; brush < source->brush_count; brush++)
+	{
+		const sg_bsp_brush_t *input = &source->brushes[brush];
+		uint32_t offset;
+
+		if (!build->world_brushes[brush] || !BlockingBrush(input))
+			continue;
+		build->brush_sources[indexed_brush] = brush;
+		brushes[indexed_brush] = *input;
+		brushes[indexed_brush].first_side = side_cursor;
+		brushes[indexed_brush].side_count = input->side_count + 6U;
+		for (offset = 0U; offset < input->side_count; offset++)
+			sides[side_cursor++] =
+				source->brush_sides[input->first_side + offset];
+		for (offset = 0U; offset < 6U; offset++)
+		{
+			memset(&sides[side_cursor], 0, sizeof(sides[side_cursor]));
+			sides[side_cursor].plane = source->plane_count + offset;
+			sides[side_cursor].texinfo = -1;
+			side_cursor++;
+		}
+		indexed_brush++;
+	}
+	if (indexed_brush != indexed_brush_count || side_cursor != indexed_side_count)
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_INVALID_WORLD, indexed_brush);
+		goto done;
+	}
+	indexed.leaves = NULL;
+	indexed.leaf_count = 0U;
+	indexed.leaf_brushes = NULL;
+	indexed.leaf_brush_count = 0U;
+	indexed.planes = planes;
+	indexed.plane_count = source->plane_count + 6U;
+	indexed.brushes = brushes;
+	indexed.brush_count = indexed_brush_count;
+	indexed.brush_sides = sides;
+	indexed.brush_side_count = side_cursor;
+	if (SG_RuneCompactSpatialIndexBuild(&indexed, NULL, &build->brush_index,
+			&spatial_error))
+	{
+		build->brush_source_count = indexed_brush_count;
+		build->brush_candidate_capacity = indexed_brush_count;
+		build->space->brush_index_entry_count = indexed_brush_count;
+		result = 1;
+	}
+	else
+		SetError(build, spatial_error.code ==
+			SG_RUNE_COMPACT_SPATIAL_ERROR_OUT_OF_MEMORY ?
+			SG_CONFIGURATION_ERROR_OUT_OF_MEMORY :
+			SG_CONFIGURATION_ERROR_INVALID_WORLD, spatial_error.record);
+
+done:
+	free(sides);
+	free(brushes);
+	free(planes);
+	return result;
 }
 
 static int PrepareBrushes(config_build_t *build)
 {
 	const sg_bsp_world_t *world = build->authority->world;
-	uint32_t brush, stance;
 
 	build->world_brushes = calloc(world->brush_count ? world->brush_count : 1U,
 		sizeof(*build->world_brushes));
 	if (!build->world_brushes || !MarkWorldBrushes(build))
 		return 0;
-	for (stance = 0; stance < SG_RUNE_STANCE_COUNT; stance++)
-	{
-		build->brush_bounds[stance] = calloc(
-			world->brush_count ? world->brush_count : 1U,
-			sizeof(*build->brush_bounds[stance]));
-		if (!build->brush_bounds[stance])
-			return 0;
-		for (brush = 0; brush < world->brush_count; brush++)
-			if (build->world_brushes[brush] &&
-				BlockingBrush(&world->brushes[brush]) &&
-				!ComputeBrushBounds(build, brush, (sg_rune_stance_t)stance))
-				return 0;
-	}
-	return 1;
-}
-
-static int FaceRefCompare(const sg_configuration_space_t *space,
-	const config_face_ref_t *left, const config_face_ref_t *right)
-{
-	const sg_configuration_cell_t *left_cell =
-		&space->cells[left->cell];
-	const sg_configuration_cell_t *right_cell =
-		&space->cells[right->cell];
-
-#define COMPARE_FIELD(a, b) do { if ((a) < (b)) return -1; \
-	if ((a) > (b)) return 1; } while (0)
-	COMPARE_FIELD(left_cell->stance, right_cell->stance);
-	COMPARE_FIELD(left->bin[0], right->bin[0]);
-	COMPARE_FIELD(left->bin[1], right->bin[1]);
-	COMPARE_FIELD(left->bin[2], right->bin[2]);
-	COMPARE_FIELD(left->bin[3], right->bin[3]);
-	COMPARE_FIELD(left->sweep_min, right->sweep_min);
-	COMPARE_FIELD(left->sweep_max, right->sweep_max);
-	COMPARE_FIELD(left->cell, right->cell);
-	COMPARE_FIELD(left->face, right->face);
-#undef COMPARE_FIELD
-	return 0;
+	return BuildBrushIndex(build);
 }
 
 static void CanonicalPlane(const sg_configuration_plane_t *plane,
@@ -2036,104 +2658,6 @@ static int EquivalentPlaneGeometry(const sg_configuration_plane_t *a,
 		fabsf(distance_a - distance_b) <= CONFIG_POINT_EPSILON;
 }
 
-static int ConfigurationPlaneBins(const float normal[3], float distance,
-	int64_t bin[4])
-{
-	const float values[4] = { normal[0], normal[1], normal[2], distance };
-	uint32_t component;
-
-	for (component = 0U; component < 4U; component++)
-	{
-		double value = floor((double)values[component] /
-			(2.0 * (double)CONFIG_POINT_EPSILON));
-
-		if (!isfinite(value) || value < (double)INT64_MIN ||
-			value > (double)INT64_MAX)
-			return 0;
-		bin[component] = (int64_t)value;
-	}
-	return 1;
-}
-
-static int OffsetConfigurationBin(int64_t value, int delta, int64_t *result)
-{
-	if ((delta < 0 && value == INT64_MIN) ||
-		(delta > 0 && value == INT64_MAX))
-		return 0;
-	*result = value + (int64_t)delta;
-	return 1;
-}
-
-static int FaceBinKeyCompare(const sg_configuration_space_t *space,
-	const config_face_ref_t *face, sg_rune_stance_t stance,
-	const int64_t bin[4])
-{
-	uint32_t component;
-	sg_rune_stance_t face_stance = space->cells[face->cell].stance;
-
-	if (face_stance != stance)
-		return face_stance < stance ? -1 : 1;
-	for (component = 0U; component < 4U; component++)
-		if (face->bin[component] != bin[component])
-			return face->bin[component] < bin[component] ? -1 : 1;
-	return 0;
-}
-
-static uint32_t FaceBinLowerBound(const sg_configuration_space_t *space,
-	const config_face_ref_t *faces, uint32_t count, sg_rune_stance_t stance,
-	const int64_t bin[4])
-{
-	uint32_t low = 0U, high = count;
-
-	while (low < high)
-	{
-		uint32_t middle = low + (high - low) / 2U;
-
-		if (FaceBinKeyCompare(space, &faces[middle], stance, bin) < 0)
-			low = middle + 1U;
-		else
-			high = middle;
-	}
-	return low;
-}
-
-static int SortFaceRefs(const sg_configuration_space_t *space,
-	config_face_ref_t *values, uint32_t count)
-{
-	config_face_ref_t *temporary;
-	uint32_t width;
-
-	if (count < 2U)
-		return 1;
-	temporary = malloc((size_t)count * sizeof(*temporary));
-	if (!temporary)
-		return 0;
-	for (width = 1U; width < count; )
-	{
-		uint32_t start;
-
-		for (start = 0; start < count; start += width * 2U)
-		{
-			uint32_t middle = start + width < count ? start + width : count;
-			uint32_t end = middle + width < count ? middle + width : count;
-			uint32_t left = start, right = middle, output = start;
-
-			while (left < middle || right < end)
-				if (right == end || (left < middle &&
-					FaceRefCompare(space, &values[left], &values[right]) <= 0))
-					temporary[output++] = values[left++];
-				else
-					temporary[output++] = values[right++];
-		}
-		memcpy(values, temporary, (size_t)count * sizeof(*values));
-		if (width > count / 2U)
-			break;
-		width *= 2U;
-	}
-	free(temporary);
-	return 1;
-}
-
 static double PolygonArea2(const sg_rune_vec3_t *vertices, uint32_t count,
 	uint32_t drop)
 {
@@ -2153,20 +2677,6 @@ static double PolygonArea2(const sg_rune_vec3_t *vertices, uint32_t count,
 			((double)current[v] - origin_v);
 	}
 	return area * 0.5;
-}
-
-static int SameFaceGroup(const sg_configuration_space_t *space,
-	const config_face_ref_t *left, const config_face_ref_t *right)
-{
-	return space->cells[left->cell].stance == space->cells[right->cell].stance &&
-		fabsf(left->canonical_normal[0] - right->canonical_normal[0]) <=
-			CONFIG_POINT_EPSILON &&
-		fabsf(left->canonical_normal[1] - right->canonical_normal[1]) <=
-			CONFIG_POINT_EPSILON &&
-		fabsf(left->canonical_normal[2] - right->canonical_normal[2]) <=
-			CONFIG_POINT_EPSILON &&
-		fabsf(left->canonical_distance - right->canonical_distance) <=
-			CONFIG_POINT_EPSILON;
 }
 
 static int HostValidatedCandidate(
@@ -2713,7 +3223,6 @@ static int BuildPortalPair(config_build_t *build,
 	float area = 0.0f;
 
 	if (a->cell == b->cell ||
-		!BoundsOverlap(a->mins, a->maxs, b->mins, b->maxs) ||
 		(double)face_a->plane.normal[0] * face_b->plane.normal[0] +
 		(double)face_a->plane.normal[1] * face_b->plane.normal[1] +
 		(double)face_a->plane.normal[2] * face_b->plane.normal[2] >= 0.0)
@@ -2739,118 +3248,298 @@ static int BuildPortalPair(config_build_t *build,
 	return 1;
 }
 
-static int BuildPortals(config_build_t *build)
+static int TopologyPortalFace(const sg_configuration_space_t *space,
+	uint32_t cell, const sg_configuration_plane_t *portal_plane,
+	config_face_ref_t *result)
 {
-	config_face_ref_t *references;
-	uint32_t face = 0, cell, left;
+	const sg_configuration_cell_t *record = &space->cells[cell];
+	uint32_t offset, count = 0U;
 
-	references = malloc((size_t)build->space->face_count * sizeof(*references));
-	if (!references && build->space->face_count)
-		return 0;
-	for (cell = 0; cell < build->space->cell_count; cell++)
+	for (offset = 0U; offset < record->face_count; offset++)
 	{
-		uint32_t offset;
+		const sg_configuration_plane_t *face =
+			&space->faces[record->first_face + offset].plane;
 
-		for (offset = 0; offset < build->space->cells[cell].face_count; offset++)
+		if (face->source_kind == portal_plane->source_kind &&
+			face->source_index == portal_plane->source_index &&
+			face->source_variant == portal_plane->source_variant)
 		{
-			const sg_configuration_face_t *record;
-			uint32_t vertex, axis, drop, sweep_axis;
-
-			record = &build->space->faces[
-				build->space->cells[cell].first_face + offset];
-			references[face].face =
-				build->space->cells[cell].first_face + offset;
-			references[face].cell = cell;
-			CanonicalPlane(&record->plane, references[face].canonical_normal,
-				&references[face].canonical_distance);
-			if (!ConfigurationPlaneBins(references[face].canonical_normal,
-					references[face].canonical_distance, references[face].bin))
-			{
-				free(references);
-				return 0;
-			}
-			for (axis = 0; axis < 3; axis++)
-			{
-				references[face].mins[axis] = INFINITY;
-				references[face].maxs[axis] = -INFINITY;
-			}
-			if (record->kind == SG_CONFIGURATION_FACE_FACET)
-				for (vertex = 0; vertex < record->vertex_count; vertex++)
-					for (axis = 0; axis < 3; axis++)
-					{
-						float value = build->space->vertices[
-							record->first_vertex + vertex].value[axis];
-
-						if (value < references[face].mins[axis])
-							references[face].mins[axis] = value;
-						if (value > references[face].maxs[axis])
-							references[face].maxs[axis] = value;
-					}
-			else
-			{
-				CopyVector(references[face].mins,
-					build->space->cells[cell].bounds.mins.value);
-				CopyVector(references[face].maxs,
-					build->space->cells[cell].bounds.maxs.value);
-			}
-			drop = DominantAxis(record->plane.normal);
-			sweep_axis = (drop + 1U) % 3U;
-			references[face].sweep_min = references[face].mins[sweep_axis];
-			references[face].sweep_max = references[face].maxs[sweep_axis];
-			face++;
+			result->cell = cell;
+			result->face = record->first_face + offset;
+			count++;
 		}
 	}
-	if (!SortFaceRefs(build->space, references, face))
+	return count == 1U;
+}
+
+static int PublishTopologyPortals(config_build_t *build)
+{
+	uint32_t portal;
+
+	for (portal = 0U; portal < build->topology_portal_count; portal++)
 	{
-		free(references);
+		const config_topology_portal_t *record =
+			&build->topology_portals[portal];
+		const config_topology_region_t *first;
+		const config_topology_region_t *second;
+		config_face_ref_t a, b;
+
+		if (!record->active)
+			continue;
+		if (record->first_region >= build->topology_region_count ||
+			record->second_region >= build->topology_region_count)
+			goto invalid;
+		first = &build->topology_regions[record->first_region];
+		second = &build->topology_regions[record->second_region];
+		if (!first->active || !second->active ||
+			first->final_cell == SG_CONFIGURATION_INDEX_NONE ||
+			second->final_cell == SG_CONFIGURATION_INDEX_NONE ||
+			!TopologyPortalFace(build->space, first->final_cell,
+				&record->first_plane, &a) ||
+			!TopologyPortalFace(build->space, second->final_cell,
+				&record->second_plane, &b) ||
+			!BuildPortalPair(build, &a, &b))
+			goto invalid;
+	}
+	return 1;
+
+invalid:
+	SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, portal);
+	return 0;
+}
+
+typedef struct config_boundary_key_s
+{
+	uint32_t source_kind;
+	uint32_t source_index;
+	uint32_t source_variant;
+} config_boundary_key_t;
+
+static int BoundaryKeyEqual(const config_boundary_key_t *left,
+	const config_boundary_key_t *right)
+{
+	return left->source_kind == right->source_kind &&
+		left->source_index == right->source_index &&
+		left->source_variant == right->source_variant;
+}
+
+static int BoundaryKeyFindOrAppend(config_boundary_key_t *keys,
+	uint32_t *count, uint32_t capacity, const sg_configuration_plane_t *plane,
+	uint32_t *boundary_out)
+{
+	config_boundary_key_t key;
+	uint32_t boundary;
+
+	key.source_kind = plane->source_kind;
+	key.source_index = plane->source_index;
+	key.source_variant = plane->source_variant;
+	for (boundary = 0U; boundary < *count; boundary++)
+		if (BoundaryKeyEqual(&keys[boundary], &key))
+		{
+			*boundary_out = boundary;
+			return 1;
+		}
+	if (*count >= capacity)
 		return 0;
-	}
-	for (left = 0U; left < face; left++)
-	{
-		const config_face_ref_t *a = &references[left];
-		const sg_rune_stance_t stance = build->space->cells[a->cell].stance;
-		int d0, d1, d2, d3;
-
-		for (d0 = -1; d0 <= 1; d0++)
-			for (d1 = -1; d1 <= 1; d1++)
-				for (d2 = -1; d2 <= 1; d2++)
-					for (d3 = -1; d3 <= 1; d3++)
-			{
-				int64_t bin[4];
-				uint32_t right;
-
-				if (!OffsetConfigurationBin(a->bin[0], d0, &bin[0]) ||
-					!OffsetConfigurationBin(a->bin[1], d1, &bin[1]) ||
-					!OffsetConfigurationBin(a->bin[2], d2, &bin[2]) ||
-					!OffsetConfigurationBin(a->bin[3], d3, &bin[3]))
-					continue;
-				right = FaceBinLowerBound(build->space, references, face,
-					stance, bin);
-				while (right < face && FaceBinKeyCompare(build->space,
-					&references[right], stance, bin) == 0)
-				{
-					const config_face_ref_t *b = &references[right];
-
-					if (right > left && SameFaceGroup(build->space, a, b))
-					{
-						if (b->sweep_min > a->sweep_max + CONFIG_EPSILON)
-							break;
-						if (a->sweep_min <= b->sweep_max + CONFIG_EPSILON &&
-							!BuildPortalPair(build, a, b))
-						{
-							free(references);
-							return 0;
-						}
-					}
-					right++;
-				}
-			}
-	}
-	free(references);
+	keys[*count] = key;
+	*boundary_out = (*count)++;
 	return 1;
 }
 
+static int BuildFinalTopologyIndex(config_build_t *build)
+{
+	sg_rune_compact_spatial_cell_input_t *cells = NULL;
+	sg_rune_compact_spatial_face_input_t *faces = NULL;
+	sg_rune_compact_spatial_portal_input_t *portals = NULL;
+	config_boundary_key_t *keys = NULL;
+	sg_rune_compact_spatial_topology_input_t topology;
+	sg_rune_compact_spatial_counts_t counts;
+	sg_rune_compact_spatial_error_t error;
+	uint32_t cell, face_cursor = 0U, portal, key_count = 0U;
+	int result = 0;
+
+	cells = calloc(build->space->cell_count, sizeof(*cells));
+	faces = calloc(build->space->face_count, sizeof(*faces));
+	portals = calloc(build->space->portal_count, sizeof(*portals));
+	keys = calloc(build->space->face_count, sizeof(*keys));
+	if ((!cells && build->space->cell_count) ||
+		(!faces && build->space->face_count) ||
+		(!portals && build->space->portal_count) ||
+		(!keys && build->space->face_count))
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, 0U);
+		goto done;
+	}
+	for (cell = 0U; cell < build->space->cell_count; cell++)
+	{
+		const sg_configuration_cell_t *source = &build->space->cells[cell];
+		uint32_t offset;
+
+		cells[cell].bounds = source->bounds;
+		cells[cell].first_face = face_cursor;
+		cells[cell].face_count = source->face_count;
+		for (offset = 0U; offset < source->face_count; offset++)
+		{
+			const sg_configuration_face_t *input =
+				&build->space->faces[source->first_face + offset];
+			sg_rune_compact_spatial_face_input_t *output = &faces[face_cursor++];
+
+			output->bounds = source->bounds;
+			memcpy(output->normal, input->plane.normal, sizeof(output->normal));
+			output->distance = input->plane.distance;
+			output->ownership = input->plane.source_kind ==
+				SG_CONFIGURATION_PLANE_DOMAIN || !input->plane.reversed ?
+				SG_RUNE_BOUNDARY_CLOSED : SG_RUNE_BOUNDARY_OPEN;
+			if (!BoundaryKeyFindOrAppend(keys, &key_count,
+					build->space->face_count, &input->plane,
+					&output->source_boundary))
+			{
+				SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY,
+					face_cursor - 1U);
+				goto done;
+			}
+		}
+	}
+	if (face_cursor != build->space->face_count)
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, face_cursor);
+		goto done;
+	}
+	for (portal = 0U; portal < build->space->portal_count; portal++)
+	{
+		const sg_configuration_portal_t *source =
+			&build->space->portals[portal];
+		uint32_t boundary;
+
+		if (!BoundaryKeyFindOrAppend(keys, &key_count,
+				build->space->face_count, &source->plane, &boundary))
+		{
+			SetError(build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, portal);
+			goto done;
+		}
+		portals[portal].source_boundary = boundary;
+		portals[portal].negative_cell = source->from_cell;
+		portals[portal].positive_cell = source->to_cell;
+	}
+	memset(&topology, 0, sizeof(topology));
+	topology.cells = cells;
+	topology.cell_count = build->space->cell_count;
+	topology.faces = faces;
+	topology.face_count = build->space->face_count;
+	topology.portals = portals;
+	topology.portal_count = build->space->portal_count;
+	if (!SG_RuneCompactSpatialIndexBuildTopology(&topology, NULL,
+			&build->space->topology_index, &error) ||
+		!SG_RuneCompactSpatialIndexCounts(build->space->topology_index,
+			&counts, &error) || counts.cell_count != build->space->cell_count ||
+		counts.face_count != build->space->face_count ||
+		counts.portal_count != build->space->portal_count)
+	{
+		SetError(build, error.code == SG_RUNE_COMPACT_SPATIAL_ERROR_OUT_OF_MEMORY ?
+			SG_CONFIGURATION_ERROR_OUT_OF_MEMORY :
+			SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, error.record);
+		goto done;
+	}
+	result = 1;
+
+done:
+	free(keys);
+	free(portals);
+	free(faces);
+	free(cells);
+	return result;
+}
+
 #if defined(SG_CONFIGURATION_SPACE_TESTING)
+int SG_ConfigurationTestTopologyMappingValidation(void)
+{
+	config_build_t build;
+	sg_configuration_space_t space;
+	sg_configuration_plane_t portal_plane;
+	sg_rune_vec3_t vertices[4] = {
+		{ { -2.0f, 0.0f, -1.0f } }, { { -1.0f, 0.0f, -1.0f } },
+		{ { -1.0f, 0.0f, 1.0f } }, { { -2.0f, 0.0f, 1.0f } }
+	};
+	uint32_t first, second, index;
+	int valid = 0;
+
+	memset(&build, 0, sizeof(build));
+	memset(&space, 0, sizeof(space));
+	memset(&portal_plane, 0, sizeof(portal_plane));
+	build.space = &space;
+	portal_plane.normal[1] = 1.0f;
+	portal_plane.source_kind = SG_CONFIGURATION_PLANE_BSP;
+	portal_plane.source_index = 7U;
+	if (!TopologyAppendRegion(&build, &first) ||
+		!TopologyAppendRegion(&build, &second) ||
+		!TopologyAppendPortal(&build, first, second, &portal_plane, &portal_plane,
+			vertices, 4U) ||
+		TopologyAppendPortal(&build, first, second, &portal_plane, &portal_plane,
+			vertices, 4U) ||
+		build.error.code != SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY)
+		goto done;
+	for (index = 0U; index < build.topology_portal_count; index++)
+		free(build.topology_portals[index].vertices);
+	free(build.topology_portals);
+	free(build.topology_regions);
+	memset(&build, 0, sizeof(build));
+	memset(&space, 0, sizeof(space));
+	build.space = &space;
+	if (!TopologyAppendRegion(&build, &first) ||
+		!TopologyAppendRegion(&build, &second) ||
+		!TopologyAppendPortal(&build, first, second, &portal_plane, &portal_plane,
+			vertices, 4U))
+		goto done;
+	build.topology_regions[second].first_portal = SG_CONFIGURATION_INDEX_NONE;
+	TopologyDiscardRegion(&build, second);
+	if (build.error.code != SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY)
+		goto done;
+	valid = 1;
+
+done:
+	for (index = 0U; index < build.topology_portal_count; index++)
+		free(build.topology_portals[index].vertices);
+	free(build.topology_portals);
+	free(build.topology_regions);
+	return valid;
+}
+
+static int BuildTestPortals(config_build_t *build)
+{
+	uint32_t first_cell, second_cell;
+
+	for (first_cell = 0U; first_cell < build->space->cell_count; first_cell++)
+		for (second_cell = first_cell + 1U;
+			second_cell < build->space->cell_count; second_cell++)
+		{
+			const sg_configuration_cell_t *first =
+				&build->space->cells[first_cell];
+			const sg_configuration_cell_t *second =
+				&build->space->cells[second_cell];
+			uint32_t a_offset, b_offset;
+
+			if (first->stance != second->stance)
+				continue;
+			for (a_offset = 0U; a_offset < first->face_count; a_offset++)
+				for (b_offset = 0U; b_offset < second->face_count; b_offset++)
+				{
+					config_face_ref_t a = {
+						first_cell, first->first_face + a_offset
+					};
+					config_face_ref_t b = {
+						second_cell, second->first_face + b_offset
+					};
+
+					if (EquivalentPlaneGeometry(
+						&build->space->faces[a.face].plane,
+						&build->space->faces[b.face].plane) &&
+						!BuildPortalPair(build, &a, &b))
+						return 0;
+				}
+		}
+	return 1;
+}
+
 int SG_ConfigurationTestConstraintPortal(
 	const sg_host_collision_authority_t *authority)
 {
@@ -2903,7 +3592,7 @@ int SG_ConfigurationTestConstraintPortal(
 			cells[cell].bounds.maxs.value[axis] = maximum;
 		}
 	}
-	if (!BuildPortals(&build) || space.portal_count != 1U ||
+	if (!BuildTestPortals(&build) || space.portal_count != 1U ||
 		space.portals[0].from_cell != 0U || space.portals[0].to_cell != 1U ||
 		space.portals[0].vertex_count < 3U ||
 		!(space.portals[0].clearance > 0.0f))
@@ -2965,7 +3654,7 @@ int SG_ConfigurationTestConstraintPortal(
 	faces[6].plane.distance = 0.0f;
 	faces[13].plane.normal[1] = -0.00000075f;
 	faces[13].plane.distance = 0.0f;
-	if (!BuildPortals(&build) || space.portal_count != 1U ||
+	if (!BuildTestPortals(&build) || space.portal_count != 1U ||
 		space.portals[0].from_cell != 1U || space.portals[0].to_cell != 2U ||
 		space.portals[0].vertex_count < 3U ||
 		!(space.portals[0].clearance > 0.0f))
@@ -3013,7 +3702,7 @@ int SG_ConfigurationTestConstraintPortal(
 		cell_faces[3].plane.distance = 2.0f;
 		cell_faces[3].plane.source_index = cell * 4U + 3U;
 	}
-	if (!BuildPortals(&build) || space.portal_count != 1U ||
+	if (!BuildTestPortals(&build) || space.portal_count != 1U ||
 		space.portals[0].from_cell != 0U || space.portals[0].to_cell != 1U ||
 		space.portals[0].vertex_count != 4U ||
 		!(space.portals[0].clearance > 0.0f))
@@ -3057,7 +3746,7 @@ int SG_ConfigurationTestConstraintPortal(
 			cells[cell].bounds.maxs.value[axis] = maximum;
 		}
 	}
-	if (!BuildPortals(&build) || space.portal_count != 1U ||
+	if (!BuildTestPortals(&build) || space.portal_count != 1U ||
 		space.portals[0].vertex_count != 4U ||
 		!(space.portals[0].clearance > 0.0f))
 		goto done;
@@ -3571,20 +4260,30 @@ int SG_ConfigurationBuild(const sg_host_collision_authority_t *authority,
 	}
 	for (stance = 0; stance < SG_RUNE_STANCE_COUNT; stance++)
 	{
+		uint32_t root_region;
+
 		if (!BoxPoly(&build.space->domain, &domain))
 		{
 			SetError(&build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, stance);
 			goto done;
 		}
-		if (!BuildBsp(&build, &domain, (sg_rune_stance_t)stance,
+		if (!TopologyAppendRegion(&build, &root_region) ||
+			!BuildBsp(&build, &domain, (sg_rune_stance_t)stance, root_region,
 				authority->world->models[0].headnode,
 				&build.space->certificate_roots[stance]))
 			goto done;
 		FreePoly(&domain);
 	}
-	if (!BuildPortals(&build))
+	if (!PublishTopologyPortals(&build))
 	{
-		SetError(&build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, 0);
+		if (build.error.code == SG_CONFIGURATION_ERROR_NONE)
+			SetError(&build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, 0U);
+		goto done;
+	}
+	if (!BuildFinalTopologyIndex(&build))
+	{
+		if (build.error.code == SG_CONFIGURATION_ERROR_NONE)
+			SetError(&build, SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY, 0U);
 		goto done;
 	}
 	if (!BuildStanceOverlaps(&build))
@@ -3599,8 +4298,13 @@ int SG_ConfigurationBuild(const sg_host_collision_authority_t *authority,
 done:
 	FreePoly(&domain);
 	free(build.world_brushes);
-	for (stance = 0; stance < SG_RUNE_STANCE_COUNT; stance++)
-		free(build.brush_bounds[stance]);
+	free(build.brush_sources);
+	free(build.brush_candidates);
+	SG_RuneCompactSpatialIndexDestroy(build.brush_index);
+	for (stance = 0U; stance < build.topology_portal_count; stance++)
+		free(build.topology_portals[stance].vertices);
+	free(build.topology_portals);
+	free(build.topology_regions);
 	SG_ConfigurationDestroy(build.space);
 	if (error_out)
 		*error_out = build.error;
@@ -3617,6 +4321,7 @@ void SG_ConfigurationDestroy(sg_configuration_space_t *space)
 	free(space->portals);
 	free(space->stance_overlaps);
 	free(space->certificate_nodes);
+	SG_RuneCompactSpatialIndexDestroy(space->topology_index);
 	free(space);
 }
 
@@ -3634,6 +4339,7 @@ const char *SG_ConfigurationErrorString(sg_configuration_error_code_t code)
 		return "degenerate geometry";
 	case SG_CONFIGURATION_ERROR_OVERFLOW: return "representation overflow";
 	case SG_CONFIGURATION_ERROR_OUT_OF_MEMORY: return "out of memory";
+	case SG_CONFIGURATION_ERROR_INVALID_TOPOLOGY: return "invalid topology";
 	case SG_CONFIGURATION_ERROR_HOST_DISAGREEMENT:
 		return "host collision disagreement";
 	default: return "unknown configuration error";

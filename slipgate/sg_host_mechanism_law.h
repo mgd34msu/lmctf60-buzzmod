@@ -52,6 +52,10 @@ typedef struct sg_host_mechanism_law_s
 	uint32_t frame_schedule_ms;
 	float door_default_speed;
 	float door_rotating_default_speed;
+	float button_default_speed;
+	float door_default_lip;
+	float button_default_lip;
+	float platform_default_lip;
 	float platform_default_speed;
 	float platform_default_accel;
 	float platform_default_decel;
@@ -72,6 +76,17 @@ typedef struct sg_host_mechanism_move_result_s
 	float residual_distance;
 	float final_speed;
 } sg_host_mechanism_move_result_t;
+
+/* Receives each nonzero stock SV_Physics_Pusher translation distance in
+ * Move_Calc/Think_AccelMove order.  It is a host-law seam for consumers that
+ * must replay G_Push/SV_Push carrying without inventing a movement command. */
+typedef int (*sg_host_mechanism_move_frame_fn)(void *context,
+	float distance);
+
+/* Receives every angular SV_Physics_Pusher frame in the exact
+ * AngleMove_Calc/AngleMove_Begin order. */
+typedef int (*sg_host_mechanism_angle_frame_fn)(void *context,
+	const float angular_delta[3]);
 
 typedef enum sg_host_mechanism_door_event_e
 {
@@ -127,6 +142,22 @@ int SG_HostMechanismLawValid(const sg_host_mechanism_law_t *law);
 int SG_HostMechanismMoveSchedule(const sg_host_mechanism_law_t *law,
 	float distance, float speed, float accel, float decel, int current_entity,
 	sg_host_mechanism_move_result_t *result_out);
+int SG_HostMechanismMoveFrames(const sg_host_mechanism_law_t *law,
+	float distance, float speed, float accel, float decel, int current_entity,
+	sg_host_mechanism_move_frame_fn frame, void *frame_context,
+	sg_host_mechanism_move_result_t *result_out);
+/* Exact AngleMove_Calc/AngleMove_Begin completion schedule for a finite
+ * angular pusher.  Unlike Move_Calc, stock AngleMove ignores acceleration
+ * fields and derives velocity from the whole angular displacement. */
+int SG_HostMechanismAngleMoveSchedule(const sg_host_mechanism_law_t *law,
+	const float angular_delta[3], float speed, int current_entity,
+	sg_host_mechanism_move_result_t *result_out);
+int SG_HostMechanismAngleMoveFrames(const sg_host_mechanism_law_t *law,
+	const float angular_delta[3], float speed, int current_entity,
+	sg_host_mechanism_angle_frame_fn frame, void *frame_context,
+	sg_host_mechanism_move_result_t *result_out);
+/* Exact G_Push/SV_Push component clamp used for every pusher frame. */
+int SG_HostMechanismPushDisplacement(float input, float *output);
 int SG_HostMechanismDoorStep(const sg_host_mechanism_law_t *law,
 	sg_host_mechanism_door_event_t event, uint32_t flags, int state,
 	float wait_seconds, uint64_t now_ms, uint64_t debounce_until_ms,

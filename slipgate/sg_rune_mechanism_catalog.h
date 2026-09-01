@@ -174,6 +174,25 @@ typedef enum sg_mech_motion_state_e
 	SG_MECH_MOTION_TO_ORIGIN = 3
 } sg_mech_motion_state_t;
 
+/* One source-ordinal lookup is an authenticated bridge from effective BSP
+ * semantics to a live catalog owner.  `key` is intentionally returned only
+ * after the catalog has found and currentness-checked it; callers must never
+ * interpret source_ordinal as an edict index. */
+typedef struct sg_mech_catalog_source_resolution_s
+{
+	uint32_t source_ordinal;
+	uint32_t key;
+	uint32_t generation;
+	sg_mech_node_kind_t node_kind;
+	sg_mech_motion_state_t motion_state;
+	/* Exact Q8-linear progress when the catalog can authenticate the live
+	 * origin against its sealed mover endpoints.  Endpoints are 0 or 1; a
+	 * moving phase is absent rather than guessed when that proof is missing. */
+	float phase;
+	uint8_t phase_known;
+	uint8_t reserved[3];
+} sg_mech_catalog_source_resolution_t;
+
 typedef enum sg_mech_platform_profile_e
 {
 	SG_MECH_PLATFORM_PROFILE_NONE = 0,
@@ -551,6 +570,11 @@ int SG_MechCatalogEntityRetired(uint32_t key,
  * cleared on failure; generation zero never names a live incarnation. */
 int SG_MechCatalogEntityGeneration(const struct edict_s *entity,
 	uint32_t *key_out, uint32_t *generation_out);
+/* Resolve a declared semantic source ordinal to exactly one current, sealed,
+ * topology-matching live mover.  This performs no caller-selected edict
+ * lookup.  The result and all scalar fields are cleared on failure. */
+int SG_MechCatalogResolveSourceOrdinal(uint32_t source_ordinal,
+	sg_mech_catalog_source_resolution_t *resolution_out);
 struct edict_s *SG_MechCatalogResolveEntity(uint32_t key,
 	const struct rune_mechanism_node_s *node);
 int SG_MechCatalogButtonBottomEndpoints(uint32_t key,
