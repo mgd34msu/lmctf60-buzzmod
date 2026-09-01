@@ -1167,9 +1167,9 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
 		 slipgate/sg_rune_compact_learning_game.o \
 		 slipgate/sg_bot_localization.o \
 		 slipgate/sg_compact_runtime_level.o \
-		 slipgate/sg_rune_dynamics_model.o slipgate/sg_rune_dynamics_geometry.o \
-		 slipgate/sg_rune_field_contract.o slipgate/sg_field_attractor.o \
-		 slipgate/sg_field_service.o \
+		 \
+		 \
+		 \
 		 slipgate/sg_bsp_world.o slipgate/sg_host_collision.o \
 		 slipgate/sg_bsp_entity_semantics.o \
 		 slipgate/sg_bsp_entity_semantics_audit_expected.o \
@@ -3796,12 +3796,6 @@ rune-v2-contract-test: rune-v2-belief-test \
 		slipgate/sg_strategy.c slipgate/sg_strategy_contract.h \
 		tests/run_sg_destination_test.sh tests/sg_destination_test.c \
 		slipgate/sg_destination.c slipgate/sg_destination.h \
-		tests/run_sg_field_attractor_test.sh \
-		tests/sg_field_attractor_test.c \
-		slipgate/sg_field_attractor.c slipgate/sg_field_attractor.h \
-		tests/run_sg_field_service_test.sh \
-		slipgate/sg_field_service.c \
-		slipgate/sg_field_service_owner_private.h \
 		tests/run_sg_strategy_caller_test.sh \
 		tests/sg_strategy_caller_test.c \
 		slipgate/sg_strategy_caller.c slipgate/sg_strategy_caller.h \
@@ -3843,13 +3837,7 @@ rune-v2-contract-test: rune-v2-belief-test \
 	sh tests/run_sg_strategy_caller_test.sh; \
 	sh tests/run_sg_destination_test.sh; \
 	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_destination.c \
-		-o "$$tmp/destination.o"; \
-	sh tests/run_sg_field_attractor_test.sh; \
-	sh tests/run_sg_field_service_test.sh; \
-	$(CC) $$strict -Wcast-align -I. -c \
-		slipgate/sg_field_attractor.c -o "$$tmp/field-attractor.o"; \
-	$(CC) $$strict -Wcast-align -I. -c \
-		slipgate/sg_field_service.c -o "$$tmp/field-service.o"
+		-o "$$tmp/destination.o"
 
 ground-capability-test: tests/run_sg_ground_capability_test.sh \
 		tests/sg_ground_capability_test.c \

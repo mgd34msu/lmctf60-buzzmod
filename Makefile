@@ -1274,11 +1274,6 @@ OBJS := \
 	slipgate/sg_rune_compact_learning_game.o \
 	slipgate/sg_bot_localization.o \
 	slipgate/sg_compact_runtime_level.o \
-	slipgate/sg_rune_dynamics_model.o \
-	slipgate/sg_rune_dynamics_geometry.o \
-	slipgate/sg_rune_field_contract.o \
-	slipgate/sg_field_attractor.o \
-	slipgate/sg_field_service.o \
 	slipgate/sg_bsp_world.o \
 	slipgate/sg_host_collision.o \
 	slipgate/sg_bsp_entity_semantics.o \
