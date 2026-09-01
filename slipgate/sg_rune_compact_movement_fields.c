@@ -4647,6 +4647,87 @@ static int BuildHookCoastProfile(analytic_workspace_t *workspace,
 	return AddReachability(workspace, profile, 1.0f);
 }
 
+/* Free flight under the host's per-substep Euler gravity is exactly quadratic
+ * at substep boundaries, so the air profile is derived, not fitted:
+ *   position(t) = world + velocity*t - (gravity/2)*t^2   (z only for gravity)
+ *   velocity(t) = velocity - gravity*t                   (z only)
+ * The profile is a template over runtime inputs; the fiber's source state
+ * supplies world and velocity, so one profile serves every airborne family:
+ * jump, drop, air control, hook release and relaunch, and rocket jump.  Cost
+ * and travel time are the time spent in the air (MOV-7). */
+static int AddAirMotion(analytic_workspace_t *workspace, profile_t *profile,
+	float gravity)
+{
+	uint32_t axis;
+
+	if (workspace == NULL || profile == NULL || !NonnegativeFinite(gravity))
+		return 0;
+	for (axis = 0U; axis < 3U; axis++) {
+		sg_rune_analytic_input_dimension_t position_dimensions[3];
+		sg_rune_analytic_input_dimension_t velocity_dimensions[2];
+		float position_coefficients[10] = { 0.0f };
+		float velocity_slopes[2];
+		uint8_t exponents[SG_RUNE_ANALYTIC_MAX_INPUTS] = { 0U };
+		uint32_t spec;
+
+		position_dimensions[0] = (sg_rune_analytic_input_dimension_t)(
+			SG_RUNE_ANALYTIC_INPUT_WORLD_X + axis);
+		position_dimensions[1] = VelocityDimension(axis);
+		position_dimensions[2] = SG_RUNE_ANALYTIC_INPUT_TIME_SECONDS;
+		/* world */
+		exponents[0] = 1U;
+		if (!SetPolynomialTerm(position_coefficients, 3U, 2U, exponents, 1.0f))
+			return 0;
+		/* velocity * time */
+		memset(exponents, 0, sizeof(exponents));
+		exponents[1] = 1U;
+		exponents[2] = 1U;
+		if (!SetPolynomialTerm(position_coefficients, 3U, 2U, exponents, 1.0f))
+			return 0;
+		/* -(gravity/2) * time^2 on the vertical axis */
+		if (axis == 2U) {
+			memset(exponents, 0, sizeof(exponents));
+			exponents[2] = 2U;
+			if (!SetPolynomialTerm(position_coefficients, 3U, 2U, exponents,
+				-0.5f * gravity))
+				return 0;
+		}
+		if (!AppendPolynomialSpec(workspace,
+			(sg_rune_analytic_output_meaning_t)(
+				SG_RUNE_ANALYTIC_OUTPUT_POSITION_X + axis), position_dimensions,
+			3U, 2U, position_coefficients, 10U, &spec) ||
+			!ProfileAppend(profile, spec))
+			return 0;
+		velocity_dimensions[0] = VelocityDimension(axis);
+		velocity_dimensions[1] = SG_RUNE_ANALYTIC_INPUT_TIME_SECONDS;
+		velocity_slopes[0] = 1.0f;
+		velocity_slopes[1] = axis == 2U ? -gravity : 0.0f;
+		if (!AddProfileSpec(workspace, profile,
+			(sg_rune_analytic_output_meaning_t)(
+				SG_RUNE_ANALYTIC_OUTPUT_VELOCITY_X + axis), velocity_dimensions,
+			2U, 0.0f, velocity_slopes))
+			return 0;
+	}
+	return 1;
+}
+
+static int BuildAirProfile(analytic_workspace_t *workspace, profile_t *profile,
+	const sg_host_law_view_t *host)
+{
+	static const sg_rune_analytic_input_dimension_t dimensions[] = {
+		SG_RUNE_ANALYTIC_INPUT_TIME_SECONDS
+	};
+	static const float unit_slope[] = { 1.0f };
+	const sg_rune_physics_parameters_t *physics;
+
+	if (workspace == NULL || profile == NULL || host == NULL)
+		return 0;
+	physics = &host->static_identity.physics;
+	return AddCostAndTime(workspace, profile, dimensions, 1U, unit_slope,
+		unit_slope, 0.0f, 0.0f) && AddAirMotion(workspace, profile,
+		physics->gravity) && AddReachability(workspace, profile, 1.0f);
+}
+
 static int TransitionBitsToVector(const uint32_t bits[3], float value[3])
 {
 	uint32_t axis;
@@ -4815,6 +4896,8 @@ static int BuildProfiles(const sg_rune_compact_movement_fields_input_t *input,
 		!AddReachability(workspace, &profiles[PROFILE_ANGULAR], 1.0f)) {
 		return 0;
 	}
+	if (!BuildAirProfile(workspace, &profiles[PROFILE_AIR], host))
+		return 0;
 	if (!BuildHookFlightProfile(workspace,
 		&profiles[PROFILE_HOOK_FLIGHT], host) || !BuildHookCoastProfile(workspace,
 		&profiles[PROFILE_HOOK_COAST], host, 0) || !BuildHookCoastProfile(workspace,
