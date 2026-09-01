@@ -28,7 +28,8 @@ static uint64_t sg_portal_merge_steps;
 #define PROFILE_HOOK_COAST 8U
 #define PROFILE_HOOK_COAST_GROUNDED 9U
 #define PROFILE_ANGULAR 10U
-#define PROFILE_BASE_COUNT 11U
+#define PROFILE_JUMP 11U
+#define PROFILE_BASE_COUNT 12U
 #define HOOK_STANCE_COUNT 2U
 #define HOOK_VISIBILITY_CLASS_COUNT 3U
 /* CTF_HookPullVelocity groups [0,1) and [1,11), then uses the stock integer
@@ -4656,11 +4657,12 @@ static int BuildHookCoastProfile(analytic_workspace_t *workspace,
  * jump, drop, air control, hook release and relaunch, and rocket jump.  Cost
  * and travel time are the time spent in the air (MOV-7). */
 static int AddAirMotion(analytic_workspace_t *workspace, profile_t *profile,
-	float gravity)
+	float gravity, float vertical_impulse)
 {
 	uint32_t axis;
 
-	if (workspace == NULL || profile == NULL || !NonnegativeFinite(gravity))
+	if (workspace == NULL || profile == NULL || !NonnegativeFinite(gravity) ||
+		!ScalarValid(vertical_impulse))
 		return 0;
 	for (axis = 0U; axis < 3U; axis++) {
 		sg_rune_analytic_input_dimension_t position_dimensions[3];
@@ -4684,8 +4686,16 @@ static int AddAirMotion(analytic_workspace_t *workspace, profile_t *profile,
 		exponents[2] = 1U;
 		if (!SetPolynomialTerm(position_coefficients, 3U, 2U, exponents, 1.0f))
 			return 0;
-		/* -(gravity/2) * time^2 on the vertical axis */
+		/* Vertical axis: an optional launch impulse (jump) enters as a linear
+		 * time term, and gravity as -(gravity/2) * time^2. */
 		if (axis == 2U) {
+			if (vertical_impulse != 0.0f) {
+				memset(exponents, 0, sizeof(exponents));
+				exponents[2] = 1U;
+				if (!SetPolynomialTerm(position_coefficients, 3U, 2U,
+					exponents, vertical_impulse))
+					return 0;
+			}
 			memset(exponents, 0, sizeof(exponents));
 			exponents[2] = 2U;
 			if (!SetPolynomialTerm(position_coefficients, 3U, 2U, exponents,
@@ -4705,7 +4715,7 @@ static int AddAirMotion(analytic_workspace_t *workspace, profile_t *profile,
 		if (!AddProfileSpec(workspace, profile,
 			(sg_rune_analytic_output_meaning_t)(
 				SG_RUNE_ANALYTIC_OUTPUT_VELOCITY_X + axis), velocity_dimensions,
-			2U, 0.0f, velocity_slopes))
+			2U, axis == 2U ? vertical_impulse : 0.0f, velocity_slopes))
 			return 0;
 	}
 	return 1;
@@ -4725,7 +4735,86 @@ static int BuildAirProfile(analytic_workspace_t *workspace, profile_t *profile,
 	physics = &host->static_identity.physics;
 	return AddCostAndTime(workspace, profile, dimensions, 1U, unit_slope,
 		unit_slope, 0.0f, 0.0f) && AddAirMotion(workspace, profile,
-		physics->gravity) && AddReachability(workspace, profile, 1.0f);
+		physics->gravity, 0.0f) && AddReachability(workspace, profile, 1.0f);
+}
+
+/* Jump is the air profile with the engine's launch impulse applied to the
+ * vertical velocity at t = 0. */
+static int BuildJumpProfile(analytic_workspace_t *workspace, profile_t *profile,
+	const sg_host_law_view_t *host)
+{
+	static const sg_rune_analytic_input_dimension_t dimensions[] = {
+		SG_RUNE_ANALYTIC_INPUT_TIME_SECONDS
+	};
+	static const float unit_slope[] = { 1.0f };
+
+	if (workspace == NULL || profile == NULL || host == NULL)
+		return 0;
+	return AddCostAndTime(workspace, profile, dimensions, 1U, unit_slope,
+		unit_slope, 0.0f, 0.0f) && AddAirMotion(workspace, profile,
+		host->static_identity.physics.gravity, SG_HOST_ENGINE_JUMP_VELOCITY) &&
+		AddReachability(workspace, profile, 1.0f);
+}
+
+/* Contact motion (walking, crouching, swimming) is the same template with no
+ * gravity term: position = world + velocity*t, velocity unchanged.  Cost and
+ * travel time are distance over the family's wish-speed clamp. */
+static int AddContactMotion(analytic_workspace_t *workspace, profile_t *profile)
+{
+	uint32_t axis;
+
+	if (workspace == NULL || profile == NULL)
+		return 0;
+	for (axis = 0U; axis < 3U; axis++) {
+		sg_rune_analytic_input_dimension_t position_dimensions[3];
+		sg_rune_analytic_input_dimension_t velocity_dimension;
+		float position_coefficients[10] = { 0.0f };
+		float unit_slope = 1.0f;
+		uint8_t exponents[SG_RUNE_ANALYTIC_MAX_INPUTS] = { 0U };
+		uint32_t spec;
+
+		position_dimensions[0] = (sg_rune_analytic_input_dimension_t)(
+			SG_RUNE_ANALYTIC_INPUT_WORLD_X + axis);
+		position_dimensions[1] = VelocityDimension(axis);
+		position_dimensions[2] = SG_RUNE_ANALYTIC_INPUT_TIME_SECONDS;
+		exponents[0] = 1U;
+		if (!SetPolynomialTerm(position_coefficients, 3U, 2U, exponents, 1.0f))
+			return 0;
+		memset(exponents, 0, sizeof(exponents));
+		exponents[1] = 1U;
+		exponents[2] = 1U;
+		if (!SetPolynomialTerm(position_coefficients, 3U, 2U, exponents, 1.0f))
+			return 0;
+		if (!AppendPolynomialSpec(workspace,
+			(sg_rune_analytic_output_meaning_t)(
+				SG_RUNE_ANALYTIC_OUTPUT_POSITION_X + axis), position_dimensions,
+			3U, 2U, position_coefficients, 10U, &spec) ||
+			!ProfileAppend(profile, spec))
+			return 0;
+		velocity_dimension = VelocityDimension(axis);
+		if (!AddProfileSpec(workspace, profile,
+			(sg_rune_analytic_output_meaning_t)(
+				SG_RUNE_ANALYTIC_OUTPUT_VELOCITY_X + axis), &velocity_dimension,
+			1U, 0.0f, &unit_slope))
+			return 0;
+	}
+	return 1;
+}
+
+static int BuildContactProfile(analytic_workspace_t *workspace,
+	profile_t *profile, float speed)
+{
+	static const sg_rune_analytic_input_dimension_t dimensions[] = {
+		SG_RUNE_ANALYTIC_INPUT_DISTANCE
+	};
+	float slope;
+
+	if (workspace == NULL || profile == NULL || !PositiveFinite(speed))
+		return 0;
+	slope = 1.0f / speed;
+	return AddCostAndTime(workspace, profile, dimensions, 1U, &slope, &slope,
+		0.0f, 0.0f) && AddContactMotion(workspace, profile) &&
+		AddReachability(workspace, profile, 1.0f);
 }
 
 static int TransitionBitsToVector(const uint32_t bits[3], float value[3])
@@ -4896,7 +4985,12 @@ static int BuildProfiles(const sg_rune_compact_movement_fields_input_t *input,
 		!AddReachability(workspace, &profiles[PROFILE_ANGULAR], 1.0f)) {
 		return 0;
 	}
-	if (!BuildAirProfile(workspace, &profiles[PROFILE_AIR], host))
+	if (!BuildAirProfile(workspace, &profiles[PROFILE_AIR], host) ||
+		!BuildJumpProfile(workspace, &profiles[PROFILE_JUMP], host) ||
+		!BuildContactProfile(workspace, &profiles[PROFILE_GROUND],
+			SG_HOST_ENGINE_MAX_SPEED) ||
+		!BuildContactProfile(workspace, &profiles[PROFILE_WATER],
+			SG_HOST_ENGINE_WATER_SPEED))
 		return 0;
 	if (!BuildHookFlightProfile(workspace,
 		&profiles[PROFILE_HOOK_FLIGHT], host) || !BuildHookCoastProfile(workspace,
@@ -5986,18 +6080,144 @@ static int EmitInteriorFields(emit_state_t *state, uint32_t cell)
 		EmitControllerFields(state, cell);
 }
 
+static float FacetNormalZ(const sg_rune_compact_movement_fields_input_t *input,
+	uint32_t facet)
+{
+	float value;
+
+	if (input == NULL || facet >= input->facet_count)
+		return 0.0f;
+	memcpy(&value, &input->facets[facet].plane.normal_bits[2], sizeof(value));
+	return ScalarValid(value) ? value : 0.0f;
+}
+
+/* The bottom of a supported region's free-space bounds is where the hull
+ * rests on its floor. */
+static float FloorZ(const sg_configuration_semantic_region_t *region)
+{
+	return region == NULL ? 0.0f : region->bounds.mins.value[2];
+}
+
+static sg_rune_stance_validity_t ExactOrOtherStance(
+	sg_rune_stance_validity_t preferred, sg_rune_stance_validity_t allowed)
+{
+	if ((allowed & preferred) != 0U)
+		return preferred;
+	if ((allowed & SG_RUNE_STANCE_VALID_STANDING) != 0U)
+		return SG_RUNE_STANCE_VALID_STANDING;
+	if ((allowed & SG_RUNE_STANCE_VALID_CROUCHING) != 0U)
+		return SG_RUNE_STANCE_VALID_CROUCHING;
+	return 0U;
+}
+
+/* Every portal crossing that the ordinary player can make becomes a
+ * capability here, one per exact source stance.  The RUNE says the crossing
+ * exists; these capabilities say how it may be executed and at what cost, so
+ * the tactic selector has walk, crouch, drop, jump, air control, and swim to
+ * choose among rather than hook alone.
+ *
+ * Admissibility is decided from the geometry the complex already carries:
+ * whether each side is supported or water, the floor delta between supported
+ * sides, and whether the shared facet is a vertical partition or a horizontal
+ * floor/ceiling boundary.  RAMP is not emitted yet: distinguishing a sloped
+ * floor from a step needs the support plane, which the region does not carry.
+ * Ramps traverse as WALK until it does. */
 static int EmitBoundaryFields(emit_state_t *state, uint32_t cell,
 	uint32_t portal)
 {
+	const sg_rune_compact_movement_fields_input_t *input = state->input;
+	const sg_rune_compact_portal_t *portal_record;
+	const sg_configuration_semantic_region_t *source_region;
+	const sg_configuration_semantic_region_t *target_region;
 	uint32_t negative;
 	uint32_t positive;
+	uint32_t other;
+	sg_rune_stance_validity_t source_stances;
+	sg_rune_stance_validity_t target_stances;
+	int source_supported;
+	int target_supported;
+	int source_water;
+	int target_water;
+	int vertical_facet;
+	float floor_delta;
+	float gravity;
+	float jump_rise;
+	uint32_t stance;
 
-	if (!GetPortalCells(state->input, portal, &negative, &positive))
+	if (!GetPortalCells(input, portal, &negative, &positive))
 		return 0;
-	(void)state;
-	(void)cell;
-	(void)negative;
-	(void)positive;
+	if (cell != negative && cell != positive)
+		return 0;
+	other = cell == negative ? positive : negative;
+	portal_record = &input->portals[portal];
+	source_stances = (sg_rune_stance_validity_t)(
+		input->cells[cell].valid_stances & portal_record->valid_stances);
+	target_stances = (sg_rune_stance_validity_t)(
+		input->cells[other].valid_stances & portal_record->valid_stances);
+	if (source_stances == 0U || target_stances == 0U)
+		return 1;
+	source_region = RegionForCell(input, state->index, cell);
+	target_region = RegionForCell(input, state->index, other);
+	source_supported = IsSupported(source_region);
+	target_supported = IsSupported(target_region);
+	source_water = IsWater(source_region, &input->cells[cell]);
+	target_water = IsWater(target_region, &input->cells[other]);
+	vertical_facet = fabsf(FacetNormalZ(input, portal_record->facet.value)) <
+		0.70710678f;
+	floor_delta = FloorZ(target_region) - FloorZ(source_region);
+	gravity = input->host_law == NULL ? 0.0f :
+		input->host_law->static_identity.physics.gravity;
+	jump_rise = PositiveFinite(gravity) ?
+		(SG_HOST_ENGINE_JUMP_VELOCITY * SG_HOST_ENGINE_JUMP_VELOCITY) /
+			(2.0f * gravity) : 0.0f;
+	for (stance = 0U; stance < HOOK_STANCE_COUNT; stance++) {
+		const sg_rune_stance_validity_t source_stance = HookStance(stance);
+		sg_rune_stance_validity_t target_stance;
+		sg_rune_movement_capability_kind_t kind;
+		uint32_t profile;
+
+		if ((source_stances & source_stance) == 0U)
+			continue;
+		target_stance = ExactOrOtherStance(source_stance, target_stances);
+		if (target_stance == 0U)
+			continue;
+		if (source_water && target_water) {
+			kind = SG_RUNE_MOVEMENT_CAPABILITY_SWIM;
+			profile = PROFILE_WATER;
+		} else if (source_supported && target_supported && vertical_facet) {
+			if (fabsf(floor_delta) <= SG_HOST_ENGINE_STEP_SIZE) {
+				kind = source_stance == SG_RUNE_STANCE_VALID_CROUCHING ?
+					SG_RUNE_MOVEMENT_CAPABILITY_CROUCH :
+					SG_RUNE_MOVEMENT_CAPABILITY_WALK;
+				profile = PROFILE_GROUND;
+			} else if (floor_delta < 0.0f) {
+				kind = SG_RUNE_MOVEMENT_CAPABILITY_DROP;
+				profile = PROFILE_AIR;
+			} else if (floor_delta <= jump_rise) {
+				kind = SG_RUNE_MOVEMENT_CAPABILITY_JUMP;
+				profile = PROFILE_JUMP;
+			} else {
+				continue;
+			}
+		} else if (source_supported && !target_supported) {
+			/* Off an edge through a partition, or up into the air column
+			 * through the floor's own boundary. */
+			kind = vertical_facet ? SG_RUNE_MOVEMENT_CAPABILITY_DROP :
+				SG_RUNE_MOVEMENT_CAPABILITY_JUMP;
+			profile = vertical_facet ? PROFILE_AIR : PROFILE_JUMP;
+		} else if (!source_supported) {
+			/* Airborne into anything: control the arc.  Landing on a
+			 * supported cell and crossing between air cells are the same
+			 * capability with different destination states. */
+			kind = SG_RUNE_MOVEMENT_CAPABILITY_AIR_CONTROL;
+			profile = PROFILE_AIR;
+		} else {
+			continue;
+		}
+		if (!AddFieldIndexed(state, cell, portal, kind, source_stance,
+			target_stance, profile, NULL))
+			return 0;
+	}
 	return 1;
 }
 

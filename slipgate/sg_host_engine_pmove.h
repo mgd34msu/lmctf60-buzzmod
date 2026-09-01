@@ -28,6 +28,16 @@
 #define SG_HOST_ENGINE_HOOK_ACCELERATION 800.0f
 #define SG_HOST_ENGINE_EXTERNAL_ACCELERATION 1.0f
 #define SG_HOST_ENGINE_WATER_DRAG 1.0f
+/* Player movement terms fixed in the selected engine's Pmove (yq2 pmove.c):
+ * PM_CheckJump adds 270 to vertical velocity, StepSlideMove probes STEPSIZE
+ * 18, and the wish-speed clamps are pm_maxspeed / pm_duckspeed /
+ * pm_waterspeed.  Gravity is not here: it is a per-map cvar bound through
+ * the physics identity. */
+#define SG_HOST_ENGINE_JUMP_VELOCITY 270.0f
+#define SG_HOST_ENGINE_STEP_SIZE 18.0f
+#define SG_HOST_ENGINE_MAX_SPEED 300.0f
+#define SG_HOST_ENGINE_DUCK_SPEED 100.0f
+#define SG_HOST_ENGINE_WATER_SPEED 400.0f
 
 typedef struct sg_host_engine_pmove_abi_s
 {
