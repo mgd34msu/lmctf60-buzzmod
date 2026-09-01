@@ -70,31 +70,28 @@ declared quantization rather than chasing float equality with the host.
 
 ## A2. Movement capability layer
 
-16 kinds defined. Producer coverage is uneven — this is the main gap.
+16 kinds defined. Measured 2026-09-01 after era-4 commits d9fe1873/6678251b.
 
 | Capability | Producer state | Verdict |
 |---|---|---|
-| `WALK` `CROUCH` `RAMP` `JUMP` `DROP` `AIR_CONTROL` | **classification predicate only** (one grouped test at `sg_rune_compact_movement_fields.c:5226`) | BUILD |
-| `SWIM` | classification only (`:5233`) | BUILD |
-| `HOOK_BOLT` | substantial (7 sites) | KEEP |
-| `HOOK_RELEASE` | substantial (8 sites) | KEEP |
-| `HOOK_COAST` | substantial (4 sites) | KEEP |
-| `HOOK_RELAUNCH` | substantial (6 sites) | KEEP |
-| `HOOK_BODY` | **never produced**; consumed by `sg_rune_compact_field.c:701` and `sg_tactic_runtime.c:301` | BUILD |
-| `HOOK_PULL` | **never produced**; consumed at `:703` / `:302` | BUILD |
-| `MOVER` | substantial (5 sites) | KEEP |
-| `EXTERNAL_FORCE` | substantial (4 sites) | KEEP |
-| `CONTROLLER_ACTION` | substantial (5 sites) | KEEP |
+| `WALK` `CROUCH` | emitted per portal crossing between level supported cells (`EmitBoundaryFields`) | KEEP |
+| `DROP` | emitted when the far floor is lower than STEPSIZE or the crossing leaves support through a partition | KEEP |
+| `JUMP` | emitted when the far floor is higher within `v²/2g` of the 270 impulse, or up through a floor facet | KEEP |
+| `AIR_CONTROL` | emitted for any crossing whose source is unsupported | KEEP |
+| `SWIM` | emitted when both sides are water | KEEP |
+| `RAMP` | **not emitted**; a sloped floor needs the support plane, which the region lacks. Ramps traverse as WALK. | BUILD |
+| `ROCKET_JUMP` | **no kind exists**; ruled a capability (anything a player can do), not connectivity | BUILD |
+| `HOOK_BOLT` `HOOK_BODY` `HOOK_PULL` `HOOK_RELEASE` `HOOK_COAST` `HOOK_RELAUNCH` | all six emitted by `EmitHookField`'s range loop (earlier "never produced" claim was a grep artifact) | KEEP |
+| `MOVER` `EXTERNAL_FORCE` `CONTROLLER_ACTION` | emitted | KEEP |
 
-Supporting structure, all built and worth keeping: `movement_states`
-(stance/support/water/`hook_phase`/flags/`mover_mechanism`), `movement_fibers`
-(source state → destination state carrying analytic function refs),
-`movement_angular_schedules`, and the four fiber kinds (PMOVE, HOOK,
-MECHANISM_TRANSITION, ANGULAR_MOVER).
+Profiles: `PROFILE_GROUND`/`WATER` are contact motion (distance over the
+engine speed clamp); `PROFILE_AIR` is exact free flight under map gravity;
+`PROFILE_JUMP` is air plus the engine's 270 launch impulse. Engine pmove terms
+live in `sg_host_engine_pmove.h`; gravity stays a bound per-map value.
 
-**This is the headline finding.** The hook is the most complete part of the
-generator and the ordinary ground movement is the least. Two of the six hook
-phases the plan names are consumed by the runtime but never emitted.
+Before d9fe1873, `EmitBoundaryFields` resolved a portal's cells and returned:
+no capability crossed any portal, so a bot could hook, ride a lift and be
+pushed, and could not walk.
 
 ## A3. Hook layer
 
@@ -102,10 +99,11 @@ phases the plan names are consumed by the runtime but never emitted.
 |---|---|---|
 | `movement_hook_targets` — kind, provenance, response ref, visibility class, source/target stances | built | KEEP |
 | `hook_phase` as a movement state field | built | KEEP |
-| Six-phase decomposition in the contract | built | KEEP |
-| Bolt/release/coast/relaunch producers | built | KEEP |
-| Body/pull producers | missing | BUILD |
+| Six-phase decomposition, all six emitted | built | KEEP |
+| Fire admissible from any legal state, velocity preserved (no stand-still precondition) | requirement, to verify in emission | RULE |
+| Release admissible at every point of the pull, not only at arrival (fling; chain = fire again mid-arc) | requirement, to verify in emission | RULE |
 | Hook target visibility fed by occlusion | **not wired** — hook units never call `SG_StaticVisibility` | BUILD |
+| Human hook fidelity | audited faithful to LMCTF 6.0 (see below) | KEEP |
 
 ## A4. Mechanism layer
 
