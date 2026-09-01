@@ -22,7 +22,6 @@ slipgate/sg_host_engine_pmove.c
 slipgate/sg_host_hook_law.c
 slipgate/sg_host_mechanism_law.c
 slipgate/sg_phase_catalog.c
-slipgate/sg_phase_catalog_audit.c
 slipgate/sg_phase_catalog_publication.c
 slipgate/sg_phase_catalog_owner.c
 slipgate/sg_phase_mover_support_provider.c

@@ -39,7 +39,7 @@ int SG_TestGroundPhasePublicationBuild(
 	sg_mechanism_capability_set_t *capabilities = NULL;
 	sg_mechanism_capability_error_t capability_error;
 	sg_phase_catalog_error_t phase_error;
-	sg_phase_catalog_audit_result_t phase_audit;
+	sg_phase_catalog_check_result_t phase_audit;
 	int ok = 0;
 
 	if (!authority || !configuration || !semantics || !owner_out ||

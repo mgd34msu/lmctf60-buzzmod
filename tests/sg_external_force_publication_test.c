@@ -537,7 +537,7 @@ static int ExternalSourceInit(mechanism_fixture_t *fixture,
 {
 	sg_mechanism_capability_error_t mechanism_error;
 	sg_phase_catalog_error_t phase_error;
-	sg_phase_catalog_audit_result_t phase_audit;
+	sg_phase_catalog_check_result_t phase_audit;
 	uint32_t index;
 
 	memset(source_out, 0, sizeof(*source_out));

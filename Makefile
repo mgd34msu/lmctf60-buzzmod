@@ -3935,7 +3935,6 @@ phase-catalog-publication-test: tests/run_sg_phase_catalog_test.sh \
 		tests/sg_mechanism_capability_test.c \
 		slipgate/sg_phase_catalog.c slipgate/sg_phase_catalog.h \
 		slipgate/sg_phase_catalog_internal.h \
-		slipgate/sg_phase_catalog_audit.c \
 		slipgate/sg_phase_catalog_publication.c \
 		slipgate/sg_phase_catalog_owner.c slipgate/sg_phase_catalog_owner.h \
 		slipgate/sg_phase_mover_support_provider.c \
@@ -3984,7 +3983,7 @@ hook-visibility-catalog-test: \
 		slipgate/sg_hook_visibility_feasibility_family.c \
 		slipgate/sg_hook_visibility_feasibility_events.c \
 		slipgate/sg_hook_visibility_feasibility_partition.c \
-		slipgate/sg_hook_visibility_feasibility_proof.c \
+		slipgate/sg_hook_visibility_feasibility_construct.c \
 		slipgate/sg_hook_visibility_feasibility_verifier_digest.c \
 		slipgate/sg_hook_visibility_feasibility_audit.c \
 		slipgate/sg_hook_visibility_feasibility_audit_family.c \

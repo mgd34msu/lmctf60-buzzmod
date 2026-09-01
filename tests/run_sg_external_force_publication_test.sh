@@ -18,7 +18,6 @@ slipgate/sg_authority_entropy.c
 slipgate/sg_mechanism_capability.c
 slipgate/sg_mechanism_capability_seal.c
 slipgate/sg_phase_catalog.c
-slipgate/sg_phase_catalog_audit.c
 slipgate/sg_phase_catalog_publication.c
 slipgate/sg_phase_catalog_owner.c
 slipgate/sg_phase_mover_support_provider.c

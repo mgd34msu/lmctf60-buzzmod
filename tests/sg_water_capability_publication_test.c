@@ -652,7 +652,7 @@ static int BuildPhaseCatalog(const water_fixture_t *fixture,
 	sg_phase_catalog_source_t source;
 	sg_phase_catalog_t *catalog = NULL;
 	sg_phase_catalog_error_t error;
-	sg_phase_catalog_audit_result_t audit;
+	sg_phase_catalog_check_result_t check;
 	int success;
 
 	memset(&source, 0, sizeof(source));
@@ -675,7 +675,7 @@ static int BuildPhaseCatalog(const water_fixture_t *fixture,
 		(const sg_phase_mover_support_provider_t *)(const void *)&fixture->world;
 	success = SG_PhaseCatalogBuild(&source, &catalog, &error) &&
 		SG_PhaseCatalogPublicationIssue(owner, &source, catalog,
-			publication_out, &audit);
+			publication_out, &check);
 	SG_PhaseCatalogDestroy(catalog);
 	return success;
 }
@@ -1018,7 +1018,7 @@ static void TestAcceptedPublicationAndSourceDestruction(void)
 	sg_water_capability_publication_binding_t binding;
 	sg_water_capability_publication_fact_t swim;
 	sg_water_capability_publication_fact_t saved;
-	sg_water_capability_audit_result_t audit;
+	sg_water_capability_audit_result_t check;
 
 	memset(&bundle, 0, sizeof(bundle));
 	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER |
@@ -1028,8 +1028,8 @@ static void TestAcceptedPublicationAndSourceDestruction(void)
 	CHECK(PrepareBundle(&fixture, &bundle));
 	CHECK(BuildCandidate(&fixture, bundle.phase_owner, bundle.phase_catalog, &candidate));
 	ResetPreflight();
-	CHECK(Issue(&fixture, &bundle, candidate, &publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_OK);
+	CHECK(Issue(&fixture, &bundle, candidate, &publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_OK);
 	CHECK(bsp_calls == 1U && configuration_calls == 1U && semantics_calls == 1U);
 	if (!publication || !candidate)
 		goto done;
@@ -1097,7 +1097,7 @@ static void TestDropEntryExitAndPortalReferences(void)
 	sg_water_capability_publication_t *publication = NULL;
 	sg_water_capability_publication_fact_t fact;
 	sg_water_capability_publication_fact_t saved;
-	sg_water_capability_audit_result_t audit;
+	sg_water_capability_audit_result_t check;
 	int saved_valid = 0;
 
 	memset(&bundle, 0, sizeof(bundle));
@@ -1105,7 +1105,7 @@ static void TestDropEntryExitAndPortalReferences(void)
 	ConfigureVerticalDrop(&fixture);
 	CHECK(PrepareBundle(&fixture, &bundle));
 	CHECK(BuildCandidate(&fixture, bundle.phase_owner, bundle.phase_catalog, &candidate));
-	CHECK(Issue(&fixture, &bundle, candidate, &publication, &audit));
+	CHECK(Issue(&fixture, &bundle, candidate, &publication, &check));
 	if (FindFact(bundle.water_owner, publication, SG_WATER_CAPABILITY_ENTRY,
 		fixture.regions[0].id, fixture.regions[1].id, &fact))
 	{
@@ -1132,7 +1132,7 @@ static void TestDropEntryExitAndPortalReferences(void)
 	CHECK(WaterFixtureInit(&fixture, SG_HOST_CONTENTS_WATER, 800.0f, 0, 1));
 	CHECK(PrepareBundle(&fixture, &bundle));
 	CHECK(BuildCandidate(&fixture, bundle.phase_owner, bundle.phase_catalog, &candidate));
-	CHECK(Issue(&fixture, &bundle, candidate, &publication, &audit));
+	CHECK(Issue(&fixture, &bundle, candidate, &publication, &check));
 	if (FindFact(bundle.water_owner, publication, SG_WATER_CAPABILITY_ENTRY,
 		fixture.regions[0].id, fixture.regions[1].id, &fact))
 	{
@@ -1208,7 +1208,7 @@ static void TestGroundAndCurrentLaws(void)
 	sg_water_capability_set_t *candidate = NULL;
 	sg_water_capability_publication_t *publication = NULL;
 	sg_water_capability_publication_fact_t fact;
-	sg_water_capability_audit_result_t audit;
+	sg_water_capability_audit_result_t check;
 	float saved_witness_z;
 
 	memset(&bundle, 0, sizeof(bundle));
@@ -1230,7 +1230,7 @@ static void TestGroundAndCurrentLaws(void)
 	gi.Pmove = GroundedProductionPmove;
 	CHECK(PrepareBundle(&fixture, &bundle));
 	CHECK(BuildCandidate(&fixture, bundle.phase_owner, bundle.phase_catalog, &candidate));
-	CHECK(Issue(&fixture, &bundle, candidate, &publication, &audit));
+	CHECK(Issue(&fixture, &bundle, candidate, &publication, &check));
 	if (FindFact(bundle.water_owner, publication, SG_WATER_CAPABILITY_CURRENT,
 		fixture.regions[0].id, fixture.regions[0].id, &fact))
 	{
@@ -1259,8 +1259,8 @@ static void TestGroundAndCurrentLaws(void)
 
 	saved_witness_z = fixture.regions[0].interior_witness.value[2];
 	fixture.regions[0].interior_witness.value[2] = 32.0f;
-	CHECK(!Issue(&fixture, &bundle, candidate, &publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_HOST_DISAGREEMENT);
+	CHECK(!Issue(&fixture, &bundle, candidate, &publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_HOST_DISAGREEMENT);
 	fixture.regions[0].interior_witness.value[2] = saved_witness_z;
 	SG_WaterCapabilityDestroy(candidate);
 	DestroyBundle(&bundle);
@@ -1285,14 +1285,14 @@ static void TestHazardMedia(void)
 		sg_water_capability_set_t *candidate = NULL;
 		sg_water_capability_publication_t *publication = NULL;
 		sg_water_capability_publication_fact_t fact;
-		sg_water_capability_audit_result_t audit;
+		sg_water_capability_audit_result_t check;
 
 		memset(&bundle, 0, sizeof(bundle));
 		CHECK(WaterFixtureInit(&fixture, contents[medium], 800.0f, 0, 0));
 		CHECK(PrepareBundle(&fixture, &bundle));
 		CHECK(BuildCandidate(&fixture, bundle.phase_owner,
 			bundle.phase_catalog, &candidate));
-		CHECK(Issue(&fixture, &bundle, candidate, &publication, &audit));
+		CHECK(Issue(&fixture, &bundle, candidate, &publication, &check));
 		if (FindFact(bundle.water_owner, publication,
 			SG_WATER_CAPABILITY_DIRECTIONAL_SWIM, fixture.regions[1].id,
 			fixture.regions[1].id, &fact))
@@ -1318,7 +1318,7 @@ static void TestProvenEmptyDryDomain(void)
 	sg_water_capability_set_t *candidate = NULL;
 	sg_water_capability_publication_t *publication = NULL;
 	sg_water_capability_publication_info_t info;
-	sg_water_capability_audit_result_t audit;
+	sg_water_capability_audit_result_t check;
 
 	memset(&bundle, 0, sizeof(bundle));
 	CHECK(WaterFixtureInit(&fixture, 0U, 800.0f, 0, 0));
@@ -1326,9 +1326,9 @@ static void TestProvenEmptyDryDomain(void)
 	CHECK(BuildCandidate(&fixture, bundle.phase_owner, bundle.phase_catalog,
 		&candidate));
 	CHECK(candidate != NULL && candidate->fact_count == 0U);
-	CHECK(Issue(&fixture, &bundle, candidate, &publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_OK);
-	CHECK(audit.obligation_count == 0U && audit.wet_region_count == 0U);
+	CHECK(Issue(&fixture, &bundle, candidate, &publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_OK);
+	CHECK(check.obligation_count == 0U && check.wet_region_count == 0U);
 	CHECK(SG_WaterCapabilityPublicationInfo(bundle.water_owner, publication,
 		&info));
 	CHECK(info.state == SG_WATER_CAPABILITY_PUBLICATION_PROVEN_EMPTY);
@@ -1352,7 +1352,7 @@ static void TestMoverRelativeCatalogs(void)
 		sg_water_capability_set_t *candidate = NULL;
 		sg_water_capability_publication_t *publication = NULL;
 		sg_water_capability_publication_info_t info;
-		sg_water_capability_audit_result_t audit;
+		sg_water_capability_audit_result_t check;
 		uint32_t binding_index;
 		uint32_t mover_binding_count = 0U;
 		sg_phase_mechanism_state_mask_t mover_state_mask = 0U;
@@ -1376,8 +1376,8 @@ static void TestMoverRelativeCatalogs(void)
 			DestroyBundle(&bundle);
 			continue;
 		}
-		CHECK(Issue(&fixture, &bundle, candidate, &publication, &audit));
-		CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_OK);
+		CHECK(Issue(&fixture, &bundle, candidate, &publication, &check));
+		CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_OK);
 		if (!SG_WaterCapabilityPublicationInfo(bundle.water_owner, publication,
 			&info))
 		{
@@ -1443,22 +1443,22 @@ static void TestMoverRelativeCatalogs(void)
 static void TestCheckedWaterCounters(void)
 {
 	uint32_t value = UINT32_MAX;
-	sg_water_capability_audit_result_t audit;
+	sg_water_capability_audit_result_t check;
 
-	CHECK(!SG_WaterCapabilityPublicationTestCounterAdd(&value, 1U, &audit));
+	CHECK(!SG_WaterCapabilityPublicationTestCounterAdd(&value, 1U, &check));
 	CHECK(value == UINT32_MAX);
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_OVERFLOW);
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_OVERFLOW);
 	value = UINT32_MAX - 1U;
-	CHECK(SG_WaterCapabilityPublicationTestCounterAdd(&value, 1U, &audit));
+	CHECK(SG_WaterCapabilityPublicationTestCounterAdd(&value, 1U, &check));
 	CHECK(value == UINT32_MAX);
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_OK);
-	CHECK(!SG_WaterCapabilityPublicationTestCounterAdd(&value, 1U, &audit));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_OK);
+	CHECK(!SG_WaterCapabilityPublicationTestCounterAdd(&value, 1U, &check));
 	CHECK(value == UINT32_MAX);
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_OVERFLOW);
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_OVERFLOW);
 	value = UINT32_MAX - 7U;
-	CHECK(!SG_WaterCapabilityPublicationTestCounterAdd(&value, 8U, &audit));
+	CHECK(!SG_WaterCapabilityPublicationTestCounterAdd(&value, 8U, &check));
 	CHECK(value == UINT32_MAX - 7U);
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_OVERFLOW);
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_OVERFLOW);
 }
 
 static void TestSweepLineDenseBoundaries(void)
@@ -1471,7 +1471,7 @@ static void TestSweepLineDenseBoundaries(void)
 	sg_water_capability_set_t *candidate = NULL;
 	sg_water_capability_publication_t *publication = NULL;
 	sg_water_capability_publication_info_t info;
-	sg_water_capability_audit_result_t audit;
+	sg_water_capability_audit_result_t check;
 	uint32_t region;
 
 	memset(&bundle, 0, sizeof(bundle));
@@ -1507,7 +1507,7 @@ static void TestSweepLineDenseBoundaries(void)
 	CHECK(PrepareBundle(&fixture, &bundle));
 	CHECK(BuildCandidate(&fixture, bundle.phase_owner, bundle.phase_catalog, &candidate));
 	CHECK(candidate != NULL && candidate->same_cell_candidate_pairs == STRIPES);
-	CHECK(Issue(&fixture, &bundle, candidate, &publication, &audit));
+	CHECK(Issue(&fixture, &bundle, candidate, &publication, &check));
 	CHECK(SG_WaterCapabilityPublicationInfo(bundle.water_owner, publication, &info));
 	CHECK(info.boundary_count == STRIPES);
 	CHECK(info.same_cell_candidate_pairs == STRIPES);
@@ -1532,7 +1532,7 @@ static void TestAdversarialRejectionAndMetricAuthentication(void)
 	input_bundle_t bundle;
 	sg_water_capability_set_t *candidate = NULL;
 	sg_water_capability_publication_t *publication = NULL;
-	sg_water_capability_audit_result_t audit;
+	sg_water_capability_audit_result_t check;
 	sg_water_capability_issue_source_t source;
 	float saved_witness;
 	uint64_t saved_u64;
@@ -1550,96 +1550,96 @@ static void TestAdversarialRejectionAndMetricAuthentication(void)
 	source = IssueSource(&fixture, &bundle);
 	source.phase_catalog = NULL;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
-		&publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_INVALID_ARGUMENT);
+		&publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_INVALID_ARGUMENT);
 	source.phase_catalog = bundle.phase_catalog;
 	source.phase_catalog_owner = NULL;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source,
-		candidate, &publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_INVALID_ARGUMENT);
+		candidate, &publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_INVALID_ARGUMENT);
 	source.phase_catalog_owner = bundle.phase_owner;
 	saved_fact_count = candidate->fact_count;
 	candidate->fact_count = 0U;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source,
-		candidate, &publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_OMITTED_FACT);
+		candidate, &publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_OMITTED_FACT);
 	candidate->fact_count = saved_fact_count;
 
 	sg_host.pmove = ForgedPmove;
 	gi.Pmove = ForgedPmove;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
-		&publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_HOST_LAW);
+		&publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_HOST_LAW);
 	sg_host.pmove = ProductionPmove;
 	gi.Pmove = ProductionPmove;
 
 	saved_witness = fixture.regions[1].interior_witness.value[0];
 	fixture.regions[1].interior_witness.value[0] = -32.0f;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
-		&publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_HOST_DISAGREEMENT);
+		&publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_HOST_DISAGREEMENT);
 	fixture.regions[1].interior_witness.value[0] = saved_witness;
 
 	fixture.regions[1].id += UINT64_C(10000);
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
-		&publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_UNBOUND_PHASE);
+		&publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_UNBOUND_PHASE);
 	fixture.regions[1].id -= UINT64_C(10000);
 
 	ResetPreflight();
 	reject_bsp = 1;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
-		&publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_BSP_COMPLETENESS);
+		&publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_BSP_COMPLETENESS);
 	CHECK(bsp_calls == 1U && configuration_calls == 1U && semantics_calls == 1U);
 	ResetPreflight();
 	reject_configuration = 1;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
-		&publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_CONFIGURATION_AUDIT);
+		&publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_CONFIGURATION_AUDIT);
 	ResetPreflight();
 	reject_semantics = 1;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
-		&publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_SEMANTICS_AUDIT);
+		&publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_SEMANTICS_AUDIT);
 	ResetPreflight();
 
 	saved_u64 = candidate->host_pmove_frames;
 	candidate->host_pmove_frames++;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
-		&publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_METRIC_DISAGREEMENT);
+		&publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_METRIC_DISAGREEMENT);
 	candidate->host_pmove_frames = saved_u64;
 	saved_u64 = candidate->lattice_solve_calls;
 	candidate->lattice_solve_calls++;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
-		&publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_METRIC_DISAGREEMENT);
+		&publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_METRIC_DISAGREEMENT);
 	candidate->lattice_solve_calls = saved_u64;
 	saved_u64 = candidate->lattice_constraints;
 	candidate->lattice_constraints++;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
-		&publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_METRIC_DISAGREEMENT);
+		&publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_METRIC_DISAGREEMENT);
 	candidate->lattice_constraints = saved_u64;
 	saved_u64 = candidate->same_cell_candidate_pairs;
 	candidate->same_cell_candidate_pairs++;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
-		&publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_METRIC_DISAGREEMENT);
+		&publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_METRIC_DISAGREEMENT);
 	candidate->same_cell_candidate_pairs = saved_u64;
 	saved_u32 = candidate->lattice_maximum_binary_shift;
 	candidate->lattice_maximum_binary_shift++;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
-		&publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_METRIC_DISAGREEMENT);
+		&publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_METRIC_DISAGREEMENT);
 	candidate->lattice_maximum_binary_shift = saved_u32;
 
 	saved_contents = fixture.regions[0].water_type;
 	fixture.regions[0].water_type = SG_HOST_CONTENTS_WATER;
 	CHECK(!SG_WaterCapabilityPublicationIssue(bundle.water_owner, &source, candidate,
-		&publication, &audit));
-	CHECK(audit.code == SG_WATER_CAPABILITY_AUDIT_HOST_DISAGREEMENT);
+		&publication, &check));
+	CHECK(check.code == SG_WATER_CAPABILITY_AUDIT_HOST_DISAGREEMENT);
 	fixture.regions[0].water_type = saved_contents;
 done:
 	sg_host.pmove = ProductionPmove;

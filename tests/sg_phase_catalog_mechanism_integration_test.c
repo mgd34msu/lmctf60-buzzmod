@@ -143,13 +143,13 @@ static void TestPublicationOwnerCycles(mechanism_fixture_t *fixture,
 		const sg_phase_catalog_publication_t *stale;
 		const sg_phase_catalog_view_t *view = NULL;
 		sg_phase_catalog_error_t error;
-		sg_phase_catalog_audit_result_t audit;
+		sg_phase_catalog_check_result_t check;
 
 		CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationOwnerCreate(&owner));
 		CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationBuild(owner,
 			fixture->capability_owner, &fixture->authority,
 			fixture->configuration, fixture->configuration_semantics,
-			accepted_capabilities, &publication, &error, &audit));
+			accepted_capabilities, &publication, &error, &check));
 		CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationRead(owner,
 			publication, &view));
 		stale = publication;
@@ -188,7 +188,7 @@ int main(void)
 	sg_phase_catalog_source_t phase_source;
 	sg_phase_catalog_t *catalog = NULL;
 	sg_phase_catalog_error_t phase_error;
-	sg_phase_catalog_audit_result_t audit;
+	sg_phase_catalog_check_result_t check;
 	const sg_phase_mover_support_provider_view_t *provider_view = NULL;
 	const sg_phase_mover_support_provider_view_t *provider_view_again = NULL;
 	const sg_phase_mover_support_provider_view_t *rejected_provider_view = NULL;
@@ -199,9 +199,9 @@ int main(void)
 	const sg_phase_catalog_view_t *publication_view = NULL;
 	const sg_phase_catalog_view_t *publication_view_again = NULL;
 	sg_phase_catalog_error_t publication_error;
-	sg_phase_catalog_audit_result_t publication_audit;
+	sg_phase_catalog_check_result_t publication_audit;
 	sg_phase_catalog_error_t publication_again_error;
-	sg_phase_catalog_audit_result_t publication_again_audit;
+	sg_phase_catalog_check_result_t publication_again_audit;
 	const sg_mechanism_capability_set_t *forged =
 		(const sg_mechanism_capability_set_t *)(uintptr_t)UINT32_C(1);
 	sg_phase_mover_support_provider_t *forged_provider = NULL;
@@ -374,31 +374,31 @@ int main(void)
 			CHECK_PHASE_INTEGRATION(catalog->mover_support_verifier_identity ==
 				provider_view->verifier_identity);
 		CHECK_PHASE_INTEGRATION(catalog->transition_count != 0U);
-		CHECK_PHASE_INTEGRATION(SG_PhaseCatalogAudit(&phase_source, catalog,
-			&audit));
-		CHECK_PHASE_INTEGRATION(audit.code == SG_PHASE_CATALOG_AUDIT_OK_COMPLETE);
-		if (catalog->transition_count != 0U)
+		CHECK_PHASE_INTEGRATION(SG_PhaseCatalogValidate(&phase_source, catalog,
+			&check));
+		CHECK_PHASE_INTEGRATION(check.code == SG_PHASE_CATALOG_CHECK_OK_COMPLETE);
+		if (catalog->phase_count > 1U)
 		{
-			uint32_t transition_count = catalog->transition_count;
-			uint32_t transition_capacity = catalog->transition_capacity;
+			sg_rune_phase_basis_t original = catalog->phases[1];
 
-			catalog->transition_count = transition_count - 1U;
-			CHECK_PHASE_INTEGRATION(!SG_PhaseCatalogAudit(&phase_source, catalog,
-				&audit));
-			CHECK_PHASE_INTEGRATION(audit.code ==
-				SG_PHASE_CATALOG_AUDIT_OMITTED_TRANSITION);
-			CHECK_PHASE_INTEGRATION(audit.omitted_phases == 0U &&
-				audit.invented_phases == 0U);
-			catalog->transition_count = transition_count + 1U;
-			catalog->transition_capacity = transition_count + 1U;
-			CHECK_PHASE_INTEGRATION(!SG_PhaseCatalogAudit(&phase_source, catalog,
-				&audit));
-			CHECK_PHASE_INTEGRATION(audit.code ==
-				SG_PHASE_CATALOG_AUDIT_INVENTED_TRANSITION);
-			CHECK_PHASE_INTEGRATION(audit.omitted_phases == 0U &&
-				audit.invented_phases == 0U);
-			catalog->transition_count = transition_count;
-			catalog->transition_capacity = transition_capacity;
+			/* A duplicate phase identity is catalog-local and linear to find. */
+			catalog->phases[1].id = catalog->phases[0].id;
+			CHECK_PHASE_INTEGRATION(!SG_PhaseCatalogValidate(&phase_source,
+				catalog, &check));
+			CHECK_PHASE_INTEGRATION(check.code ==
+				SG_PHASE_CATALOG_CHECK_DUPLICATE_PHASE);
+			catalog->phases[1] = original;
+
+			/* Order must strictly increase so equal inputs emit equal bytes. */
+			catalog->phases[1].order = catalog->phases[0].order;
+			CHECK_PHASE_INTEGRATION(!SG_PhaseCatalogValidate(&phase_source,
+				catalog, &check));
+			CHECK_PHASE_INTEGRATION(check.code ==
+				SG_PHASE_CATALOG_CHECK_NONDETERMINISTIC_ORDER);
+			catalog->phases[1] = original;
+
+			CHECK_PHASE_INTEGRATION(SG_PhaseCatalogValidate(&phase_source,
+				catalog, &check));
 		}
 		for (index = 0U; index < catalog->transition_count; index++)
 			if (catalog->transition_evidence[index].origin ==
@@ -428,32 +428,6 @@ int main(void)
 				break;
 			}
 		CHECK_PHASE_INTEGRATION(binding_index != UINT32_MAX);
-		if (binding_index != UINT32_MAX)
-		{
-			uint32_t original_mask =
-				catalog->bindings[binding_index].mechanism_state_mask;
-			catalog->bindings[binding_index].mechanism_state_mask = original_mask ^
-				SG_PHASE_MECHANISM_STATE_RETURNING;
-			if (catalog->bindings[binding_index].mechanism_state_mask == 0U)
-				catalog->bindings[binding_index].mechanism_state_mask =
-					original_mask ^ SG_PHASE_MECHANISM_STATE_INACTIVE;
-			CHECK_PHASE_INTEGRATION(!SG_PhaseCatalogAudit(&phase_source,
-				catalog, &audit));
-			CHECK_PHASE_INTEGRATION(audit.code ==
-				SG_PHASE_CATALOG_AUDIT_BINDING_DISAGREEMENT);
-			catalog->bindings[binding_index].mechanism_state_mask = original_mask;
-		}
-		for (index = 0U; index < catalog->transition_count; index++)
-			if (catalog->transition_evidence[index].origin ==
-				SG_PHASE_CATALOG_TRANSITION_MECHANISM_STATE_TIMING)
-			{
-				catalog->transition_evidence[index].delay_ms++;
-				CHECK_PHASE_INTEGRATION(!SG_PhaseCatalogAudit(&phase_source,
-					catalog, &audit));
-				CHECK_PHASE_INTEGRATION(audit.code ==
-					SG_PHASE_CATALOG_AUDIT_TRANSITION_DISAGREEMENT);
-				break;
-			}
 		SG_PhaseCatalogDestroy(catalog);
 	}
 	CHECK_PHASE_INTEGRATION(SG_PhaseCatalogPublicationBuild(

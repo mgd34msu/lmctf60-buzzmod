@@ -12,7 +12,7 @@ modules='slipgate/sg_hook_visibility_feasibility.c
 slipgate/sg_hook_visibility_feasibility_family.c
 slipgate/sg_hook_visibility_feasibility_events.c
 slipgate/sg_hook_visibility_feasibility_partition.c
-slipgate/sg_hook_visibility_feasibility_proof.c
+slipgate/sg_hook_visibility_feasibility_construct.c
 slipgate/sg_hook_visibility_feasibility_verifier_digest.c
 slipgate/sg_hook_visibility_feasibility_audit.c
 slipgate/sg_hook_visibility_feasibility_audit_family.c
@@ -58,7 +58,7 @@ for source in slipgate/sg_hook_visibility_feasibility.c \
 	slipgate/sg_hook_visibility_feasibility_family.c \
 	slipgate/sg_hook_visibility_feasibility_events.c \
 	slipgate/sg_hook_visibility_feasibility_partition.c \
-	slipgate/sg_hook_visibility_feasibility_proof.c \
+	slipgate/sg_hook_visibility_feasibility_construct.c \
 	slipgate/sg_hook_visibility_feasibility_verifier_digest.c \
 	slipgate/sg_hook_visibility_feasibility_audit.c \
 	slipgate/sg_hook_visibility_feasibility_audit_family.c \

@@ -17,7 +17,6 @@ slipgate/sg_water_capability_publication.c
 slipgate/sg_water_capability.c
 slipgate/sg_configuration_lattice.c
 slipgate/sg_phase_catalog.c
-slipgate/sg_phase_catalog_audit.c
 slipgate/sg_phase_catalog_publication.c
 slipgate/sg_authority_entropy.c
 slipgate/sg_host_law_publication.c

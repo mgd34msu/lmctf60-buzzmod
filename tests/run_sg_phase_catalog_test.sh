@@ -9,7 +9,6 @@ strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion
 strict="$strict -DSG_PHASE_CATALOG_TESTING"
 sources='tests/sg_phase_catalog_test.c
 slipgate/sg_phase_catalog.c
-slipgate/sg_phase_catalog_audit.c
 slipgate/sg_phase_catalog_publication.c
 slipgate/sg_phase_catalog_owner.c
 slipgate/sg_phase_mover_support_provider.c
@@ -37,7 +36,6 @@ sources="$sources
 $mechanism_sources"
 model_sources='tests/sg_phase_catalog_model_integration_test.c
 slipgate/sg_phase_catalog.c
-slipgate/sg_phase_catalog_audit.c
 slipgate/sg_phase_catalog_publication.c
 slipgate/sg_phase_catalog_owner.c
 slipgate/sg_phase_mover_support_provider.c
@@ -59,7 +57,6 @@ slipgate/sg_authority_entropy.c
 slipgate/sg_mechanism_capability.c
 slipgate/sg_mechanism_capability_seal.c
 slipgate/sg_phase_catalog.c
-slipgate/sg_phase_catalog_audit.c
 slipgate/sg_phase_catalog_publication.c
 slipgate/sg_phase_catalog_owner.c
 slipgate/sg_phase_mover_support_provider.c
@@ -139,7 +136,7 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 	UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
 	"$tmp_dir/phase-catalog-model-sanitize"
 
-for source in slipgate/sg_phase_catalog.c slipgate/sg_phase_catalog_audit.c \
+for source in slipgate/sg_phase_catalog.c \
 	slipgate/sg_phase_catalog_publication.c \
 	slipgate/sg_phase_catalog_owner.c \
 	slipgate/sg_phase_mover_support_provider.c \

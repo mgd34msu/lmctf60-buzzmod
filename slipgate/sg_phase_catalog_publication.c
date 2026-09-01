@@ -204,28 +204,28 @@ int SG_PhaseCatalogPublicationIssue(
 	sg_phase_catalog_publication_owner_t *owner,
 	const sg_phase_catalog_source_t *source, const sg_phase_catalog_t *catalog,
 	sg_phase_catalog_publication_t **publication_out,
-	sg_phase_catalog_audit_result_t *audit_out)
+	sg_phase_catalog_check_result_t *check_out)
 {
-	sg_phase_catalog_audit_result_t audit;
+	sg_phase_catalog_check_result_t check;
 	sg_phase_catalog_publication_record_t *record = NULL;
 	sg_phase_catalog_publication_payload_t *payload = NULL;
 	uintptr_t token;
 
-	if (audit_out)
-		memset(audit_out, 0, sizeof(*audit_out));
+	if (check_out)
+		memset(check_out, 0, sizeof(*check_out));
 	if (!owner || !publication_out || *publication_out ||
 		owner->live_count == UINT32_MAX)
 	{
-		if (audit_out)
-			audit_out->code = SG_PHASE_CATALOG_AUDIT_INVALID_ARGUMENT;
+		if (check_out)
+			check_out->code = SG_PHASE_CATALOG_CHECK_INVALID_ARGUMENT;
 		return 0;
 	}
 	*publication_out = NULL;
-	memset(&audit, 0, sizeof(audit));
-	if (!SG_PhaseCatalogAudit(source, catalog, &audit))
+	memset(&check, 0, sizeof(check));
+	if (!SG_PhaseCatalogValidate(source, catalog, &check))
 	{
-		if (audit_out)
-			*audit_out = audit;
+		if (check_out)
+			*check_out = check;
 		return 0;
 	}
 	record = calloc(1U, sizeof(*record));
@@ -281,8 +281,8 @@ int SG_PhaseCatalogPublicationIssue(
 	record->next = owner->live;
 	owner->live = record;
 	owner->live_count++;
-	if (audit_out)
-		*audit_out = audit;
+	if (check_out)
+		*check_out = check;
 	*publication_out = record->token;
 	return 1;
 
@@ -291,10 +291,10 @@ allocation_failure:
 		ReleaseRecord(record);
 	else
 		free(payload);
-	if (audit_out)
+	if (check_out)
 	{
-		audit_out->code = SG_PHASE_CATALOG_AUDIT_STORAGE_DISAGREEMENT;
-		audit_out->record = 0U;
+		check_out->code = SG_PHASE_CATALOG_CHECK_STORAGE_INVALID;
+		check_out->record = 0U;
 	}
 	return 0;
 }

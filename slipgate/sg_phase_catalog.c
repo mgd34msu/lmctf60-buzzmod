@@ -2005,6 +2005,236 @@ static int CatalogStorageShapeValid(const sg_phase_catalog_t *catalog)
 			(catalog->transitions && catalog->transition_evidence));
 }
 
+/* Linear structural acceptance.  These checks read the published catalog and
+ * its binding source identity only.  They never re-derive the expected model,
+ * so a defect is reported against a real record instead of against a second
+ * implementation that has to be kept in step with this one. */
+
+typedef struct sg_catalog_id_ref_s
+{
+	sg_rune_stable_id_t id;
+	uint32_t index;
+} sg_catalog_id_ref_t;
+
+typedef struct sg_catalog_binding_ref_s
+{
+	uint64_t region;
+	uint32_t cell;
+	sg_rune_stable_id_t phase;
+	uint32_t index;
+} sg_catalog_binding_ref_t;
+
+static void SetCatalogReport(sg_phase_catalog_check_result_t *report_out,
+	sg_phase_catalog_check_code_t code, uint32_t record)
+{
+	if (report_out)
+	{
+		report_out->code = code;
+		report_out->record = record;
+	}
+}
+
+static int CatalogIdRefCompare(const void *left_value, const void *right_value)
+{
+	const sg_catalog_id_ref_t *left = left_value;
+	const sg_catalog_id_ref_t *right = right_value;
+	int comparison = StableIdCompare(&left->id, &right->id);
+
+	if (comparison != 0)
+		return comparison;
+	return left->index == right->index ? 0 :
+		(left->index < right->index ? -1 : 1);
+}
+
+static int CatalogBindingRefCompare(const void *left_value,
+	const void *right_value)
+{
+	const sg_catalog_binding_ref_t *left = left_value;
+	const sg_catalog_binding_ref_t *right = right_value;
+	int comparison;
+
+	if (left->region != right->region)
+		return left->region < right->region ? -1 : 1;
+	if (left->cell != right->cell)
+		return left->cell < right->cell ? -1 : 1;
+	comparison = StableIdCompare(&left->phase, &right->phase);
+	if (comparison != 0)
+		return comparison;
+	return left->index == right->index ? 0 :
+		(left->index < right->index ? -1 : 1);
+}
+
+/* Returns 1 when a duplicate exists, -1 on allocation failure, 0 otherwise.
+ * The caller fills refs; this owns only the sort and the adjacent compare. */
+static int CatalogDuplicateRefs(sg_catalog_id_ref_t *refs, uint32_t count,
+	sg_phase_catalog_check_code_t code,
+	sg_phase_catalog_check_result_t *report_out)
+{
+	uint32_t index;
+
+	qsort(refs, count, sizeof(*refs), CatalogIdRefCompare);
+	for (index = 1U; index < count; index++)
+		if (StableIdCompare(&refs[index - 1U].id, &refs[index].id) == 0)
+		{
+			SetCatalogReport(report_out, code, refs[index].index);
+			return 1;
+		}
+	return 0;
+}
+
+static sg_catalog_id_ref_t *CatalogAllocRefs(uint32_t count,
+	sg_phase_catalog_check_result_t *report_out)
+{
+	sg_catalog_id_ref_t *refs;
+
+	if (!AllocationFits((size_t)count, sizeof(*refs)))
+	{
+		SetCatalogReport(report_out,
+			SG_PHASE_CATALOG_CHECK_STORAGE_INVALID, 0U);
+		return NULL;
+	}
+	refs = malloc((size_t)count * sizeof(*refs));
+	if (!refs)
+		SetCatalogReport(report_out,
+			SG_PHASE_CATALOG_CHECK_STORAGE_INVALID, 0U);
+	return refs;
+}
+
+static int CatalogDuplicatePhases(const sg_phase_catalog_t *catalog,
+	sg_phase_catalog_check_result_t *report_out)
+{
+	sg_catalog_id_ref_t *refs;
+	uint32_t index;
+	int duplicate;
+
+	if (catalog->phase_count < 2U)
+		return 0;
+	refs = CatalogAllocRefs(catalog->phase_count, report_out);
+	if (!refs)
+		return -1;
+	for (index = 0U; index < catalog->phase_count; index++)
+	{
+		refs[index].id = catalog->phases[index].id.value;
+		refs[index].index = index;
+	}
+	duplicate = CatalogDuplicateRefs(refs, catalog->phase_count,
+		SG_PHASE_CATALOG_CHECK_DUPLICATE_PHASE, report_out);
+	free(refs);
+	return duplicate;
+}
+
+static int CatalogDuplicateTransitions(const sg_phase_catalog_t *catalog,
+	sg_phase_catalog_check_result_t *report_out)
+{
+	sg_catalog_id_ref_t *refs;
+	uint32_t index;
+	int duplicate;
+
+	if (catalog->transition_count < 2U)
+		return 0;
+	refs = CatalogAllocRefs(catalog->transition_count, report_out);
+	if (!refs)
+		return -1;
+	for (index = 0U; index < catalog->transition_count; index++)
+	{
+		refs[index].id = catalog->transitions[index].id.value;
+		refs[index].index = index;
+	}
+	duplicate = CatalogDuplicateRefs(refs, catalog->transition_count,
+		SG_PHASE_CATALOG_CHECK_DUPLICATE_TRANSITION, report_out);
+	free(refs);
+	return duplicate;
+}
+
+static int CatalogDuplicateBindings(const sg_phase_catalog_t *catalog,
+	sg_phase_catalog_check_result_t *report_out)
+{
+	sg_catalog_binding_ref_t *refs;
+	uint32_t index;
+	int duplicate = 0;
+
+	if (catalog->binding_count < 2U)
+		return 0;
+	if (!AllocationFits((size_t)catalog->binding_count, sizeof(*refs)))
+	{
+		SetCatalogReport(report_out,
+			SG_PHASE_CATALOG_CHECK_STORAGE_INVALID, 0U);
+		return -1;
+	}
+	refs = malloc((size_t)catalog->binding_count * sizeof(*refs));
+	if (!refs)
+	{
+		SetCatalogReport(report_out,
+			SG_PHASE_CATALOG_CHECK_STORAGE_INVALID, 0U);
+		return -1;
+	}
+	for (index = 0U; index < catalog->binding_count; index++)
+	{
+		refs[index].region = catalog->bindings[index].semantic_region_id;
+		refs[index].cell = catalog->bindings[index].configuration_cell;
+		refs[index].phase = catalog->bindings[index].phase.value;
+		refs[index].index = index;
+	}
+	qsort(refs, catalog->binding_count, sizeof(*refs),
+		CatalogBindingRefCompare);
+	for (index = 1U; index < catalog->binding_count; index++)
+		if (refs[index - 1U].region == refs[index].region &&
+			refs[index - 1U].cell == refs[index].cell &&
+			StableIdCompare(&refs[index - 1U].phase, &refs[index].phase) == 0)
+		{
+			SetCatalogReport(report_out,
+				SG_PHASE_CATALOG_CHECK_DUPLICATE_BINDING, refs[index].index);
+			duplicate = 1;
+			break;
+		}
+	free(refs);
+	return duplicate;
+}
+
+int SG_PhaseCatalogValidate(const sg_phase_catalog_source_t *source,
+	const sg_phase_catalog_t *catalog,
+	sg_phase_catalog_check_result_t *result_out)
+{
+	uint32_t index;
+
+	SetCatalogReport(result_out, SG_PHASE_CATALOG_CHECK_OK_COMPLETE, 0U);
+	if (!source || !source->authority || !catalog)
+	{
+		SetCatalogReport(result_out,
+			SG_PHASE_CATALOG_CHECK_INVALID_ARGUMENT, 0U);
+		return 0;
+	}
+	if (!SG_PhaseCatalogHeaderValid(catalog) ||
+		!CatalogStorageShapeValid(catalog))
+	{
+		SetCatalogReport(result_out,
+			SG_PHASE_CATALOG_CHECK_STORAGE_INVALID, 0U);
+		return 0;
+	}
+	if (!SG_PhaseCatalogIdentityEqual(&catalog->identity,
+		&source->authority->identity))
+	{
+		SetCatalogReport(result_out,
+			SG_PHASE_CATALOG_CHECK_SOURCE_MISMATCH, 0U);
+		return 0;
+	}
+	/* Deterministic order is an artifact property: equal inputs must produce
+	 * the same byte order, so phases carry strictly increasing order keys. */
+	for (index = 1U; index < catalog->phase_count; index++)
+		if (SG_RuneModelOrderKeyCompare(&catalog->phases[index - 1U].order,
+			&catalog->phases[index].order) >= 0)
+		{
+			SetCatalogReport(result_out,
+				SG_PHASE_CATALOG_CHECK_NONDETERMINISTIC_ORDER, index);
+			return 0;
+		}
+	if (CatalogDuplicatePhases(catalog, result_out) != 0 ||
+		CatalogDuplicateBindings(catalog, result_out) != 0 ||
+		CatalogDuplicateTransitions(catalog, result_out) != 0)
+		return 0;
+	return 1;
+}
+
 int SG_PhaseCatalogBuild(const sg_phase_catalog_source_t *source,
 	sg_phase_catalog_t **catalog_out, sg_phase_catalog_error_t *error_out)
 {
@@ -2055,12 +2285,17 @@ int SG_PhaseCatalogBuild(const sg_phase_catalog_source_t *source,
 	free(expected.phase_neutral_hash);
 	free(expected.phase_region_by_phase);
 	memset(&expected, 0, sizeof(expected));
-	if (!SG_PhaseCatalogAudit(source, catalog,
-		&(sg_phase_catalog_audit_result_t){ 0 }))
 	{
-		SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_AUDIT_REJECTED, 0U);
-		SG_PhaseCatalogDestroy(catalog);
-		return 0;
+		sg_phase_catalog_check_result_t acceptance = { 0 };
+
+		if (!SG_PhaseCatalogValidate(source, catalog, &acceptance))
+		{
+			/* Report the failing record, not a bare rejection. */
+			SetErrorOnce(error_out, SG_PHASE_CATALOG_ERROR_CHECK_REJECTED,
+				acceptance.record);
+			SG_PhaseCatalogDestroy(catalog);
+			return 0;
+		}
 	}
 	*catalog_out = catalog;
 	return 1;
@@ -2129,7 +2364,7 @@ const char *SG_PhaseCatalogErrorString(sg_phase_catalog_error_code_t code)
 	case SG_PHASE_CATALOG_ERROR_DUPLICATE_SOURCE: return "duplicate source";
 	case SG_PHASE_CATALOG_ERROR_OVERFLOW: return "representation overflow";
 	case SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY: return "out of memory";
-	case SG_PHASE_CATALOG_ERROR_AUDIT_REJECTED: return "audit rejected";
+	case SG_PHASE_CATALOG_ERROR_CHECK_REJECTED: return "check rejected";
 	case SG_PHASE_CATALOG_ERROR_ERROR_COUNT: break;
 	}
 	return "unknown phase catalog error";

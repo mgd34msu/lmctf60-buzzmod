@@ -18,6 +18,6 @@ int SG_PhaseCatalogPublicationBuild(
 	const sg_mechanism_capability_set_t *accepted_capabilities,
 	sg_phase_catalog_publication_t **publication_out,
 	sg_phase_catalog_error_t *error_out,
-	sg_phase_catalog_audit_result_t *audit_out);
+	sg_phase_catalog_check_result_t *check_out);
 
 #endif /* SG_PHASE_CATALOG_OWNER_H */

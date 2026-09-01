@@ -13,7 +13,7 @@
 
 /* A source completion value is evidence about the complete mover-support
  * enumeration.  It is not a permission for the caller to manufacture phase
- * records: Build and Audit derive every record from the source again. */
+ * records: Build derives every record from the source. */
 typedef enum sg_phase_catalog_completion_e
 {
 	SG_PHASE_CATALOG_INCOMPLETE = 0,
@@ -137,7 +137,7 @@ typedef enum sg_phase_catalog_error_code_e
 	SG_PHASE_CATALOG_ERROR_DUPLICATE_SOURCE,
 	SG_PHASE_CATALOG_ERROR_OVERFLOW,
 	SG_PHASE_CATALOG_ERROR_OUT_OF_MEMORY,
-	SG_PHASE_CATALOG_ERROR_AUDIT_REJECTED,
+	SG_PHASE_CATALOG_ERROR_CHECK_REJECTED,
 	SG_PHASE_CATALOG_ERROR_ERROR_COUNT
 } sg_phase_catalog_error_code_t;
 
@@ -147,43 +147,24 @@ typedef struct sg_phase_catalog_error_s
 	uint32_t source_index;
 } sg_phase_catalog_error_t;
 
-typedef enum sg_phase_catalog_audit_code_e
+typedef enum sg_phase_catalog_check_code_e
 {
-	SG_PHASE_CATALOG_AUDIT_OK_COMPLETE = 0,
-	SG_PHASE_CATALOG_AUDIT_OK_PROVEN_EMPTY,
-	SG_PHASE_CATALOG_AUDIT_INVALID_ARGUMENT,
-	SG_PHASE_CATALOG_AUDIT_STORAGE_DISAGREEMENT,
-	SG_PHASE_CATALOG_AUDIT_SOURCE_MISMATCH,
-	SG_PHASE_CATALOG_AUDIT_OMITTED_PHASE,
-	SG_PHASE_CATALOG_AUDIT_INVENTED_PHASE,
-	SG_PHASE_CATALOG_AUDIT_DUPLICATE_PHASE,
-	SG_PHASE_CATALOG_AUDIT_DUPLICATE_BINDING,
-	SG_PHASE_CATALOG_AUDIT_UNRESOLVED_BINDING,
-	SG_PHASE_CATALOG_AUDIT_OMITTED_BINDING,
-	SG_PHASE_CATALOG_AUDIT_INVENTED_BINDING,
-	SG_PHASE_CATALOG_AUDIT_BINDING_DISAGREEMENT,
-	SG_PHASE_CATALOG_AUDIT_PHASE_DISAGREEMENT,
-	SG_PHASE_CATALOG_AUDIT_OMITTED_TRANSITION,
-	SG_PHASE_CATALOG_AUDIT_INVENTED_TRANSITION,
-	SG_PHASE_CATALOG_AUDIT_DUPLICATE_TRANSITION,
-	SG_PHASE_CATALOG_AUDIT_TRANSITION_DISAGREEMENT,
-	SG_PHASE_CATALOG_AUDIT_INVALID_SOURCE,
-	SG_PHASE_CATALOG_AUDIT_COMPLETION_DISAGREEMENT,
-	SG_PHASE_CATALOG_AUDIT_NONDETERMINISTIC_ORDER,
-	SG_PHASE_CATALOG_AUDIT_CODE_COUNT
-} sg_phase_catalog_audit_code_t;
+	SG_PHASE_CATALOG_CHECK_OK_COMPLETE = 0,
+	SG_PHASE_CATALOG_CHECK_INVALID_ARGUMENT,
+	SG_PHASE_CATALOG_CHECK_STORAGE_INVALID,
+	SG_PHASE_CATALOG_CHECK_SOURCE_MISMATCH,
+	SG_PHASE_CATALOG_CHECK_DUPLICATE_PHASE,
+	SG_PHASE_CATALOG_CHECK_DUPLICATE_BINDING,
+	SG_PHASE_CATALOG_CHECK_DUPLICATE_TRANSITION,
+	SG_PHASE_CATALOG_CHECK_NONDETERMINISTIC_ORDER,
+	SG_PHASE_CATALOG_CHECK_CODE_COUNT
+} sg_phase_catalog_check_code_t;
 
-typedef struct sg_phase_catalog_audit_result_s
+typedef struct sg_phase_catalog_check_result_s
 {
-	sg_phase_catalog_audit_code_t code;
+	sg_phase_catalog_check_code_t code;
 	uint32_t record;
-	uint32_t proved_phases;
-	uint32_t omitted_phases;
-	uint32_t invented_phases;
-	uint32_t proved_bindings;
-	uint32_t omitted_bindings;
-	uint32_t invented_bindings;
-} sg_phase_catalog_audit_result_t;
+} sg_phase_catalog_check_result_t;
 
 /* The build result remains inspectable for audit diagnostics.  Callers must
  * not treat this mutable construction object as published state; use the
@@ -211,15 +192,17 @@ typedef struct sg_phase_catalog_s
 
 int SG_PhaseCatalogBuild(const sg_phase_catalog_source_t *source,
 	sg_phase_catalog_t **catalog_out, sg_phase_catalog_error_t *error_out);
-int SG_PhaseCatalogAudit(const sg_phase_catalog_source_t *source,
+/* Linear structural acceptance: header, storage shape, binding identity,
+ * deterministic phase order, and duplicate phases, bindings, and transitions.
+ * It reads the published catalog only and never re-derives the model. */
+int SG_PhaseCatalogValidate(const sg_phase_catalog_source_t *source,
 	const sg_phase_catalog_t *catalog,
-	sg_phase_catalog_audit_result_t *result_out);
+	sg_phase_catalog_check_result_t *result_out);
 int SG_PhaseCatalogBindingsForRegion(const sg_phase_catalog_t *catalog,
 	uint64_t semantic_region_id, const sg_phase_catalog_binding_t **bindings_out,
 	uint32_t *binding_count_out);
 void SG_PhaseCatalogDestroy(sg_phase_catalog_t *catalog);
 const char *SG_PhaseCatalogErrorString(sg_phase_catalog_error_code_t code);
-const char *SG_PhaseCatalogAuditCodeString(sg_phase_catalog_audit_code_t code);
 
 typedef struct sg_phase_catalog_view_s
 {
@@ -249,7 +232,7 @@ int SG_PhaseCatalogPublicationIssue(
 	const sg_phase_catalog_source_t *source,
 	const sg_phase_catalog_t *catalog,
 	sg_phase_catalog_publication_t **publication_out,
-	sg_phase_catalog_audit_result_t *audit_out);
+	sg_phase_catalog_check_result_t *check_out);
 int SG_PhaseCatalogPublicationRead(
 	const sg_phase_catalog_publication_owner_t *owner,
 	const sg_phase_catalog_publication_t *publication,
