@@ -187,6 +187,29 @@ out of the artifact. Nothing should ever remove a connection for being costly.
 
 ---
 
+# Player hook audit (2026-09-01)
+
+Compared against the archived LMCTF 6.0 source in `~/Projects/qsrc/lmctf60`.
+The human grapple path is `Weapon_Hook_Fire` → `LMCTF_HumanHookFire` for
+non-bot clients.
+
+| Function | Result |
+|---|---|
+| `LMCTF_HumanHookFire` | line-for-line the original `Weapon_Hook_Fire`: same pull ladder (>120 → `GRAPPLE_PULL_SPEED`, then ×5/×4/×3/×2/×1 tiers), same `SV_AddGravity` placement, same `velocity`/`oldvelocity` writes |
+| `LMCTF_FireHumanHook` | original `fire_hook` plus a CTF-id attribution tag, passive trace capture, and one fix: the original passed `NULL` as the plane on immediate obstruction and `hook_touch` dereferences it on a damageable target |
+| `hook_touch` | identical |
+| `ctf_hook_abort` | original core preserved; adds a bot-gated compound call and a passive trace reset |
+| `Weapon_Hook` | identical plus a passive trace call before abort |
+| `Cmd_Hook_f` (offhand bind) | whitespace-only diff |
+
+`SG_HumanTraceHook*` write nothing to player or bolt state. The gravity-free
+`CTF_HookPullStep` is bot-only; its comment is correct that the original's
+`SV_AddGravity` was overwritten by `ent->velocity = dir` on the next line and
+never had an observable effect.
+
+Verdict: the human hook is faithful to LMCTF 6.0. If it feels wrong in play,
+the cause is outside these functions.
+
 # Part C — Removal
 
 Measured by module membership crossed with old/new signals.
