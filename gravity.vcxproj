@@ -469,11 +469,6 @@
     <ClCompile Include="slipgate\sg_tactic_pmove_control_runtime.c" />
     <ClCompile Include="slipgate\sg_destination.c" />
     <ClCompile Include="slipgate\sg_perception_evidence.c" />
-    <ClCompile Include="slipgate\sg_rune_dynamics_model.c" />
-    <ClCompile Include="slipgate\sg_rune_dynamics_geometry.c" />
-    <ClCompile Include="slipgate\sg_rune_field_contract.c" />
-    <ClCompile Include="slipgate\sg_field_attractor.c" />
-    <ClCompile Include="slipgate\sg_field_service.c" />
     <ClCompile Include="slipgate\sg_rune_model.c" />
     <ClCompile Include="slipgate\sg_localization.c" />
     <ClCompile Include="slipgate\sg_pickup_target.c" />
@@ -660,10 +655,6 @@
     <ClInclude Include="slipgate\sg_rune_compact_field_service_private.h" />
     <ClInclude Include="slipgate\sg_destination.h" />
     <ClInclude Include="slipgate\sg_perception_evidence.h" />
-    <ClInclude Include="slipgate\sg_rune_dynamics_model.h" />
-    <ClInclude Include="slipgate\sg_rune_dynamics_model_internal.h" />
-    <ClInclude Include="slipgate\sg_field_attractor.h" />
-    <ClInclude Include="slipgate\sg_field_service_owner_private.h" />
     <ClInclude Include="slipgate\sg_rune_model.h" />
     <ClInclude Include="slipgate\sg_rune.h" />
     <ClInclude Include="slipgate\sg_rune_contract.h" />
