@@ -33,15 +33,11 @@ if ! rg -U -q 'if \(compact_current\)\n\t\{\n\t\tCompactBotThink\(bot, e\);\n\t\
 	exit 1
 fi
 if ! sed -n '/^static qboolean StrategyCommitFrame/,/^static void StrategyInterrupt/p' \
-	slipgate/sg_arach.c | rg -q 'SG_TacticExecutionOwnerPrepare' || \
+	slipgate/sg_arach.c | rg -q 'SG_TacticRuntimePrepareStep' || \
    ! sed -n '/^static qboolean StrategyCommitFrame/,/^static void StrategyInterrupt/p' \
-	slipgate/sg_arach.c | rg -q 'SG_TacticExecutionOwnerCommit'; then
-	echo 'live compact STEP no longer reaches the authenticated tactic owner' >&2
-	exit 1
-fi
-if sed -n '/^static qboolean StrategyCommitFrame/,/^static void StrategyInterrupt/p' \
-	slipgate/sg_arach.c | rg -n 'SG_TacticRuntimeSelectStep|SG_TacticExecutionDispatchSelected'; then
-	echo 'live compact STEP bypasses the sealed execution owner' >&2
+	slipgate/sg_arach.c | rg -q 'SG_TacticExecutionDispatchSelected' || \
+   ! rg -q 'SG_TacticControl\(' slipgate/sg_arach.c; then
+	echo 'live compact STEP no longer reaches the selector and the executor' >&2
 	exit 1
 fi
 if sed -n '/^static qboolean StrategyCommitFrame/,/^static void StrategyInterrupt/p' \

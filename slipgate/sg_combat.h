@@ -191,3 +191,11 @@ int SG_CombatSkill(edict_t *self);
 
 /* debug: the trigger-veto tally, printed every 5s on sg_debug */
 void SG_CombatWhy(void);
+
+/* The executor's hand: is the launcher ready, ask for it, and what the body
+ * carries for the tactic layer. */
+qboolean SG_CombatRocketLauncherReady(edict_t *self);
+void SG_CombatRequestRocketLauncher(edict_t *self);
+struct sg_tactic_live_inventory_s;
+void SG_CombatLiveInventory(edict_t *self,
+	struct sg_tactic_live_inventory_s *out);

@@ -559,7 +559,7 @@
     <ClCompile Include="slipgate\sg_tactic_execution.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_tactic_execution_owner.c">
+    <ClCompile Include="slipgate\sg_tactic_controller.c">
       <Filter>Source Files\slipgate</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_tactic_policy.c">
@@ -1101,10 +1101,7 @@
     <ClInclude Include="slipgate\sg_tactic_execution.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="slipgate\sg_tactic_execution_owner.h">
-      <Filter>Header Files\slipgate</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_tactic_execution_owner_private.h">
+    <ClInclude Include="slipgate\sg_tactic_controller.h">
       <Filter>Header Files\slipgate</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_tactic_policy.h">

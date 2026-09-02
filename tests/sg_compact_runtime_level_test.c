@@ -1,5 +1,4 @@
 #include "../slipgate/sg_compact_runtime_level.h"
-#include "../slipgate/sg_tactic_execution_owner_private.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -12,10 +11,6 @@ struct sg_rune_compact_field_service_s
 	const sg_rune_compact_model_t *model;
 };
 
-struct sg_tactic_execution_owner_s
-{
-	uint8_t live;
-};
 
 static struct sg_rune_compact_field_service_s service_storage;
 static int failures;
@@ -23,10 +18,8 @@ static int allow_bind = 1;
 static int allow_localization_provider = 1;
 static int allow_strategy_provider = 1;
 static int allow_tactic_provider = 1;
-static int allow_execution_owner = 1;
 static int strategy_installed;
 static int tactic_installed;
-static struct sg_tactic_execution_owner_s execution_owner_storage;
 static int event_count;
 static int events[16];
 
@@ -61,8 +54,6 @@ enum
 	EVENT_BOT_INSTALL,
 	EVENT_STRATEGY_INSTALL,
 	EVENT_TACTIC_INSTALL,
-	EVENT_EXECUTION_INSTALL,
-	EVENT_EXECUTION_CLEAR,
 	EVENT_TACTIC_CLEAR,
 	EVENT_STRATEGY_CLEAR,
 	EVENT_BOT_CLEAR,
@@ -266,37 +257,6 @@ int SG_TacticRuntimeProviderCurrent(
 	return tactic_installed && service == &service_storage;
 }
 
-sg_tactic_execution_owner_status_t SG_TacticExecutionOwnerCreate(
-	sg_tactic_execution_owner_t **owner_out,
-	sg_tactic_execution_diagnostic_t *diagnostic_out)
-{
-	Event(EVENT_EXECUTION_INSTALL);
-	if (owner_out)
-		*owner_out = NULL;
-	if (diagnostic_out)
-		memset(diagnostic_out, 0, sizeof(*diagnostic_out));
-	if (!allow_execution_owner || !owner_out || !diagnostic_out)
-		return SG_TACTIC_EXECUTION_OWNER_ALLOCATION_REJECTED;
-	execution_owner_storage.live = 1U;
-	*owner_out = &execution_owner_storage;
-	return SG_TACTIC_EXECUTION_OWNER_OK;
-}
-
-void SG_TacticExecutionOwnerDestroy(sg_tactic_execution_owner_t *owner)
-{
-	if (owner)
-	{
-		Event(EVENT_EXECUTION_CLEAR);
-		owner->live = 0U;
-	}
-}
-
-int SG_TacticExecutionOwnerCurrent(
-	const sg_tactic_execution_owner_t *owner)
-{
-	return owner == &execution_owner_storage && owner->live != 0U;
-}
-
 static void InitInputs(sg_rune_compact_model_t *model,
 	sg_rune_compact_identity_t *identity,
 	sg_host_law_runtime_authority_t *authority)
@@ -328,9 +288,8 @@ static void TestSuccessAndTeardown(const sg_rune_compact_model_t *model,
 	sg_compact_localization_sample_t sample;
 	sg_compact_localized_state_t localized;
 	const int install_events[] = { EVENT_BIND, EVENT_BOT_INSTALL,
-		EVENT_STRATEGY_INSTALL, EVENT_TACTIC_INSTALL,
-		EVENT_EXECUTION_INSTALL };
-	const int clear_events[] = { EVENT_EXECUTION_CLEAR, EVENT_TACTIC_CLEAR,
+		EVENT_STRATEGY_INSTALL, EVENT_TACTIC_INSTALL };
+	const int clear_events[] = { EVENT_TACTIC_CLEAR,
 		EVENT_STRATEGY_CLEAR,
 		EVENT_BOT_CLEAR, EVENT_UNBIND, EVENT_SERVICE_DESTROY };
 
@@ -338,7 +297,6 @@ static void TestSuccessAndTeardown(const sg_rune_compact_model_t *model,
 	allow_localization_provider = 1;
 	allow_strategy_provider = 1;
 	allow_tactic_provider = 1;
-	allow_execution_owner = 1;
 	strategy_installed = 0;
 	tactic_installed = 0;
 	ResetEvents();
@@ -349,8 +307,6 @@ static void TestSuccessAndTeardown(const sg_rune_compact_model_t *model,
 	CHECK(runtime.accepted_model == model);
 	CHECK(runtime.model_generation == 7U);
 	CHECK(SG_CompactRuntimeLevelFieldService(&runtime) == &service_storage);
-	CHECK(SG_CompactRuntimeLevelExecutionOwner(&runtime) ==
-		&execution_owner_storage);
 	memset(&sample, 0, sizeof(sample));
 	sample.observation = &observation;
 	CHECK(SG_CompactRuntimeLevelObserve(&runtime, &sample, NULL, &localized) ==
@@ -388,11 +344,6 @@ static void TestRollback(const sg_rune_compact_model_t *model,
 		EVENT_STRATEGY_INSTALL, EVENT_TACTIC_INSTALL, EVENT_TACTIC_CLEAR,
 		EVENT_STRATEGY_CLEAR, EVENT_BOT_CLEAR, EVENT_UNBIND,
 		EVENT_SERVICE_DESTROY };
-	const int execution_events[] = { EVENT_BIND, EVENT_BOT_INSTALL,
-		EVENT_STRATEGY_INSTALL, EVENT_TACTIC_INSTALL,
-		EVENT_EXECUTION_INSTALL, EVENT_TACTIC_CLEAR,
-		EVENT_STRATEGY_CLEAR, EVENT_BOT_CLEAR, EVENT_UNBIND,
-		EVENT_SERVICE_DESTROY };
 
 	allow_bind = 0;
 	ResetEvents();
@@ -427,16 +378,6 @@ static void TestRollback(const sg_rune_compact_model_t *model,
 	CHECK(!SG_CompactRuntimeLevelCurrent(&runtime));
 	allow_tactic_provider = 1;
 
-	allow_execution_owner = 0;
-	ResetEvents();
-	CHECK(SG_CompactRuntimeLevelInstall(&runtime, model, identity, spatial_index,
-		&observation_owner, authority,
-		41U, 7U) == SG_COMPACT_RUNTIME_LEVEL_EXECUTION_OWNER_REJECTED);
-	CheckEvents(execution_events,
-		sizeof(execution_events) / sizeof(execution_events[0]));
-	CHECK(service_storage.live == 0U);
-	CHECK(!SG_CompactRuntimeLevelCurrent(&runtime));
-	allow_execution_owner = 1;
 }
 
 static void TestProviderOwnership(const sg_rune_compact_model_t *model,
@@ -453,7 +394,6 @@ static void TestProviderOwnership(const sg_rune_compact_model_t *model,
 	allow_localization_provider = 1;
 	allow_strategy_provider = 1;
 	allow_tactic_provider = 1;
-	allow_execution_owner = 1;
 	strategy_installed = 0;
 	tactic_installed = 0;
 	ResetEvents();

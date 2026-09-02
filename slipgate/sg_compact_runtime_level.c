@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sg_tactic_execution_owner_private.h"
 
 static sg_compact_runtime_level_t *sg_compact_bot_provider_owner;
 static uint64_t sg_compact_bot_provider_next_token = 1U;
@@ -21,7 +20,6 @@ static int RuntimeShapeEmpty(const sg_compact_runtime_level_t *runtime)
 {
 	return runtime != NULL && runtime->active == 0U &&
 		runtime->accepted_model == NULL && runtime->field_service == NULL &&
-		runtime->execution_owner == NULL &&
 		runtime->localization.bound == 0U &&
 		runtime->localization_scratch.candidates == NULL &&
 		runtime->localization_scratch.candidate_capacity == 0U &&
@@ -41,10 +39,8 @@ sg_compact_runtime_level_status_t SG_CompactRuntimeLevelInstall(
 	sg_compact_runtime_level_t candidate;
 	sg_rune_compact_field_service_status_t service_status;
 	sg_localization_status_t localization_status;
-	sg_tactic_execution_diagnostic_t execution_diagnostic;
 	int strategy_attempted = 0;
 	int tactic_attempted = 0;
-	int execution_attempted = 0;
 
 	if (!runtime || !accepted_model || !expected_identity || !spatial_index ||
 		!observation_owner || !observation_owner->validate || !host_authority ||
@@ -87,10 +83,6 @@ sg_compact_runtime_level_status_t SG_CompactRuntimeLevelInstall(
 		candidate.field_service, &candidate.localization, rune_identity,
 		topology_revision))
 		goto reject_tactic_provider;
-	execution_attempted = 1;
-	if (SG_TacticExecutionOwnerCreate(&candidate.execution_owner,
-			&execution_diagnostic) != SG_TACTIC_EXECUTION_OWNER_OK)
-		goto reject_execution_owner;
 
 	candidate.accepted_model = accepted_model;
 	candidate.rune_identity = rune_identity;
@@ -101,9 +93,6 @@ sg_compact_runtime_level_status_t SG_CompactRuntimeLevelInstall(
 	sg_compact_bot_provider_owner = runtime;
 	return SG_COMPACT_RUNTIME_LEVEL_OK;
 
-reject_execution_owner:
-	SG_TacticExecutionOwnerDestroy(candidate.execution_owner);
-	candidate.execution_owner = NULL;
 reject_tactic_provider:
 	if (tactic_attempted)
 		SG_TacticRuntimeProviderClear(candidate.field_service);
@@ -116,8 +105,7 @@ reject_localization_provider:
 reject_localization:
 	SG_RuneCompactFieldServiceDestroy(candidate.field_service);
 	free(candidate.localization_scratch.candidates);
-	return execution_attempted ?
-		SG_COMPACT_RUNTIME_LEVEL_EXECUTION_OWNER_REJECTED : tactic_attempted ?
+	return tactic_attempted ?
 		SG_COMPACT_RUNTIME_LEVEL_TACTIC_PROVIDER_REJECTED : strategy_attempted ?
 		SG_COMPACT_RUNTIME_LEVEL_STRATEGY_PROVIDER_REJECTED :
 		(localization_status != SG_LOCALIZATION_OK ?
@@ -145,8 +133,6 @@ void SG_CompactRuntimeLevelClear(sg_compact_runtime_level_t *runtime)
 	service = runtime->field_service;
 	/* The provider and all strategy leases must stop referring to this service
 	 * before the localization binding or model owner can be retired. */
-	SG_TacticExecutionOwnerDestroy(runtime->execution_owner);
-	runtime->execution_owner = NULL;
 	SG_TacticRuntimeProviderClear(service);
 	SG_StrategyRuntimeCompactProviderClear(service);
 	if (ProviderOwnedBy(runtime))
@@ -172,7 +158,6 @@ int SG_CompactRuntimeLevelCurrent(
 		runtime->localization.model == runtime->accepted_model &&
 		runtime->localization.rune_identity == runtime->rune_identity &&
 		runtime->localization.topology_revision == runtime->model_generation &&
-		SG_TacticExecutionOwnerCurrent(runtime->execution_owner) &&
 		SG_TacticRuntimeProviderCurrent(runtime->field_service) &&
 		runtime->localization_scratch.candidates != NULL &&
 		runtime->localization_scratch.candidate_capacity ==
@@ -189,12 +174,6 @@ const sg_rune_compact_field_service_t *SG_CompactRuntimeLevelFieldService(
 	return SG_CompactRuntimeLevelCurrent(runtime) ? runtime->field_service : NULL;
 }
 
-sg_tactic_execution_owner_t *SG_CompactRuntimeLevelExecutionOwner(
-	sg_compact_runtime_level_t *runtime)
-{
-	return SG_CompactRuntimeLevelCurrent(runtime) ?
-		runtime->execution_owner : NULL;
-}
 
 sg_localization_status_t SG_CompactRuntimeLevelObserve(
 	sg_compact_runtime_level_t *runtime,
@@ -221,7 +200,6 @@ const char *SG_CompactRuntimeLevelStatusString(
 		"localization provider rejected",
 		"strategy provider rejected",
 		"tactic provider rejected",
-		"execution owner rejected",
 		"scratch rejected"
 	};
 

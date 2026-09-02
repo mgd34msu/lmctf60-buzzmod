@@ -462,7 +462,7 @@
     <ClCompile Include="slipgate\sg_strategy_caller.c" />
     <ClCompile Include="slipgate\sg_strategy_runtime_bridge.c" />
     <ClCompile Include="slipgate\sg_tactic_execution.c" />
-    <ClCompile Include="slipgate\sg_tactic_execution_owner.c" />
+    <ClCompile Include="slipgate\sg_tactic_controller.c" />
     <ClCompile Include="slipgate\sg_tactic_policy.c" />
     <ClCompile Include="slipgate\sg_authority_entropy.c" />
     <ClCompile Include="slipgate\sg_tactic_runtime.c" />
@@ -646,8 +646,7 @@
     <ClInclude Include="slipgate\sg_strategy_caller.h" />
     <ClInclude Include="slipgate\sg_strategy_runtime_bridge.h" />
     <ClInclude Include="slipgate\sg_tactic_execution.h" />
-    <ClInclude Include="slipgate\sg_tactic_execution_owner.h" />
-    <ClInclude Include="slipgate\sg_tactic_execution_owner_private.h" />
+    <ClInclude Include="slipgate\sg_tactic_controller.h" />
     <ClInclude Include="slipgate\sg_tactic_policy.h" />
     <ClInclude Include="slipgate\sg_authority_entropy.h" />
     <ClInclude Include="slipgate\sg_tactic_runtime.h" />

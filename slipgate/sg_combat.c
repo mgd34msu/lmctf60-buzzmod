@@ -3,6 +3,8 @@
 #include "g_ctffunc.h"
 #include "slipgate/sg_belief_runtime.h"
 #include "slipgate/sg_combat.h"
+#include "slipgate/sg_tactic_contract.h"
+#include "slipgate/sg_weapon_effect_profile.h"
 #include "slipgate/sg_combat_commit_policy.h"
 #include "slipgate/sg_combat_land_lead.h"
 #include "slipgate/sg_combat_target_policy.h"
@@ -4733,3 +4735,86 @@ uint32_t SG_CombatAimTestClientRandom(int client_index,
 	    Combat_RandomIdentity(client_index, client_life), steps);
 }
 #endif
+
+/*
+ * The executor's view of the hand.  A rocket jump needs the launcher in
+ * hand, ready, and loaded; asking for it goes through the same request
+ * discipline as any other switch, so the executor cannot thrash the hand.
+ */
+qboolean SG_CombatRocketLauncherReady(edict_t *self)
+{
+	if (!self || !self->client || !sg_witem[SG_W_ROCKETLAUNCHER])
+		return false;
+	return self->client->pers.weapon == sg_witem[SG_W_ROCKETLAUNCHER] &&
+		self->client->newweapon == NULL &&
+		self->client->weaponstate == WEAPON_READY &&
+		Combat_Avail(self, SG_W_ROCKETLAUNCHER);
+}
+
+void SG_CombatRequestRocketLauncher(edict_t *self)
+{
+	sg_combat_state_t *st;
+
+	if (!self || !self->client || !Combat_Avail(self, SG_W_ROCKETLAUNCHER))
+		return;
+	st = Combat_ClientState(self);
+	if (!st)
+		return;
+	Combat_Request(self, st, SG_W_ROCKETLAUNCHER);
+}
+
+static int Combat_ProfileForWeapon(int w)
+{
+	switch (w)
+	{
+	case SG_W_BLASTER: return SG_WEAPON_PROFILE_BLASTER;
+	case SG_W_SHOTGUN: return SG_WEAPON_PROFILE_SHOTGUN;
+	case SG_W_SSHOTGUN: return SG_WEAPON_PROFILE_SUPER_SHOTGUN;
+	case SG_W_MACHINEGUN: return SG_WEAPON_PROFILE_MACHINEGUN;
+	case SG_W_CHAINGUN: return SG_WEAPON_PROFILE_CHAINGUN;
+	case SG_W_GRENADELAUNCHER: return SG_WEAPON_PROFILE_GRENADE_LAUNCHER;
+	case SG_W_ROCKETLAUNCHER: return SG_WEAPON_PROFILE_ROCKET_LAUNCHER;
+	case SG_W_HYPERBLASTER: return SG_WEAPON_PROFILE_HYPERBLASTER;
+	case SG_W_RAILGUN: return SG_WEAPON_PROFILE_RAILGUN;
+	case SG_W_BFG: return SG_WEAPON_PROFILE_BFG;
+	default: return 0;
+	}
+}
+
+/* What the body carries, for the tactic layer's capabilities that spend it. */
+void SG_CombatLiveInventory(edict_t *self, sg_tactic_live_inventory_t *out)
+{
+	int armor_index;
+	int w;
+
+	if (!out)
+		return;
+	memset(out, 0, sizeof(*out));
+	if (!self || !self->client)
+		return;
+	out->health = self->health;
+	armor_index = ArmorIndex(self);
+	if (armor_index > 0)
+	{
+		const gitem_t *armor = GetItemByIndex(armor_index);
+
+		out->armor_count = self->client->pers.inventory[armor_index];
+		if (armor && armor->info)
+			out->armor_protection =
+				((const gitem_armor_t *)armor->info)->normal_protection;
+	}
+	for (w = 0; w < SG_NUM_WEAPONS; w++)
+	{
+		const int profile = Combat_ProfileForWeapon(w);
+
+		if (profile > 0 && sg_witem[w] &&
+			self->client->pers.inventory[sg_widx[w]] > 0)
+			out->weapon_mask |= UINT32_C(1) << profile;
+	}
+	if (sg_wammo[SG_W_ROCKETLAUNCHER] >= 0)
+	{
+		const int rounds = Combat_AmmoCount(self, SG_W_ROCKETLAUNCHER);
+
+		out->rocket_rounds = rounds > 0 ? (uint32_t)rounds : 0U;
+	}
+}

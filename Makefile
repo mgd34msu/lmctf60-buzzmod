@@ -1244,7 +1244,7 @@ OBJS := \
 	sg_move.o slipgate/sg_feeler_probe.o \
 	sg_price.o \
 	sg_descend.o slipgate/sg_traversal_transition.o \
-	sg_goal.o slipgate/sg_authority_entropy.o slipgate/sg_tactic_policy.o slipgate/sg_tactic_execution.o slipgate/sg_tactic_execution_owner.o \
+	sg_goal.o slipgate/sg_authority_entropy.o slipgate/sg_tactic_policy.o slipgate/sg_tactic_execution.o slipgate/sg_tactic_controller.o \
 	slipgate/sg_tactic_runtime.o \
 	slipgate/sg_tactic_pmove_control_runtime.o \
 	slipgate/sg_belief.o \
@@ -4186,9 +4186,8 @@ rune-compact-learning-production-link-test: \
 	slipgate/sg_rune_source_authority.h \
 	slipgate/sg_rune_source_authority_owner.h \
 	slipgate/sg_crc32.c slipgate/sg_crc32.h \
-	slipgate/sg_tactic_execution_owner.c \
-	slipgate/sg_tactic_execution_owner.h \
-	slipgate/sg_tactic_execution_owner_private.h \
+	slipgate/sg_tactic_controller.c \
+	slipgate/sg_tactic_controller.h \
 	slipgate/sg_tactic_runtime.c slipgate/sg_tactic_runtime.h \
 	slipgate/sg_tactic_runtime_private.h \
 	slipgate/sg_strategy_runtime_bridge.c \

@@ -53,7 +53,6 @@ static void BotSlot_Reset(sg_bot_t *bot)
 	int slot = bot ? (int)(bot - sg_bots) : -1;
 	unsigned long long instance_token = bot ? bot->instance_token : 0ULL;
 
-	SG_CancelBotSlotTacticLife(bot);
 	/* Defensive for non-ClientDisconnect retirement paths: no delayed target
 	 * chain may outlive the SG owner identity stored in this process slot. */
 	if (bot)

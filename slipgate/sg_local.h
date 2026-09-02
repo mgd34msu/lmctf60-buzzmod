@@ -864,10 +864,8 @@ qboolean	SG_RetireBotForClient(edict_t *ent);
 void		SG_DisownBot(edict_t *ent);
 /* Host lifecycle fence for one exact, currently owned fake-client life.
  * Human clients and stale/recycled bot identities are deliberate no-ops. */
-void		SG_CancelCurrentBotTacticLife(edict_t *ent);
 /* Process-slot retirement may run after the edict stopped being a bot. It
  * revokes only the exact subject still stored in the trusted SG slot. */
-void		SG_CancelBotSlotTacticLife(struct sg_bot_s *bot);
 qboolean	SG_AddBot(void);
 qboolean	SG_AddBotTeam(int teamnum);
 int			SG_RemoveBots(void);

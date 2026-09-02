@@ -18,6 +18,7 @@
 void		ClientThink(edict_t *ent, usercmd_t *ucmd);
 void		Cmd_Kill_f(edict_t *ent);
 void		Cmd_Hook_f(edict_t *ent);
+void		ctf_hook_abort(edict_t *ent);
 void		ClientDisconnect(edict_t *ent);
 qboolean	ClientConnect(edict_t *ent, char *userinfo);
 void		ClientBegin(edict_t *ent);
@@ -71,12 +72,13 @@ void		ClientUserinfoChanged(edict_t *ent, char *userinfo);
 #include "slipgate/sg_rune_compact_localize.h"
 #include "slipgate/sg_rune_compact_production.h"
 #include "slipgate/sg_rune_compact_learning_game.h"
+#include "slipgate/sg_tactic_runtime_private.h"
 #ifdef SG_ARACH_RESTORE_WORLD_MACRO
 #define world (&g_edicts[0])
 #undef SG_ARACH_RESTORE_WORLD_MACRO
 #endif
 #include "slipgate/sg_tactic_execution.h"
-#include "slipgate/sg_tactic_execution_owner_private.h"
+#include "slipgate/sg_tactic_controller.h"
 #include "slipgate/sg_tactic_runtime.h"
 
 #include <errno.h>
@@ -2407,7 +2409,7 @@ static void StrategyAdvanceLiveGoal(sg_bot_t *bot, const sg_think_t *tc,
 
 static qboolean StrategyCommitFrame(sg_bot_t *bot, sg_think_t *tc,
 	sg_strike_duty_t strike_duty, sg_tactic_execution_t *execution_out,
-	qboolean *navigation_permitted_out, qboolean *owner_committed_out)
+	qboolean *navigation_permitted_out)
 {
 	sg_strategy_runtime_plan_request_t request;
 	sg_rune_compact_portal_snapshot_frame_t portal_snapshot;
@@ -2428,10 +2430,7 @@ static qboolean StrategyCommitFrame(sg_bot_t *bot, sg_think_t *tc,
 		memset(execution_out, 0, sizeof(*execution_out));
 	if (navigation_permitted_out != NULL)
 		*navigation_permitted_out = false;
-	if (owner_committed_out != NULL)
-		*owner_committed_out = false;
-	if (!bot || !tc || !execution_out || !navigation_permitted_out ||
-		!owner_committed_out)
+	if (!bot || !tc || !execution_out || !navigation_permitted_out)
 		return false;
 	memset(&plan, 0, sizeof(plan));
 	if (!SG_StrategyRuntimeCompactProviderAvailable())
@@ -2481,10 +2480,10 @@ static qboolean StrategyCommitFrame(sg_bot_t *bot, sg_think_t *tc,
 	if (field_result.kind == SG_RUNE_COMPACT_FIELD_STEP &&
 		output.instruction.kind == SG_STRATEGY_INSTRUCTION_EXECUTE)
 	{
-		sg_tactic_execution_owner_t *execution_owner;
-		sg_tactic_execution_owner_status_t owner_status;
-		sg_tactic_execution_token_t token;
-		sg_tactic_execution_diagnostic_t diagnostic;
+		sg_tactic_runtime_prepared_step_t prepared;
+		sg_tactic_runtime_status_t status;
+		sg_tactic_live_inventory_t inventory;
+		qboolean selected = false;
 
 		memset(&step_input, 0, sizeof(step_input));
 		step_input.model = model;
@@ -2495,32 +2494,27 @@ static qboolean StrategyCommitFrame(sg_bot_t *bot, sg_think_t *tc,
 		step_input.localized = localized_player;
 		step_input.local_context = &local_context;
 		step_input.field_result = &field_result;
-		execution_owner = SG_CompactRuntimeLevelExecutionOwner(
-			&sg_compact_production.runtime);
-		if (!execution_owner)
-		{
+		SG_CombatLiveInventory(tc->e, &inventory);
+		step_input.inventory = &inventory;
+		/* Select this frame's capability from the exact probes, consume the
+		 * strategy proof it was selected under, and hand the choice to the
+		 * executor.  A frame with no selectable capability still steers at
+		 * the step's target; the strategy lease is released either way. */
+		memset(&prepared, 0, sizeof(prepared));
+		status = SG_TacticRuntimePrepareStep(&step_input, &prepared);
+		if (status != SG_TACTIC_RUNTIME_OK)
 			(void)SG_StrategyRuntimeCallerQueryProofRelease(&bot->strategy,
 				&output, &output_proof, &query_proof);
-			return false;
-		}
-		memset(&token, 0, sizeof(token));
-		memset(&diagnostic, 0, sizeof(diagnostic));
-		owner_status = SG_TacticExecutionOwnerPrepare(execution_owner,
-			&step_input, &token, &diagnostic);
-		if (owner_status == SG_TACTIC_EXECUTION_OWNER_OK)
-		{
-			owner_status = SG_TacticExecutionOwnerCommit(execution_owner,
-				&token, &diagnostic);
-			if (owner_status == SG_TACTIC_EXECUTION_OWNER_OK)
-				*owner_committed_out = true;
-		}
 		else
-			(void)SG_StrategyRuntimeCallerQueryProofRelease(&bot->strategy,
-				&output, &output_proof, &query_proof);
-		/* The sealed owner is the only STEP command authority.  Until a family
-		 * sealer is complete, Prepare fails before consuming the strategy proof
-		 * and this scalar dispatch remains diagnostic/holding only. */
-		if (!SG_TacticExecutionDispatch(model, &field_result, execution_out))
+		{
+			status = SG_TacticRuntimePreparedStepConsume(&prepared);
+			selected = status == SG_TACTIC_RUNTIME_OK &&
+				SG_TacticExecutionDispatchSelected(model, &field_result,
+					&prepared.result, execution_out);
+			(void)SG_TacticRuntimePreparedStepRelease(&prepared);
+		}
+		if (!selected &&
+			!SG_TacticExecutionDispatch(model, &field_result, execution_out))
 			return false;
 	}
 	else
@@ -2538,13 +2532,8 @@ static qboolean StrategyCommitFrame(sg_bot_t *bot, sg_think_t *tc,
 	tc->role = (sg_role_t)output.role;
 	tc->strategy_plan_id = output.plan_id;
 	tc->strategy_activation_id = output.activation_id;
-	/* The selector authenticates a capability and exact successor, but its
-	 * scalar result is not a body-command witness.  A STEP therefore keeps the
-	 * strategy commitment live without synthesizing usercmd motion or falling
-	 * through to the retired action-link descent path. */
 	*navigation_permitted_out = output.instruction.kind ==
-		SG_STRATEGY_INSTRUCTION_EXECUTE && field_result.kind !=
-		SG_RUNE_COMPACT_FIELD_STEP;
+		SG_STRATEGY_INSTRUCTION_EXECUTE;
 	return true;
 }
 
@@ -2563,56 +2552,6 @@ static void StrategyInterrupt(sg_bot_t *bot, qboolean alive,
 	else
 		(void)SG_StrategyCallerPulse(&bot->strategy, 1U, at_ms,
 			reason, &output);
-}
-
-static void CancelTacticSubject(const sg_localization_subject_t *subject)
-{
-	sg_tactic_execution_owner_t *execution_owner;
-
-	if (!subject || subject->reserved != 0U ||
-		subject->client_id == 0U || subject->client_id == UINT32_MAX ||
-		subject->spawn_generation == 0U)
-		return;
-	execution_owner = SG_CompactRuntimeLevelExecutionOwner(
-		&sg_compact_production.runtime);
-	if (execution_owner)
-		SG_TacticExecutionOwnerCancelSubject(execution_owner, subject);
-}
-
-void SG_CancelBotSlotTacticLife(sg_bot_t *bot)
-{
-	int slot;
-
-	if (!bot)
-		return;
-	for (slot = 0; slot < SG_MAXBOTS; slot++)
-	{
-		if (bot != &sg_bots[slot])
-			continue;
-		CancelTacticSubject(&bot->localization_subject);
-		return;
-	}
-}
-
-void SG_CancelCurrentBotTacticLife(edict_t *ent)
-{
-	const sg_localization_subject_t *subject;
-	int slot;
-
-	if (!ent || !ent->client || ent->s.number <= 0 ||
-		!SG_OwnsBot(ent) || ent->client->ctf.ctfid == 0U)
-		return;
-	for (slot = 0; slot < SG_MAXBOTS; slot++)
-	{
-		if (!sg_bots[slot].active || sg_bots[slot].ent != ent)
-			continue;
-		subject = &sg_bots[slot].localization_subject;
-		if (subject->client_id != (uint32_t)ent->s.number ||
-			subject->spawn_generation != ent->client->ctf.ctfid)
-			return;
-		SG_CancelBotSlotTacticLife(&sg_bots[slot]);
-		return;
-	}
 }
 
 
@@ -2824,17 +2763,8 @@ static void Bot_ResetLifeActions(sg_bot_t *bot)
 static qboolean Think_Dead(sg_bot_t *bot, edict_t *e, usercmd_t *cmd,
 	qboolean allow_command)
 {
-	sg_tactic_execution_owner_t *execution_owner;
-	const sg_compact_localized_state_t *localized;
-
 	if (!e->deadflag)
 		return false;
-	execution_owner = SG_CompactRuntimeLevelExecutionOwner(
-		&sg_compact_production.runtime);
-	localized = SG_BotLocalizationCurrent(bot);
-	if (execution_owner && localized)
-		SG_TacticExecutionOwnerCancelSubject(execution_owner,
-			&localized->subject);
 	StrategyInterrupt(bot, false, SG_STRATEGY_BLOCK_CONTROLLER);
 
 	if (!bot->death_taught)
@@ -3152,77 +3082,115 @@ static short CompactTacticMove(float value)
 	return (short)lrintf(value);
 }
 
-static qboolean CompactTacticTarget(const sg_tactic_execution_t *execution,
-	vec3_t target_out)
-{
-	int axis;
 
-	if (!execution || !target_out)
-		return false;
-	if (execution->kind != SG_TACTIC_EXECUTION_LOCAL_DESTINATION ||
-	    execution->destination.kind != SG_RUNE_COMPACT_DESTINATION_POINT)
-		return false;
-	for (axis = 0; axis < 3; axis++)
-		target_out[axis] =
-			(float)execution->destination.value.point.value[axis] / 8.0f;
-	return true;
+/* The hook phase the executor sees, from the same facts the localization
+ * reads: the live rope and what this bot last did with it. */
+static sg_host_hook_phase_t CompactHookPhase(const sg_bot_t *bot,
+	const edict_t *e)
+{
+	if (e->client->hookstate == 1 && e->client->hook)
+		return SG_HOST_HOOK_IN_FLIGHT;
+	if (e->client->hookstate == 2 && e->client->hook)
+		return SG_HOST_HOOK_ATTACHED;
+	if (bot->hook_phase == 3 && e->client->hookstate == 0)
+		return SG_HOST_HOOK_COAST;
+	return SG_HOST_HOOK_IDLE;
 }
 
-/* This is the sole unsealed compact command boundary. Typed transitions,
- * temporary blocks, and mechanism requirements retain the strategy lease
- * while emitting no navigation; they cannot fall through into a legacy
- * action-link controller. Only a terminal local point is plain steering. */
+/* The body command boundary.  The executor turns the selected capability
+ * and the live body into one command; this converts it to a usercmd, lets
+ * combat own the view unless the capability needs it, runs the host's own
+ * think, and issues hook and weapon requests through the entry points a
+ * human's commands reach. */
 static void CompactTacticEmit(sg_bot_t *bot, edict_t *e,
 	const sg_tactic_execution_t *execution, qboolean navigation_permitted)
 {
 	usercmd_t cmd;
-	vec3_t target;
-	vec3_t direction;
-	qboolean have_target = false;
+	sg_tactic_body_t body;
+	sg_tactic_command_t command;
 	qboolean engaged = false;
-	float horizontal_length = 0.0f;
-	float navigation_yaw = 0.0f;
+	qboolean moving;
+	float navigation_yaw;
 	float command_yaw;
 	float command_radians;
 
 	memset(&cmd, 0, sizeof(cmd));
 	cmd.msec = 100;
-	VectorClear(target);
-	VectorClear(direction);
+	memset(&command, 0, sizeof(command));
+	command.status = SG_TACTIC_COMMAND_HOLD;
 	if (navigation_permitted)
-		have_target = CompactTacticTarget(execution, target);
-	if (have_target)
 	{
-		VectorSubtract(target, e->s.origin, direction);
-		horizontal_length = sqrtf(direction[0] * direction[0] +
-			direction[1] * direction[1]);
-		if (!isfinite(horizontal_length) || horizontal_length <= 1.0f)
-			have_target = false;
-		else
+		memset(&body, 0, sizeof(body));
+		VectorCopy(e->s.origin, body.origin);
+		VectorCopy(e->velocity, body.velocity);
+		body.supported = e->groundentity != NULL ? 1U : 0U;
+		body.waterlevel = (uint8_t)e->waterlevel;
+		body.crouched = (e->client->ps.pmove.pm_flags & PMF_DUCKED) != 0 ?
+			1U : 0U;
+		body.hook_phase = CompactHookPhase(bot, e);
+		body.launcher_ready = SG_CombatRocketLauncherReady(e) ? 1U : 0U;
+		body.hook_ready = SG_HookOffhandReady(e) ? 1U : 0U;
+		body.gravity = sv_gravity->value;
+		body.frame_ms = SG_HOST_ENGINE_FRAME_MS;
+		body.substep_ms = SG_HOST_ENGINE_PMOVE_SUBSTEP_MS;
+		if (!SG_TacticControl(execution, &body, &command))
 		{
-			direction[0] /= horizontal_length;
-			direction[1] /= horizontal_length;
-			navigation_yaw = atan2f(direction[1], direction[0]) *
-				180.0f / (float)M_PI;
-			cmd.angles[YAW] = (short)(ANGLE2SHORT(navigation_yaw) -
-				e->client->ps.pmove.delta_angles[YAW]);
+			memset(&command, 0, sizeof(command));
+			command.status = SG_TACTIC_COMMAND_HOLD;
 		}
 	}
-	SG_CombatFrame(e, &cmd, &engaged);
+	moving = command.status != SG_TACTIC_COMMAND_HOLD &&
+		command.speed > 0.0f && isfinite(command.direction[0]) &&
+		isfinite(command.direction[1]);
+	if (moving)
+	{
+		navigation_yaw = atan2f(command.direction[1], command.direction[0]) *
+			180.0f / (float)M_PI;
+		cmd.angles[YAW] = (short)(ANGLE2SHORT(navigation_yaw) -
+			e->client->ps.pmove.delta_angles[YAW]);
+	}
+	if (command.aim_owned)
+	{
+		cmd.angles[YAW] = (short)(ANGLE2SHORT(command.yaw) -
+			e->client->ps.pmove.delta_angles[YAW]);
+		cmd.angles[PITCH] = (short)(ANGLE2SHORT(command.pitch) -
+			e->client->ps.pmove.delta_angles[PITCH]);
+	}
+	else
+		SG_CombatFrame(e, &cmd, &engaged);
 	bot->engaged_last = engaged;
-	if (have_target)
+	if (moving)
 	{
 		command_yaw = (float)SHORT2ANGLE(((int)cmd.angles[YAW] +
 			e->client->ps.pmove.delta_angles[YAW]) & 65535);
 		command_radians = command_yaw * (float)M_PI / 180.0f;
-		cmd.forwardmove = CompactTacticMove(400.0f *
-			(direction[0] * cosf(command_radians) +
-			 direction[1] * sinf(command_radians)));
-		cmd.sidemove = CompactTacticMove(400.0f *
-			(direction[0] * sinf(command_radians) -
-			 direction[1] * cosf(command_radians)));
+		cmd.forwardmove = CompactTacticMove(400.0f * command.speed *
+			(command.direction[0] * cosf(command_radians) +
+			 command.direction[1] * sinf(command_radians)));
+		cmd.sidemove = CompactTacticMove(400.0f * command.speed *
+			(command.direction[0] * sinf(command_radians) -
+			 command.direction[1] * cosf(command_radians)));
 	}
+	cmd.upmove = CompactTacticMove(400.0f * command.up);
+	if (command.attack)
+		cmd.buttons |= BUTTON_ATTACK;
 	ClientThink(e, &cmd);
+	if (command.want_launcher)
+		SG_CombatRequestRocketLauncher(e);
+	if (command.hook_fire && SG_HookOffhandReady(e))
+	{
+		Cmd_Hook_f(e);
+		bot->hook_phase = 2;
+		bot->hook_entity = e->client->hook;
+	}
+	else if (command.hook_release && e->client->hookstate != 0)
+	{
+		ctf_hook_abort(e);
+		bot->hook_phase = 3;
+		bot->hook_entity = NULL;
+	}
+	if (bot->hook_phase == 3 && e->groundentity && e->client->hookstate == 0)
+		bot->hook_phase = 0;
 }
 
 static void CompactBotThink(sg_bot_t *bot, edict_t *e)
@@ -3230,7 +3198,6 @@ static void CompactBotThink(sg_bot_t *bot, edict_t *e)
 	sg_tactic_execution_t execution;
 	sg_think_t tc;
 	qboolean navigation_permitted = false;
-	qboolean owner_committed = false;
 	qboolean carrying;
 
 	memset(&tc, 0, sizeof(tc));
@@ -3245,15 +3212,14 @@ static void CompactBotThink(sg_bot_t *bot, edict_t *e)
 	if (e->waterlevel == 0)
 		bot->swim_air_seed = -1;
 	if (!StrategyCommitFrame(bot, &tc, SG_STRIKE_DUTY_NONE, &execution,
-		&navigation_permitted, &owner_committed))
+		&navigation_permitted))
 	{
 		memset(&execution, 0, sizeof(execution));
 		execution.kind = SG_TACTIC_EXECUTION_DISCONNECTED;
 	}
 	bot->last_role = (int)tc.role;
 	bot->was_carrying = carrying;
-	if (!owner_committed)
-		CompactTacticEmit(bot, e, &execution, navigation_permitted);
+	CompactTacticEmit(bot, e, &execution, navigation_permitted);
 }
 
 void SG_BotThink(sg_bot_t *bot)
@@ -3906,9 +3872,6 @@ void SG_RunFrame(void)
 		 * TAG_LEVEL.  Clear callback entrypoints and dangling plan leases without
 		 * calling back into the lost owner; the synchronous SpawnEntities and
 		 * ReadLevel paths perform the normal exact release. */
-		if (sg_compact_production.runtime.execution_owner)
-			SG_TacticExecutionOwnerLost(
-				sg_compact_production.runtime.execution_owner);
 		for (i = 0; i < SG_MAXBOTS; i++)
 			SG_StrategyCallerOwnerLost(&sg_bots[i].strategy);
 		SG_LevelChange();
@@ -4013,18 +3976,11 @@ void SG_RunFrame(void)
 void SG_CompactProductionStorageWillFree(void)
 {
 	int i;
-	sg_tactic_execution_owner_t *execution_owner;
 
 	/* Plans own field-service leases.  Retire all plans first, then revoke the
 	 * compact providers and finally destroy their borrowed decoded model. */
-	execution_owner = sg_compact_production.runtime.execution_owner;
 	for (i = 0; i < SG_MAXBOTS; i++)
-	{
-		if (execution_owner)
-			SG_TacticExecutionOwnerCancelSubject(execution_owner,
-				&sg_bots[i].localization_subject);
 		SG_StrategyCallerDestroy(&sg_bots[i].strategy);
-	}
 	SG_RuneCompactProductionClear(&sg_compact_production);
 }
 
@@ -4038,9 +3994,6 @@ void SG_LevelChange(void)
 	for (i = 0; i < SG_MAXBOTS; i++)
 		(void)SG_HookDiagnosticsFinish(&sg_bots[i].hook_diagnostics,
 		    "map-transition", "level-change");
-	if (sg_compact_production.runtime.execution_owner)
-		SG_TacticExecutionOwnerCancelAll(
-			sg_compact_production.runtime.execution_owner);
 	/* The later full slot reset remains behind the compound-guard level fence
 	 * and sees an already empty, idempotent strategy caller. */
 	SG_CompactProductionStorageWillFree();
