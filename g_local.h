@@ -1051,8 +1051,7 @@ void G_RunEntity (edict_t *ent);
 // g_main.c
 //
 void SaveClientData (void);
-/* Implemented in slipgate/sg_client.c (still present); its prototype lived
- * in the now-deleted sg_compound_guard_game.h. */
+/* The bot roster (slipgate/sg_bot_roster.c). */
 void SG_RosterStorageReset (void);
 void FetchClientEntData (edict_t *ent);
 void EndDMLevel (void);
