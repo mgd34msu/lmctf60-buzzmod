@@ -18,6 +18,7 @@
 #include "sg_bot_orders.h"
 #include "sg_bot_combat.h"
 #include "sg_bot_items.h"
+#include "sg_cvars.h"
 #include "sg_client_ownership.h"
 #include "sg_host_engine_pmove.h"
 #include "sg_host_law_owner.h"
@@ -626,6 +627,15 @@ void SG_BotThink(sg_bot_t *bot)
 	SelectStep(bot, e, destination);
 	if (Stuck(bot, e) && e->groundentity)
 		bot->step.move_kind = SG_RUNE_MOVE_JUMP;
+	if (sg_cv.debug && sg_cv.debug->value && level.framenum % 50 == 0)
+		gi.dprintf("SGBOT %s role=%d cell=%u dest=%u step=%s/%s at=(%.0f %.0f %.0f) "
+			"target=(%.0f %.0f %.0f) cost=%.1f\n", e->client->pers.netname,
+			bot->role, (unsigned int)bot->cell, (unsigned int)bot->destination_cell,
+			SG_RuneStepKindString(bot->step.kind),
+			bot->step.kind == SG_RUNE_STEP_CROSS ? SG_RuneMoveKindString(
+				(sg_rune_move_kind_t)bot->step.move_kind) : "-",
+			e->s.origin[0], e->s.origin[1], e->s.origin[2], bot->step.target[0],
+			bot->step.target[1], bot->step.target[2], bot->step.cost_to_go);
 	Emit(bot, e);
 }
 
@@ -633,6 +643,7 @@ void SG_RunFrame(void)
 {
 	int i;
 
+	SG_CvarsInit();
 	(void)SG_HostLawProductionEnsureLevel(level.mapname);
 	if (!sg_level_setup_attempted)
 		(void)SG_LevelSetup();
