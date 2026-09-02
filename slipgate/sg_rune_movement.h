@@ -121,12 +121,10 @@ int SG_RuneMoveEmitCrossing(sg_rune_move_store_t *store,
 
 const char *SG_RuneMoveKindString(sg_rune_move_kind_t kind);
 
-/* Every directed portal of a compact geometry, with its crossing facts
- * read from the regions (one region per cell). */
-struct sg_rune_compact_geometry_view_s;
-struct sg_configuration_semantics_s;
-int SG_RuneMoveEmitGeometry(sg_rune_move_store_t *store,
-	const struct sg_rune_compact_geometry_view_s *geometry,
-	const struct sg_configuration_semantics_s *semantics);
+/* Every directed portal of a cell complex, with its crossing facts read
+ * from the cells and the shared facet. */
+struct sg_rune_cx_view_s;
+int SG_RuneMoveEmitComplex(sg_rune_move_store_t *store,
+	const struct sg_rune_cx_view_s *complex);
 
 #endif /* SG_RUNE_MOVE_H */

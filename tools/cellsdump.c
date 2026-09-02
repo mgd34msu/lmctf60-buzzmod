@@ -10,7 +10,7 @@
 #include "slipgate/sg_host_collision.h"
 #include "slipgate/sg_configuration_space.h"
 #include "slipgate/sg_configuration_semantics.h"
-#include "slipgate/sg_rune_compact_geometry.h"
+#include "slipgate/sg_rune_cx_build.h"
 #include "slipgate/sg_rune_movement.h"
 
 static double Now(void)
@@ -132,28 +132,25 @@ int main(int argc, char **argv)
 		(unsigned)semantics->boundary_count,
 		(unsigned)semantics->hook_surface_count, t2 - t1);
 	{
-		sg_rune_compact_geometry_t *geometry = NULL;
-		sg_rune_compact_geometry_error_t geometry_error;
-		sg_rune_compact_geometry_view_t view;
-		sg_rune_compact_identity_t compact_identity;
+		sg_rune_cx_t *geometry = NULL;
+		sg_rune_cx_error_t geometry_error;
+		sg_rune_cx_view_t view;
 		double t3;
 
-		memset(&compact_identity, 0, sizeof(compact_identity));
-		if (!SG_RuneCompactGeometryFromSpace(world, space, semantics,
-			&compact_identity, NULL, &geometry, &geometry_error))
+		if (!SG_RuneCxFromSpace(world, space, semantics, NULL, &geometry, &geometry_error))
 		{
 			fprintf(stderr, "geometry failed: %s (domain %d record %u)\n",
-				SG_RuneCompactGeometryErrorString(geometry_error.code),
+				SG_RuneCxErrorString(geometry_error.code),
 				(int)geometry_error.domain, (unsigned)geometry_error.record);
 			return 1;
 		}
 		t3 = Now();
-		SG_RuneCompactGeometryRead(geometry, &view);
+		SG_RuneCxRead(geometry, &view);
 		printf("geometry: cells %u, facets %u, incidences %u, vertices %u, "
 			"portals %u, source surfaces %u  [%.2fs]\n", (unsigned)view.cell_count,
 			(unsigned)view.facet_count, (unsigned)view.incidence_count,
 			(unsigned)view.vertex_count, (unsigned)view.portal_count,
-			(unsigned)view.source_surface_count, t3 - t2);
+			(unsigned)view.surface_count, t3 - t2);
 		{
 			sg_rune_move_store_t movement;
 			sg_rune_move_law_t law;
@@ -165,7 +162,7 @@ int main(int argc, char **argv)
 			law.frame_ms = identity.physics.frame_ms;
 			law.substep_ms = identity.physics.substep_ms;
 			if (!SG_RuneMoveStoreInit(&movement, &law) ||
-				!SG_RuneMoveEmitGeometry(&movement, &view, semantics))
+				!SG_RuneMoveEmitComplex(&movement, &view))
 			{
 				fprintf(stderr, "movement failed\n");
 				return 1;
@@ -182,7 +179,7 @@ int main(int argc, char **argv)
 						(sg_rune_move_kind_t)index), (unsigned)counts[index]);
 			SG_RuneMoveStoreFree(&movement);
 		}
-		SG_RuneCompactGeometryDestroy(geometry);
+		SG_RuneCxDestroy(geometry);
 	}
 	SG_ConfigurationSemanticsDestroy(semantics);
 	SG_ConfigurationDestroy(space);

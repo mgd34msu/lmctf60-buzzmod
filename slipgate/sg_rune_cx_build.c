@@ -8,7 +8,7 @@
  * for every remaining face piece; Q8 vertices; and the all-model source
  * surface inventory from the brushes' own side polygons.  Nothing is
  * re-derived and nothing is partitioned again. */
-#include "sg_rune_compact_geometry.h"
+#include "sg_rune_cx_build.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -21,34 +21,31 @@
 
 #define GEOMETRY_STATE UINT32_C(0x47454f4d)
 
-struct sg_rune_compact_geometry_s
+struct sg_rune_cx_s
 {
 	uint32_t state;
-	sg_rune_compact_geometry_allocator_t allocator;
-	sg_rune_compact_identity_t identity;
-	sg_rune_compact_cell_t *cells;
+	sg_rune_cx_allocator_t allocator;
+	sg_rune_cx_cell_t *cells;
 	uint32_t cell_count;
-	sg_rune_compact_facet_t *facets;
+	sg_rune_cx_facet_t *facets;
 	uint32_t facet_count;
-	sg_rune_compact_incidence_t *incidences;
+	sg_rune_cx_incidence_t *incidences;
 	uint32_t incidence_count;
-	sg_rune_compact_incidence_index_t *cell_incidences;
+	uint32_t *cell_incidences;
 	uint32_t cell_incidence_count;
-	sg_rune_q8_vec3_t *vertices;
+	sg_rune_cx_vec3_t *vertices;
 	uint32_t vertex_count;
-	sg_rune_compact_portal_t *portals;
+	sg_rune_cx_portal_t *portals;
 	uint32_t portal_count;
-	sg_rune_compact_source_surface_t *source_surfaces;
-	uint32_t source_surface_count;
-	sg_rune_q8_vec3_t *source_surface_vertices;
-	uint32_t source_surface_vertex_count;
-	sg_rune_compact_geometry_cell_span_t *compact_cells_for_configuration_cell;
-	sg_rune_compact_cell_index_t *configuration_cell_compact_cells;
+	sg_rune_cx_surface_t *surfaces;
+	uint32_t surface_count;
+	sg_rune_cx_vec3_t *surface_vertices;
+	uint32_t surface_vertex_count;
 };
 
 typedef struct geometry_build_s
 {
-	sg_rune_compact_geometry_t *geometry;
+	sg_rune_cx_t *geometry;
 	const sg_bsp_world_t *world;
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *semantics;
@@ -57,12 +54,12 @@ typedef struct geometry_build_s
 	uint32_t *side_to_brush;
 	uint32_t *portal_of_face;   /* per configuration face: first portal from it */
 	uint32_t *face_incidence;   /* per configuration face: scratch */
-	sg_rune_compact_geometry_error_t error;
+	sg_rune_cx_error_t error;
 } geometry_build_t;
 
 /* ---- allocation through the caller's allocator ------------------------- */
 
-static void *Allocate(const sg_rune_compact_geometry_allocator_t *allocator,
+static void *Allocate(const sg_rune_cx_allocator_t *allocator,
 	size_t bytes)
 {
 	if (allocator && allocator->allocate)
@@ -70,7 +67,7 @@ static void *Allocate(const sg_rune_compact_geometry_allocator_t *allocator,
 	return malloc(bytes);
 }
 
-static void Release(const sg_rune_compact_geometry_allocator_t *allocator,
+static void Release(const sg_rune_cx_allocator_t *allocator,
 	void *memory)
 {
 	if (!memory)
@@ -81,7 +78,7 @@ static void Release(const sg_rune_compact_geometry_allocator_t *allocator,
 		free(memory);
 }
 
-static int Grow(const sg_rune_compact_geometry_allocator_t *allocator,
+static int Grow(const sg_rune_cx_allocator_t *allocator,
 	void **array, uint32_t *capacity, uint32_t required, size_t element)
 {
 	uint32_t next;
@@ -110,10 +107,10 @@ static int Grow(const sg_rune_compact_geometry_allocator_t *allocator,
 }
 
 static void SetError(geometry_build_t *build,
-	sg_rune_compact_geometry_error_code_t code,
-	sg_rune_compact_geometry_record_domain_t domain, uint32_t record)
+	sg_rune_cx_error_code_t code,
+	sg_rune_cx_record_domain_t domain, uint32_t record)
 {
-	if (build->error.code == SG_RUNE_COMPACT_GEOMETRY_ERROR_NONE)
+	if (build->error.code == SG_RUNE_CX_ERROR_NONE)
 	{
 		build->error.code = code;
 		build->error.domain = domain;
@@ -136,10 +133,10 @@ static uint32_t Bits(float value)
 	return bits;
 }
 
-static sg_rune_binary32_plane_t PlaneBits(const float normal[3],
+static sg_rune_cx_plane_t PlaneBits(const float normal[3],
 	float distance)
 {
-	sg_rune_binary32_plane_t plane;
+	sg_rune_cx_plane_t plane;
 
 	plane.normal_bits[0] = Bits(normal[0]);
 	plane.normal_bits[1] = Bits(normal[1]);
@@ -149,35 +146,35 @@ static sg_rune_binary32_plane_t PlaneBits(const float normal[3],
 }
 
 /* A facet's provenance from the face's construction key. */
-static sg_rune_compact_source_t FacetSource(const geometry_build_t *build,
+static sg_rune_cx_source_t FacetSource(const geometry_build_t *build,
 	const sg_configuration_plane_t *plane, uint32_t leaf)
 {
 	const sg_bsp_world_t *world = build->world;
-	sg_rune_compact_source_t source;
+	sg_rune_cx_source_t source;
 
 	memset(&source, 0, sizeof(source));
 	switch (plane->source_kind)
 	{
 	case SG_CONFIGURATION_PLANE_DOMAIN:
-		source.kind = SG_RUNE_COMPACT_SOURCE_DOMAIN;
-		source.value.domain.axis = plane->source_index;
-		source.value.domain.maximum_side = plane->source_variant;
+		source.kind = SG_RUNE_CX_SOURCE_DOMAIN;
+		source.domain.axis = plane->source_index;
+		source.domain.maximum_side = plane->source_variant;
 		break;
 	case SG_CONFIGURATION_PLANE_BSP:
-		source.kind = SG_RUNE_COMPACT_SOURCE_BSP_PLANE;
-		source.value.bsp_plane.model = 0U;
-		source.value.bsp_plane.leaf = leaf;
-		source.value.bsp_plane.plane = plane->source_index;
+		source.kind = SG_RUNE_CX_SOURCE_BSP_PLANE;
+		source.bsp_plane.model = 0U;
+		source.bsp_plane.leaf = leaf;
+		source.bsp_plane.plane = plane->source_index;
 		break;
 	case SG_CONFIGURATION_PLANE_EXPANDED_BRUSH:
 	default:
-		source.kind = SG_RUNE_COMPACT_SOURCE_EXPANDED_BRUSH_SIDE;
-		source.value.brush_side.model = 0U;
-		source.value.brush_side.brush_side = plane->source_index;
-		source.value.brush_side.brush =
+		source.kind = SG_RUNE_CX_SOURCE_EXPANDED_BRUSH_SIDE;
+		source.brush_side.model = 0U;
+		source.brush_side.brush_side = plane->source_index;
+		source.brush_side.brush =
 			plane->source_index < world->brush_side_count ?
 			build->side_to_brush[plane->source_index] : UINT32_MAX;
-		source.value.brush_side.plane =
+		source.brush_side.plane =
 			plane->source_index < world->brush_side_count ?
 			world->brush_sides[plane->source_index].plane : UINT32_MAX;
 		break;
@@ -337,9 +334,9 @@ static int PieceListTake(piece_list_t *list, polygon_t *polygon)
 /* ---- output records ------------------------------------------------------ */
 
 static int AppendVertices(geometry_build_t *build, const polygon_t *polygon,
-	sg_rune_compact_vertex_span_t *span_out)
+	sg_rune_cx_span_t *span_out)
 {
-	sg_rune_compact_geometry_t *geometry = build->geometry;
+	sg_rune_cx_t *geometry = build->geometry;
 	uint32_t index, axis;
 
 	if (!Grow(&geometry->allocator, (void **)&geometry->vertices,
@@ -363,8 +360,8 @@ static int AppendFacet(geometry_build_t *build, uint32_t negative_cell,
 	uint32_t leaf, const polygon_t *polygon, uint32_t *facet_out,
 	uint32_t *negative_incidence_out, uint32_t *positive_incidence_out)
 {
-	sg_rune_compact_geometry_t *geometry = build->geometry;
-	sg_rune_compact_facet_t *facet;
+	sg_rune_cx_t *geometry = build->geometry;
+	sg_rune_cx_facet_t *facet;
 	const uint32_t facet_index = geometry->facet_count;
 	const uint32_t incidence_index = geometry->incidence_count;
 	const uint32_t incidence_count = positive_cell == UINT32_MAX ? 1U : 2U;
@@ -384,22 +381,22 @@ static int AppendFacet(geometry_build_t *build, uint32_t negative_cell,
 		return 0;
 	facet->incidences.first = incidence_index;
 	facet->incidences.count = incidence_count;
-	facet->portal.value = SG_RUNE_COMPACT_INDEX_NONE;
-	facet->kind = SG_RUNE_COMPACT_FACET_POLYGON;
+	facet->portal = SG_RUNE_CX_INDEX_NONE;
+	facet->kind = SG_RUNE_CX_FACET_POLYGON;
 	for (side = 0U; side < incidence_count; side++)
 	{
-		sg_rune_compact_incidence_t *incidence =
+		sg_rune_cx_incidence_t *incidence =
 			&geometry->incidences[incidence_index + side];
 
 		memset(incidence, 0, sizeof(*incidence));
-		incidence->cell.value = side ? positive_cell : negative_cell;
-		incidence->facet.value = facet_index;
+		incidence->cell = side ? positive_cell : negative_cell;
+		incidence->facet = facet_index;
 		incidence->cell_ordinal = UINT32_MAX;   /* assigned when cells gather */
-		incidence->side = side ? SG_RUNE_FACET_POSITIVE_SIDE :
-			SG_RUNE_FACET_NEGATIVE_SIDE;
+		incidence->side = side ? SG_RUNE_CX_POSITIVE_SIDE :
+			SG_RUNE_CX_NEGATIVE_SIDE;
 		incidence->boundary = plane->source_kind ==
 			SG_CONFIGURATION_PLANE_EXPANDED_BRUSH && plane->reversed != 0U ?
-			SG_RUNE_BOUNDARY_OPEN : SG_RUNE_BOUNDARY_CLOSED;
+			SG_RUNE_CX_BOUNDARY_OPEN : SG_RUNE_CX_BOUNDARY_CLOSED;
 	}
 	geometry->facet_count++;
 	geometry->incidence_count += incidence_count;
@@ -409,7 +406,7 @@ static int AppendFacet(geometry_build_t *build, uint32_t negative_cell,
 		*negative_incidence_out = incidence_index;
 	if (positive_incidence_out)
 		*positive_incidence_out = incidence_count == 2U ?
-			incidence_index + 1U : SG_RUNE_COMPACT_INDEX_NONE;
+			incidence_index + 1U : SG_RUNE_CX_INDEX_NONE;
 	return 1;
 }
 
@@ -440,7 +437,7 @@ static int BuildSideToBrush(geometry_build_t *build)
 
 static int EmitCells(geometry_build_t *build)
 {
-	sg_rune_compact_geometry_t *geometry = build->geometry;
+	sg_rune_cx_t *geometry = build->geometry;
 	const sg_configuration_space_t *configuration = build->configuration;
 	const sg_configuration_semantics_t *semantics = build->semantics;
 	uint32_t cell, boundary, axis;
@@ -448,24 +445,16 @@ static int EmitCells(geometry_build_t *build)
 	geometry->cells = Allocate(&geometry->allocator,
 		(size_t)(configuration->cell_count ? configuration->cell_count : 1U) *
 		sizeof(*geometry->cells));
-	geometry->compact_cells_for_configuration_cell = Allocate(
-		&geometry->allocator, (size_t)(configuration->cell_count ?
-		configuration->cell_count : 1U) *
-		sizeof(*geometry->compact_cells_for_configuration_cell));
-	geometry->configuration_cell_compact_cells = Allocate(&geometry->allocator,
-		(size_t)(configuration->cell_count ? configuration->cell_count : 1U) *
-		sizeof(*geometry->configuration_cell_compact_cells));
-	if (!geometry->cells || !geometry->compact_cells_for_configuration_cell ||
-		!geometry->configuration_cell_compact_cells)
+	if (!geometry->cells)
 	{
-		SetError(build, SG_RUNE_COMPACT_GEOMETRY_ERROR_OUT_OF_MEMORY,
-			SG_RUNE_COMPACT_GEOMETRY_RECORD_CELL, 0U);
+		SetError(build, SG_RUNE_CX_ERROR_OUT_OF_MEMORY,
+			SG_RUNE_CX_RECORD_CELL, 0U);
 		return 0;
 	}
 	for (cell = 0U; cell < configuration->cell_count; cell++)
 	{
 		const sg_configuration_cell_t *source = &configuration->cells[cell];
-		sg_rune_compact_cell_t *record = &geometry->cells[cell];
+		sg_rune_cx_cell_t *record = &geometry->cells[cell];
 
 		memset(record, 0, sizeof(*record));
 		record->source.model = 0U;
@@ -478,17 +467,21 @@ static int EmitCells(geometry_build_t *build)
 			record->bounds.mins.value[axis] = Q8(source->bounds.mins.value[axis]);
 			record->bounds.maxs.value[axis] = Q8(source->bounds.maxs.value[axis]);
 		}
-		record->contents = (sg_rune_compact_contents_mask_t)source->contents;
+		record->contents = (sg_rune_cx_contents_t)source->contents;
 		record->valid_stances = source->stance == SG_RUNE_STANCE_STANDING ?
-			(sg_rune_stance_validity_t)SG_RUNE_STANCE_VALID_ALL :
-			(sg_rune_stance_validity_t)SG_RUNE_STANCE_VALID_CROUCHING;
-		if (cell < semantics->region_count &&
-			(semantics->regions[cell].flags &
-				SG_CONFIGURATION_SEMANTIC_REGION_HAZARD))
-			record->semantics |= SG_RUNE_COMPACT_CELL_HAZARD;
-		geometry->compact_cells_for_configuration_cell[cell].first = cell;
-		geometry->compact_cells_for_configuration_cell[cell].count = 1U;
-		geometry->configuration_cell_compact_cells[cell].value = cell;
+			(sg_rune_cx_stances_t)SG_RUNE_CX_STANCE_ALL :
+			(sg_rune_cx_stances_t)SG_RUNE_CX_STANCE_CROUCHING;
+		if (cell < semantics->region_count)
+		{
+			uint32_t flags = semantics->regions[cell].flags;
+
+			if (flags & SG_CONFIGURATION_SEMANTIC_REGION_HAZARD)
+				record->semantics |= SG_RUNE_CX_CELL_HAZARD;
+			if (flags & SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED)
+				record->semantics |= SG_RUNE_CX_CELL_SUPPORTED;
+			if (flags & SG_CONFIGURATION_SEMANTIC_REGION_WATER)
+				record->semantics |= SG_RUNE_CX_CELL_WATER;
+		}
 	}
 	geometry->cell_count = configuration->cell_count;
 	/* Sky and void from the cell's boundaries. */
@@ -501,10 +494,10 @@ static int EmitCells(geometry_build_t *build)
 			continue;
 		if (record->flags & SG_CONFIGURATION_BOUNDARY_VOID)
 			geometry->cells[record->cell].semantics |=
-				SG_RUNE_COMPACT_CELL_VOID_BOUNDARY;
+				SG_RUNE_CX_CELL_VOID_BOUNDARY;
 		if (record->surface_flags & SG_HOST_SURFACE_SKY)
 			geometry->cells[record->cell].semantics |=
-				SG_RUNE_COMPACT_CELL_SKY_BOUNDARY;
+				SG_RUNE_CX_CELL_SKY_BOUNDARY;
 	}
 	return 1;
 }
@@ -517,7 +510,7 @@ static int EmitCells(geometry_build_t *build)
  * it. */
 static int EmitFacets(geometry_build_t *build)
 {
-	sg_rune_compact_geometry_t *geometry = build->geometry;
+	sg_rune_cx_t *geometry = build->geometry;
 	const sg_configuration_space_t *configuration = build->configuration;
 	uint32_t *face_first_portal;
 	uint32_t *portal_next;
@@ -561,8 +554,8 @@ static int EmitFacets(geometry_build_t *build)
 		}
 		if (found == UINT32_MAX)
 		{
-			SetError(build, SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_REFERENCE,
-				SG_RUNE_COMPACT_GEOMETRY_RECORD_PORTAL, portal);
+			SetError(build, SG_RUNE_CX_ERROR_INVALID_REFERENCE,
+				SG_RUNE_CX_RECORD_PORTAL, portal);
 			goto done;
 		}
 		portal_next[portal] = face_first_portal[found];
@@ -648,7 +641,7 @@ static int EmitFacets(geometry_build_t *build)
 				}
 				if (reverse != UINT32_MAX)
 				{
-					const sg_rune_compact_facet_t *shared =
+					const sg_rune_cx_facet_t *shared =
 						&geometry->facets[portal_facet[reverse]];
 
 					facet = portal_facet[reverse];
@@ -656,9 +649,9 @@ static int EmitFacets(geometry_build_t *build)
 					positive = shared->incidences.first + 1U;
 					portal_facet[at] = facet;
 					geometry->portals[at].source = shared->source;
-					geometry->portals[at].facet.value = facet;
-					geometry->portals[at].negative_incidence.value = positive;
-					geometry->portals[at].positive_incidence.value = negative;
+					geometry->portals[at].facet = facet;
+					geometry->portals[at].negative_incidence = positive;
+					geometry->portals[at].positive_incidence = negative;
 				}
 				else
 				{
@@ -672,15 +665,15 @@ static int EmitFacets(geometry_build_t *build)
 						goto out_of_memory;
 					}
 					portal_facet[at] = facet;
-					geometry->facets[facet].portal.value = at;
+					geometry->facets[facet].portal = at;
 					geometry->portals[at].source = geometry->facets[facet].source;
-					geometry->portals[at].facet.value = facet;
-					geometry->portals[at].negative_incidence.value = negative;
-					geometry->portals[at].positive_incidence.value = positive;
+					geometry->portals[at].facet = facet;
+					geometry->portals[at].negative_incidence = negative;
+					geometry->portals[at].positive_incidence = positive;
 				}
 				geometry->portals[at].clearance_q8 =
 					(uint32_t)lrintf(fmaxf(portal_record->clearance, 0.0f) * 8.0f);
-				geometry->portals[at].direction = SG_RUNE_PORTAL_CONTINUITY_BOTH;
+				geometry->portals[at].direction = SG_RUNE_CX_CONTINUITY_BOTH;
 				geometry->portals[at].valid_stances =
 					geometry->cells[cell].valid_stances &
 					geometry->cells[portal_record->to_cell].valid_stances;
@@ -769,8 +762,8 @@ static int EmitFacets(geometry_build_t *build)
 	goto done;
 
 out_of_memory:
-	SetError(build, SG_RUNE_COMPACT_GEOMETRY_ERROR_OUT_OF_MEMORY,
-		SG_RUNE_COMPACT_GEOMETRY_RECORD_FACE, face_index);
+	SetError(build, SG_RUNE_CX_ERROR_OUT_OF_MEMORY,
+		SG_RUNE_CX_RECORD_FACE, face_index);
 done:
 	free(face_first_portal);
 	free(portal_next);
@@ -781,7 +774,7 @@ done:
 /* Each cell's incidences gathered into one span, ordinals assigned. */
 static int GatherCellIncidences(geometry_build_t *build)
 {
-	sg_rune_compact_geometry_t *geometry = build->geometry;
+	sg_rune_cx_t *geometry = build->geometry;
 	uint32_t *counts;
 	uint32_t incidence, cell, cursor;
 
@@ -796,7 +789,7 @@ static int GatherCellIncidences(geometry_build_t *build)
 		return 0;
 	}
 	for (incidence = 0U; incidence < geometry->incidence_count; incidence++)
-		counts[geometry->incidences[incidence].cell.value]++;
+		counts[geometry->incidences[incidence].cell]++;
 	cursor = 0U;
 	for (cell = 0U; cell < geometry->cell_count; cell++)
 	{
@@ -807,12 +800,12 @@ static int GatherCellIncidences(geometry_build_t *build)
 	}
 	for (incidence = 0U; incidence < geometry->incidence_count; incidence++)
 	{
-		const uint32_t owner = geometry->incidences[incidence].cell.value;
+		const uint32_t owner = geometry->incidences[incidence].cell;
 		const uint32_t slot = geometry->cells[owner].incidences.first +
 			counts[owner];
 
 		geometry->incidences[incidence].cell_ordinal = counts[owner]++;
-		geometry->cell_incidences[slot].value = incidence;
+		geometry->cell_incidences[slot] = incidence;
 	}
 	geometry->cell_incidence_count = geometry->incidence_count;
 	free(counts);
@@ -832,9 +825,9 @@ static int AppendSourceSurface(void *context, uint32_t brush,
 {
 	surface_context_t *surface_context = context;
 	geometry_build_t *build = surface_context->build;
-	sg_rune_compact_geometry_t *geometry = build->geometry;
+	sg_rune_cx_t *geometry = build->geometry;
 	const sg_bsp_world_t *world = build->world;
-	sg_rune_compact_source_surface_t *surface;
+	sg_rune_cx_surface_t *surface;
 	const sg_bsp_plane_t *plane;
 	float normal[3];
 	uint32_t index, axis;
@@ -843,38 +836,38 @@ static int AppendSourceSurface(void *context, uint32_t brush,
 		world->brush_sides[brush_side].plane >= world->plane_count)
 		return 0;
 	plane = &world->planes[world->brush_sides[brush_side].plane];
-	if (!Grow(&geometry->allocator, (void **)&geometry->source_surfaces,
-		&build->surface_capacity, geometry->source_surface_count + 1U,
-		sizeof(*geometry->source_surfaces)) ||
-		!Grow(&geometry->allocator, (void **)&geometry->source_surface_vertices,
+	if (!Grow(&geometry->allocator, (void **)&geometry->surfaces,
+		&build->surface_capacity, geometry->surface_count + 1U,
+		sizeof(*geometry->surfaces)) ||
+		!Grow(&geometry->allocator, (void **)&geometry->surface_vertices,
 		&build->surface_vertex_capacity,
-		geometry->source_surface_vertex_count + count,
-		sizeof(*geometry->source_surface_vertices)))
+		geometry->surface_vertex_count + count,
+		sizeof(*geometry->surface_vertices)))
 		return 0;
-	surface = &geometry->source_surfaces[geometry->source_surface_count];
+	surface = &geometry->surfaces[geometry->surface_count];
 	memset(surface, 0, sizeof(*surface));
 	surface->source.model = surface_context->model;
 	surface->source.brush = brush;
 	surface->source.brush_side = brush_side;
 	surface->source.plane = world->brush_sides[brush_side].plane;
 	surface->frame = surface_context->model == 0U ?
-		SG_RUNE_COMPACT_SOURCE_SURFACE_WORLD :
-		SG_RUNE_COMPACT_SOURCE_SURFACE_MODEL_LOCAL;
-	surface->cell.value = SG_RUNE_COMPACT_INDEX_NONE;
+		SG_RUNE_CX_SURFACE_WORLD :
+		SG_RUNE_CX_SURFACE_MODEL_LOCAL;
+	surface->cell = SG_RUNE_CX_INDEX_NONE;
 	surface->parent_surface = UINT32_MAX;
 	surface->split_ordinal = 0U;
 	for (axis = 0U; axis < 3U; axis++)
 		normal[axis] = plane->normal.value[axis];
 	surface->plane = PlaneBits(normal, plane->distance);
-	surface->vertices.first = geometry->source_surface_vertex_count;
+	surface->vertices.first = geometry->surface_vertex_count;
 	surface->vertices.count = count;
 	for (index = 0U; index < count; index++)
 		for (axis = 0U; axis < 3U; axis++)
-			geometry->source_surface_vertices[
-				geometry->source_surface_vertex_count + index].value[axis] =
+			geometry->surface_vertices[
+				geometry->surface_vertex_count + index].value[axis] =
 				Q8(points[index][axis]);
-	geometry->source_surface_vertex_count += count;
-	geometry->source_surface_count++;
+	geometry->surface_vertex_count += count;
+	geometry->surface_count++;
 	return 1;
 }
 
@@ -927,8 +920,8 @@ static int EmitSourceSurfaces(geometry_build_t *build)
 		memset(marks, 0, (size_t)world->brush_count * sizeof(*marks));
 		if (!MarkModelBrushes(world, world->models[model].headnode, marks))
 		{
-			SetError(build, SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_WORLD,
-				SG_RUNE_COMPACT_GEOMETRY_RECORD_WORLD, model);
+			SetError(build, SG_RUNE_CX_ERROR_INVALID_WORLD,
+				SG_RUNE_CX_RECORD_WORLD, model);
 			goto done;
 		}
 		for (brush = 0U; brush < world->brush_count; brush++)
@@ -939,8 +932,8 @@ static int EmitSourceSurfaces(geometry_build_t *build)
 			if (!SG_ConfigurationBrushPolygons(world, brush, AppendSourceSurface,
 				&context))
 			{
-				SetError(build, SG_RUNE_COMPACT_GEOMETRY_ERROR_OUT_OF_MEMORY,
-					SG_RUNE_COMPACT_GEOMETRY_RECORD_SOURCE_SURFACE, brush);
+				SetError(build, SG_RUNE_CX_ERROR_OUT_OF_MEMORY,
+					SG_RUNE_CX_RECORD_SOURCE_SURFACE, brush);
 				goto done;
 			}
 		}
@@ -955,16 +948,15 @@ done:
 /* ---- public API --------------------------------------------------------- */
 
 
-int SG_RuneCompactGeometryFromSpace(const sg_bsp_world_t *world,
+int SG_RuneCxFromSpace(const sg_bsp_world_t *world,
 	const sg_configuration_space_t *configuration,
 	const sg_configuration_semantics_t *semantics,
-	const sg_rune_compact_identity_t *identity,
-	const sg_rune_compact_geometry_allocator_t *allocator,
-	sg_rune_compact_geometry_t **geometry_out,
-	sg_rune_compact_geometry_error_t *error_out)
+	const sg_rune_cx_allocator_t *allocator,
+	sg_rune_cx_t **geometry_out,
+	sg_rune_cx_error_t *error_out)
 {
 	geometry_build_t build;
-	sg_rune_compact_geometry_t *geometry;
+	sg_rune_cx_t *geometry;
 	int ok = 0;
 
 	if (error_out)
@@ -973,40 +965,39 @@ int SG_RuneCompactGeometryFromSpace(const sg_bsp_world_t *world,
 		return 0;
 	*geometry_out = NULL;
 	memset(&build, 0, sizeof(build));
-	if (!world || !configuration || !semantics || !identity)
+	if (!world || !configuration || !semantics)
 	{
 		if (error_out)
-			error_out->code = SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_ARGUMENT;
+			error_out->code = SG_RUNE_CX_ERROR_INVALID_ARGUMENT;
 		return 0;
 	}
 	geometry = Allocate(allocator, sizeof(*geometry));
 	if (!geometry)
 	{
 		if (error_out)
-			error_out->code = SG_RUNE_COMPACT_GEOMETRY_ERROR_OUT_OF_MEMORY;
+			error_out->code = SG_RUNE_CX_ERROR_OUT_OF_MEMORY;
 		return 0;
 	}
 	memset(geometry, 0, sizeof(*geometry));
 	geometry->state = GEOMETRY_STATE;
 	if (allocator)
 		geometry->allocator = *allocator;
-	geometry->identity = *identity;
 	build.geometry = geometry;
 	build.world = world;
 	build.configuration = configuration;
 	build.semantics = semantics;
 	if (!BuildSideToBrush(&build))
 	{
-		SetError(&build, SG_RUNE_COMPACT_GEOMETRY_ERROR_OUT_OF_MEMORY,
-			SG_RUNE_COMPACT_GEOMETRY_RECORD_WORLD, 0U);
+		SetError(&build, SG_RUNE_CX_ERROR_OUT_OF_MEMORY,
+			SG_RUNE_CX_RECORD_WORLD, 0U);
 		goto done;
 	}
 	if (!EmitCells(&build) || !EmitFacets(&build) ||
 		!GatherCellIncidences(&build) || !EmitSourceSurfaces(&build))
 	{
-		if (build.error.code == SG_RUNE_COMPACT_GEOMETRY_ERROR_NONE)
-			SetError(&build, SG_RUNE_COMPACT_GEOMETRY_ERROR_OUT_OF_MEMORY,
-				SG_RUNE_COMPACT_GEOMETRY_RECORD_RESULT, 0U);
+		if (build.error.code == SG_RUNE_CX_ERROR_NONE)
+			SetError(&build, SG_RUNE_CX_ERROR_OUT_OF_MEMORY,
+				SG_RUNE_CX_RECORD_RESULT, 0U);
 		goto done;
 	}
 	ok = 1;
@@ -1017,22 +1008,21 @@ done:
 		*geometry_out = geometry;
 	else
 	{
-		SG_RuneCompactGeometryDestroy(geometry);
+		SG_RuneCxDestroy(geometry);
 		if (error_out)
 			*error_out = build.error;
 	}
 	return ok;
 }
 
-int SG_RuneCompactGeometryRead(const sg_rune_compact_geometry_t *geometry,
-	sg_rune_compact_geometry_view_t *view_out)
+int SG_RuneCxRead(const sg_rune_cx_t *geometry,
+	sg_rune_cx_view_t *view_out)
 {
 	if (!view_out)
 		return 0;
 	memset(view_out, 0, sizeof(*view_out));
 	if (!geometry || geometry->state != GEOMETRY_STATE)
 		return 0;
-	view_out->identity = geometry->identity;
 	view_out->cells = geometry->cells;
 	view_out->cell_count = geometry->cell_count;
 	view_out->facets = geometry->facets;
@@ -1045,23 +1035,17 @@ int SG_RuneCompactGeometryRead(const sg_rune_compact_geometry_t *geometry,
 	view_out->vertex_count = geometry->vertex_count;
 	view_out->portals = geometry->portals;
 	view_out->portal_count = geometry->portal_count;
-	view_out->source_surfaces = geometry->source_surfaces;
-	view_out->source_surface_count = geometry->source_surface_count;
-	view_out->source_surface_vertices = geometry->source_surface_vertices;
-	view_out->source_surface_vertex_count =
-		geometry->source_surface_vertex_count;
-	view_out->compact_cells_for_configuration_cell =
-		geometry->compact_cells_for_configuration_cell;
-	view_out->compact_cells_for_configuration_cell_count = geometry->cell_count;
-	view_out->configuration_cell_compact_cells =
-		geometry->configuration_cell_compact_cells;
-	view_out->configuration_cell_compact_cell_count = geometry->cell_count;
+	view_out->surfaces = geometry->surfaces;
+	view_out->surface_count = geometry->surface_count;
+	view_out->surface_vertices = geometry->surface_vertices;
+	view_out->surface_vertex_count =
+		geometry->surface_vertex_count;
 	return 1;
 }
 
-void SG_RuneCompactGeometryDestroy(sg_rune_compact_geometry_t *geometry)
+void SG_RuneCxDestroy(sg_rune_cx_t *geometry)
 {
-	sg_rune_compact_geometry_allocator_t allocator;
+	sg_rune_cx_allocator_t allocator;
 
 	if (!geometry || geometry->state != GEOMETRY_STATE)
 		return;
@@ -1072,39 +1056,37 @@ void SG_RuneCompactGeometryDestroy(sg_rune_compact_geometry_t *geometry)
 	Release(&allocator, geometry->cell_incidences);
 	Release(&allocator, geometry->vertices);
 	Release(&allocator, geometry->portals);
-	Release(&allocator, geometry->source_surfaces);
-	Release(&allocator, geometry->source_surface_vertices);
-	Release(&allocator, geometry->compact_cells_for_configuration_cell);
-	Release(&allocator, geometry->configuration_cell_compact_cells);
+	Release(&allocator, geometry->surfaces);
+	Release(&allocator, geometry->surface_vertices);
 	geometry->state = 0U;
 	Release(&allocator, geometry);
 }
 
-const char *SG_RuneCompactGeometryErrorString(
-	sg_rune_compact_geometry_error_code_t code)
+const char *SG_RuneCxErrorString(
+	sg_rune_cx_error_code_t code)
 {
 	switch (code)
 	{
-	case SG_RUNE_COMPACT_GEOMETRY_ERROR_NONE: return "none";
-	case SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_ARGUMENT:
+	case SG_RUNE_CX_ERROR_NONE: return "none";
+	case SG_RUNE_CX_ERROR_INVALID_ARGUMENT:
 		return "invalid argument";
-	case SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_CONFIGURATION:
+	case SG_RUNE_CX_ERROR_INVALID_CONFIGURATION:
 		return "invalid configuration";
-	case SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_WORLD: return "invalid world";
-	case SG_RUNE_COMPACT_GEOMETRY_ERROR_IDENTITY_MISMATCH:
+	case SG_RUNE_CX_ERROR_INVALID_WORLD: return "invalid world";
+	case SG_RUNE_CX_ERROR_IDENTITY_MISMATCH:
 		return "identity mismatch";
-	case SG_RUNE_COMPACT_GEOMETRY_ERROR_NONFINITE_GEOMETRY:
+	case SG_RUNE_CX_ERROR_NONFINITE_GEOMETRY:
 		return "non-finite geometry";
-	case SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_GEOMETRY:
+	case SG_RUNE_CX_ERROR_INVALID_GEOMETRY:
 		return "invalid geometry";
-	case SG_RUNE_COMPACT_GEOMETRY_ERROR_INVALID_REFERENCE:
+	case SG_RUNE_CX_ERROR_INVALID_REFERENCE:
 		return "invalid reference";
-	case SG_RUNE_COMPACT_GEOMETRY_ERROR_UNSUPPORTED_TOPOLOGY:
+	case SG_RUNE_CX_ERROR_UNSUPPORTED_TOPOLOGY:
 		return "unsupported topology";
-	case SG_RUNE_COMPACT_GEOMETRY_ERROR_Q8_CONVERSION:
+	case SG_RUNE_CX_ERROR_Q8_CONVERSION:
 		return "Q8 conversion";
-	case SG_RUNE_COMPACT_GEOMETRY_ERROR_OVERFLOW: return "overflow";
-	case SG_RUNE_COMPACT_GEOMETRY_ERROR_OUT_OF_MEMORY:
+	case SG_RUNE_CX_ERROR_OVERFLOW: return "overflow";
+	case SG_RUNE_CX_ERROR_OUT_OF_MEMORY:
 		return "out of memory";
 	default: return "unknown compact geometry error";
 	}
