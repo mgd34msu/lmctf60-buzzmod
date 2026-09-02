@@ -67,7 +67,7 @@ uint32_t SG_RuneLevelFire(uint32_t cell, uint32_t target);
  * where the approaches it covers are, on average.  0 when the rune has no
  * fire relations or nothing covers anything. */
 int SG_RuneLevelDefendPost(uint32_t flag_cell, int slot, float point_out[3],
-	float facing_out[3]);
+	float facing_out[3], uint32_t *cell_out);
 
 /* The entity text the level was spawned from (after any override file),
  * kept for the identity and for generation on this level. */

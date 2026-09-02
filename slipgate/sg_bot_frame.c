@@ -344,6 +344,7 @@ static qboolean DestinationFor(sg_bot_t *bot, int role, vec3_t out)
 	case SG_ROLE_DEFEND:
 		target = TeamCarrier(enemy);
 		bot->post_facing_valid = false;
+		bot->post_cell = SG_RUNE_CX_INDEX_NONE;
 		if (target)
 		{
 			VectorCopy(target->s.origin, out);
@@ -357,7 +358,8 @@ static qboolean DestinationFor(sg_bot_t *bot, int role, vec3_t out)
 			vec3_t post, facing;
 
 			if (flag_cell != SG_RUNE_CX_INDEX_NONE &&
-				SG_RuneLevelDefendPost(flag_cell, DefendRank(bot), post, facing))
+				SG_RuneLevelDefendPost(flag_cell, DefendRank(bot), post, facing,
+					&bot->post_cell))
 			{
 				VectorCopy(post, out);
 				VectorCopy(facing, bot->post_facing);
@@ -508,7 +510,9 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 		fabsf(destination[2] - bot->destination[2]) > 48.0f)
 	{
 		VectorCopy(destination, bot->destination);
-		bot->destination_cell = StandingCellNear(destination);
+		bot->destination_cell = bot->role == SG_ROLE_DEFEND &&
+			bot->post_cell != SG_RUNE_CX_INDEX_NONE ? bot->post_cell :
+			StandingCellNear(destination);
 	}
 	if (bot->destination_cell == SG_RUNE_CX_INDEX_NONE)
 	{

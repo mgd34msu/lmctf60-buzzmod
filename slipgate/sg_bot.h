@@ -56,7 +56,9 @@ typedef struct sg_bot_s
 	float ride_since;           /* level.time the rope attached */
 	float ride_origin[3];       /* where the body was then */
 
-	/* A defender's post: where to look from it when nothing is in sight. */
+	/* A defender's post: its cell (the destination is that cell, not a
+	 * point re-resolved), and where to look from it when nothing is in sight. */
+	uint32_t post_cell;
 	float post_facing[3];
 	qboolean post_facing_valid;
 

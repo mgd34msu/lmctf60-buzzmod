@@ -482,7 +482,7 @@ done:
 }
 
 int SG_RuneLevelDefendPost(uint32_t flag_cell, int slot, float point_out[3],
-	float facing_out[3])
+	float facing_out[3], uint32_t *cell_out)
 {
 	post_set_t *set = NULL;
 	int index;
@@ -512,6 +512,8 @@ int SG_RuneLevelDefendPost(uint32_t flag_cell, int slot, float point_out[3],
 		3U * sizeof(float));
 	if (facing_out)
 		memcpy(facing_out, set->facing[slot], 3U * sizeof(float));
+	if (cell_out)
+		*cell_out = set->post[slot];
 	return 1;
 }
 
@@ -570,7 +572,7 @@ static const float *Exposure(uint32_t enemy_flag_cell)
 		vec3_t point, facing;
 		uint32_t post;
 
-		if (!SG_RuneLevelDefendPost(enemy_flag_cell, slot, point, facing))
+		if (!SG_RuneLevelDefendPost(enemy_flag_cell, slot, point, facing, NULL))
 			break;
 		post = SG_RuneLevelLocate(point, 0, NULL);
 		if (post != SG_RUNE_CX_INDEX_NONE)
