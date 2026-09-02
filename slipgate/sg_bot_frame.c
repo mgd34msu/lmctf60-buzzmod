@@ -169,6 +169,8 @@ static float DistanceTo(const edict_t *e, const vec3_t point);
 #define ESCORT_STANDOFF 96.0f     /* and this far from a carrier that stands */
 #define ESCORT_AHEAD 128.0f       /* the escort's point runs this far ahead of a moving carrier */
 #define CARRIER_DETOUR_HEALTH 40  /* under this a carrier will go for health */
+#define DEFEND_PATROL_RADIUS 640.0f /* a posted defender stocks up within this of the flag */
+#define DEFEND_PATROL_SECONDS 8.0f  /* and gives a pickup this long */
 
 uint32_t SG_BotStandingCellNear(const vec3_t point)
 {
@@ -277,8 +279,16 @@ static qboolean PowerupItem(const edict_t *item)
 	if (!item->inuse || !item->item || item->solid != SOLID_TRIGGER ||
 		(item->svflags & SVF_NOCLIENT) || !(item->item->flags & IT_POWERUP))
 		return false;
-	return item->classname && (!strcmp(item->classname, "item_quad") ||
-		strstr(item->classname, "_rune") != NULL);
+	if (!item->classname || (strcmp(item->classname, "item_quad") != 0 &&
+		strstr(item->classname, "_rune") == NULL))
+		return false;
+	/* Standing on floor: a tech in flight or in the lava is nowhere to go. */
+	{
+		uint32_t cell = SG_BotStandingCellNear(item->s.origin);
+
+		return cell != SG_RUNE_CX_INDEX_NONE &&
+			(sg_rune_level.artifact.complex.cells[cell].semantics & SG_RUNE_CX_CELL_SUPPORTED);
+	}
 }
 
 static qboolean PowerupWanted(const edict_t *e, const edict_t *item)
@@ -616,6 +626,32 @@ static qboolean DestinationFor(sg_bot_t *bot, int role, vec3_t out)
 				bot->post_facing_valid = true;
 				posted = 1;
 			}
+			/* Posted and nothing in sight: stock up on what stands within a
+			 * short walk of the flag, then back to the post.  A well armed
+			 * attacker meets a defender with a blaster otherwise. */
+			if (posted && !bot->engaged_last)
+			{
+				if (bot->patrolling && level.time < bot->patrol_until)
+				{
+					VectorCopy(bot->patrol_point, out);
+					bot->post_cell = SG_RUNE_CX_INDEX_NONE;
+					bot->post_facing_valid = false;
+					return true;
+				}
+				bot->patrolling = 0U;
+				if (bot->step.kind == SG_RUNE_STEP_ARRIVED &&
+					SG_BotItemNear(bot, out, DEFEND_PATROL_RADIUS, bot->patrol_point))
+				{
+					bot->patrolling = 1U;
+					bot->patrol_until = level.time + DEFEND_PATROL_SECONDS;
+					VectorCopy(bot->patrol_point, out);
+					bot->post_cell = SG_RUNE_CX_INDEX_NONE;
+					bot->post_facing_valid = false;
+					return true;
+				}
+			}
+			else
+				bot->patrolling = 0U;
 			if (sg_cv.debug && sg_cv.debug->value && level.framenum % 100 == 0)
 				gi.dprintf("SGPOST %s defends flag at (%.0f %.0f %.0f) cell %u rank %d: %s\n",
 					e->client->pers.netname, out[0], out[1], out[2],
@@ -1736,6 +1772,15 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	else
 		SG_BotCombatFrame(e, &cmd, &engaged);
 	bot->engaged_last = engaged;
+	/* Nothing in sight and not going anywhere: the view stays where it is
+	 * rather than snapping to nothing. */
+	if (!engaged && !moving && !command.aim_owned)
+	{
+		cmd.angles[YAW] = (short)(ANGLE2SHORT(e->client->v_angle[YAW]) -
+			e->client->ps.pmove.delta_angles[YAW]);
+		cmd.angles[PITCH] = (short)(ANGLE2SHORT(e->client->v_angle[PITCH]) -
+			e->client->ps.pmove.delta_angles[PITCH]);
+	}
 	/* Posted and nothing in sight: face where the approaches are. */
 	if (!engaged && !moving && bot->post_facing_valid &&
 		bot->step.kind == SG_RUNE_STEP_ARRIVED)

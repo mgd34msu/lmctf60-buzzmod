@@ -64,6 +64,9 @@ typedef struct sg_bot_s
 	float rescue_anchor[3];
 	float rescue_failed[3];     /* the last bite a rescue rope stalled on */
 	const struct edict_s *detour_logged; /* the last item detour written to the log */
+	float patrol_point[3];      /* a posted defender's pickup, while it stands */
+	float patrol_until;         /* level.time the patrol is given up */
+	uint8_t patrolling;
 	uint8_t logged_kind, logged_move; /* the last decision written to the log */
 	uint32_t logged_capability;
 	float logged_target[3];

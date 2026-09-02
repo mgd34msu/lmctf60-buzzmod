@@ -95,6 +95,37 @@ static qboolean Available(const edict_t *item)
 		!(item->svflags & SVF_NOCLIENT);
 }
 
+int SG_BotItemNear(sg_bot_t *bot, const vec3_t centre, float radius, vec3_t point_out)
+{
+	edict_t *self = bot->ent;
+	edict_t *best = NULL;
+	float best_worth = 0.0f;
+	int i;
+
+	if (!self || !self->client)
+		return 0;
+	for (i = game.maxclients + 1; i < globals.num_edicts; i++)
+	{
+		edict_t *item = &g_edicts[i];
+		float worth;
+
+		if (!Available(item) || SG_DistXY(centre, item->s.origin) > radius ||
+			fabsf(item->s.origin[2] - centre[2]) > 160.0f)
+			continue;
+		worth = Worth(self, item);
+		if (worth > best_worth)
+		{
+			best_worth = worth;
+			best = item;
+		}
+	}
+	if (!best)
+		return 0;
+	VectorCopy(best->s.origin, point_out);
+	point_out[2] += 24.0f;
+	return 1;
+}
+
 int SG_BotItemDetour(sg_bot_t *bot, const sg_rune_field_t *goal_field,
 	vec3_t point_out)
 {

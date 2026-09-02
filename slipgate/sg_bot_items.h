@@ -15,6 +15,10 @@
 
 /* Chooses the item to detour for, if any: writes its position and returns
  * 1.  goal_field is the field toward the bot's goal; bot->cell is set. */
+/* The most worthwhile pickup standing within radius (flat) of a point, for
+ * this body: a posted defender stocks up around its flag.  0 when none. */
+int SG_BotItemNear(sg_bot_t *bot, const vec3_t centre, float radius, vec3_t point_out);
+
 int SG_BotItemDetour(sg_bot_t *bot, const sg_rune_field_t *goal_field,
 	vec3_t point_out);
 
