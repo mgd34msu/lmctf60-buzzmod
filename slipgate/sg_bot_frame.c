@@ -1167,6 +1167,18 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 					gi.dprintf("SGBOT %s rescue rope let go\n", e->client->pers.netname);
 				goto grounded;
 			}
+			else if (sg_cv.debug && sg_cv.debug->value &&
+				level.time - bot->ride_since > RIDE_STALL_SECONDS &&
+				level.time - bot->stall_logged_at > 1.0f)
+			{
+				bot->stall_logged_at = level.time;
+				gi.dprintf("SGROPE %s rescue rope stalled %.1fs at (%.0f %.0f %.0f) cell=%u: drop safe %d another %d spent %u hang %.1f\n",
+					e->client->pers.netname, level.time - bot->ride_since,
+					e->s.origin[0], e->s.origin[1], e->s.origin[2], (unsigned)bot->cell,
+					HangDropSafe(bot, e), bot->rescue_spent < RESCUE_TRIES ? AnotherRescue(bot, e) : 0,
+					(unsigned)bot->rescue_spent,
+					bot->hang_since > 0.0f ? level.time - bot->hang_since : 0.0f);
+			}
 		}
 		bot->airborne = (uint8_t)!supported;
 		bot->step.kind = SG_RUNE_STEP_CROSS;
@@ -1268,6 +1280,15 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 					{
 						vec3_t probe;
 
+						if (sg_cv.debug && sg_cv.debug->value &&
+							level.time - bot->stall_logged_at > 1.0f)
+						{
+							bot->stall_logged_at = level.time;
+							gi.dprintf("SGROPE %s hangs over harm %.1fs at (%.0f %.0f %.0f) cell=%u spent %u\n",
+								e->client->pers.netname, level.time - bot->hang_since,
+								e->s.origin[0], e->s.origin[1], e->s.origin[2], (unsigned)bot->cell,
+								(unsigned)bot->rescue_spent);
+						}
 						if (level.time - bot->hang_since < HANG_PATIENCE ||
 							bot->rescue_spent >= RESCUE_TRIES)
 							goto ride_on;
