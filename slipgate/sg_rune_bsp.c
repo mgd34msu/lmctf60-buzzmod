@@ -74,12 +74,18 @@ static int Lump(const uint8_t *image, size_t size, const lump_t *lumps, int lump
 	sg_rune_bsp_fault_t *fault)
 {
 	const lump_t *l = &lumps[lump];
+	uint32_t length = l->length;
 
-	if (l->offset > size || l->length > size - l->offset ||
-		(record_bytes && l->length % record_bytes))
+	if (l->offset > size)
+		return Fault(fault, "lump", lump, 0U);
+	/* A text lump may claim a few bytes past the file's end (some shipped
+	 * maps do, and the engine never looked): it ends at the file. */
+	if (!record_bytes && length > size - l->offset)
+		length = (uint32_t)(size - l->offset);
+	if (length > size - l->offset || (record_bytes && length % record_bytes))
 		return Fault(fault, "lump", lump, 0U);
 	*bytes_out = image + l->offset;
-	*count_out = record_bytes ? l->length / record_bytes : l->length;
+	*count_out = record_bytes ? length / record_bytes : length;
 	return 1;
 }
 
