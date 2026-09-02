@@ -819,6 +819,40 @@ typedef struct surface_context_s
 	uint32_t model;
 } surface_context_t;
 
+/* A cell rests on a floor when one of its closed facets faces down out of
+ * it: the expanded floor plane under the body.  That is the complex's own
+ * word on support; the probe-based region flag is kept where it agrees. */
+static void MarkSupport(geometry_build_t *build)
+{
+	sg_rune_cx_t *geometry = build->geometry;
+	uint32_t cell;
+
+	for (cell = 0U; cell < geometry->cell_count; cell++)
+	{
+		sg_rune_cx_cell_t *record = &geometry->cells[cell];
+		uint32_t slot;
+
+		for (slot = 0U; slot < record->incidences.count; slot++)
+		{
+			const sg_rune_cx_incidence_t *incidence = &geometry->incidences[
+				geometry->cell_incidences[record->incidences.first + slot]];
+			const sg_rune_cx_facet_t *facet = &geometry->facets[incidence->facet];
+			float nz;
+
+			if (facet->incidences.count != 1U)
+				continue;   /* shared with another cell: not a wall or floor */
+			memcpy(&nz, &facet->plane.normal_bits[2], sizeof(nz));
+			if (incidence->side == SG_RUNE_CX_POSITIVE_SIDE)
+				nz = -nz;
+			if (nz <= -0.7f)
+			{
+				record->semantics |= SG_RUNE_CX_CELL_SUPPORTED;
+				break;
+			}
+		}
+	}
+}
+
 static int AppendSourceSurface(void *context, uint32_t brush,
 	uint32_t brush_side, const float (*points)[3], uint32_t count)
 {
@@ -992,7 +1026,15 @@ int SG_RuneCxFromSpace(const sg_bsp_world_t *world,
 		goto done;
 	}
 	if (!EmitCells(&build) || !EmitFacets(&build) ||
-		!GatherCellIncidences(&build) || !EmitSourceSurfaces(&build))
+		!GatherCellIncidences(&build))
+	{
+		if (build.error.code == SG_RUNE_CX_ERROR_NONE)
+			SetError(&build, SG_RUNE_CX_ERROR_OUT_OF_MEMORY,
+				SG_RUNE_CX_RECORD_RESULT, 0U);
+		goto done;
+	}
+	MarkSupport(&build);
+	if (!EmitSourceSurfaces(&build))
 	{
 		if (build.error.code == SG_RUNE_CX_ERROR_NONE)
 			SetError(&build, SG_RUNE_CX_ERROR_OUT_OF_MEMORY,

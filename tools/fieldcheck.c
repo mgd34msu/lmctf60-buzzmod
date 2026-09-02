@@ -48,6 +48,20 @@ int main(int argc, char **argv)
 				fault.array ? fault.array : "");
 			return 1;
 		}
+		{
+			uint32_t c, supported = 0U, kinds[SG_RUNE_MOVE_KIND_COUNT] = { 0 }, k;
+
+			for (c = 0U; c < artifact.complex.cell_count; c++)
+				if (artifact.complex.cells[c].semantics & SG_RUNE_CX_CELL_SUPPORTED)
+					supported++;
+			for (c = 0U; c < artifact.movement.capability_count; c++)
+				kinds[artifact.movement.capabilities[c].kind]++;
+			printf("supported cells %u\n", supported);
+			for (k = 0U; k < SG_RUNE_MOVE_KIND_COUNT; k++)
+				if (kinds[k])
+					printf("  %-14s %u\n", SG_RuneMoveKindString(
+						(sg_rune_move_kind_t)k), kinds[k]);
+		}
 		printf("rune ok: cells %u portals %u capabilities %u bytes %lu\n",
 			(unsigned)artifact.complex.cell_count,
 			(unsigned)artifact.complex.portal_count,

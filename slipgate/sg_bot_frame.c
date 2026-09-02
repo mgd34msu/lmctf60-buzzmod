@@ -377,6 +377,28 @@ static void ThinkDead(sg_bot_t *bot, edict_t *e)
 	ClientThink(e, &cmd);
 }
 
+/* The cell a body would stand in at or near a point: flags, items, and
+ * players sit at various heights over their floor, so try the standing
+ * origin above the point first, then the point, then higher and lower. */
+static uint32_t StandingCellNear(const vec3_t point)
+{
+	static const float rises[] = { 24.0f, 0.0f, 48.0f, -24.0f, 72.0f, 12.0f };
+	uint32_t index;
+
+	for (index = 0U; index < sizeof(rises) / sizeof(rises[0]); index++)
+	{
+		vec3_t probe;
+		uint32_t cell;
+
+		VectorCopy(point, probe);
+		probe[2] += rises[index];
+		cell = SG_RuneLevelLocate(probe, 0, NULL);
+		if (cell != SG_RUNE_CX_INDEX_NONE)
+			return cell;
+	}
+	return SG_RUNE_CX_INDEX_NONE;
+}
+
 /* The step for this frame: on a floor, the field's step; in the air, the
  * flight the body is on (or a fresh trace of where it is falling), steered
  * toward its landing. */
@@ -402,19 +424,16 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 		fabsf(destination[2] - bot->destination[2]) > 48.0f)
 	{
 		VectorCopy(destination, bot->destination);
-		bot->destination_cell = SG_RuneLevelLocate(destination, 0, NULL);
-		if (bot->destination_cell == SG_RUNE_CX_INDEX_NONE)
-		{
-			/* Items and carriers float above their floor. */
-			vec3_t lowered;
-
-			VectorCopy(destination, lowered);
-			lowered[2] -= 24.0f;
-			bot->destination_cell = SG_RuneLevelLocate(lowered, 0, NULL);
-		}
+		bot->destination_cell = StandingCellNear(destination);
 	}
 	if (bot->destination_cell == SG_RUNE_CX_INDEX_NONE)
+	{
+		if (sg_cv.debug && sg_cv.debug->value && level.framenum % 50 == 0)
+			gi.dprintf("SGBOT %s destination (%.0f %.0f %.0f) has no cell\n",
+				e->client->pers.netname, destination[0], destination[1],
+				destination[2]);
 		return;
+	}
 	bot->airborne = (uint8_t)(!supported && !swimming);
 	if (bot->airborne)
 	{
@@ -455,7 +474,7 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 
 		if (SG_BotItemDetour(bot, field, item_point))
 		{
-			uint32_t item_cell = SG_RuneLevelLocate(item_point, 0, NULL);
+			uint32_t item_cell = StandingCellNear(item_point);
 			const sg_rune_field_t *item_field = item_cell != SG_RUNE_CX_INDEX_NONE ?
 				SG_RuneLevelField(item_cell) : NULL;
 
@@ -619,6 +638,11 @@ void SG_BotThink(sg_bot_t *bot)
 	bot->was_carrying = carrying;
 	if (!SG_RuneLevelCurrent() || !DestinationFor(bot, bot->role, destination))
 	{
+		if (sg_cv.debug && sg_cv.debug->value && level.framenum % 50 == 0)
+			gi.dprintf("SGBOT %s no destination: rune %d role %d own flag %p "
+				"enemy flag %p\n", e->client->pers.netname, SG_RuneLevelCurrent(),
+				bot->role, (void *)ctf_flagsearch(e->client->ctf.teamnum),
+				(void *)ctf_flagsearch(SG_EnemyTeam(e->client->ctf.teamnum)));
 		memset(&bot->step, 0, sizeof(bot->step));
 		bot->step.kind = SG_RUNE_STEP_HOLD;
 		Emit(bot, e);

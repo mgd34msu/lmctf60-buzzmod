@@ -116,10 +116,15 @@ int SG_BotItemDetour(sg_bot_t *bot, const sg_rune_field_t *goal_field,
 		worth = Worth(self, item);
 		if (worth <= 0.0f)
 			continue;
-		/* The item's cell: items sit on floors, their origin a little up. */
+		/* The item's cell: a body standing at the item. */
 		VectorCopy(item->s.origin, lowered);
 		lowered[2] += 24.0f;
 		cell = SG_RuneLevelLocate(lowered, 0, NULL);
+		if (cell == SG_RUNE_CX_INDEX_NONE)
+		{
+			lowered[2] += 24.0f;
+			cell = SG_RuneLevelLocate(lowered, 0, NULL);
+		}
 		if (cell == SG_RUNE_CX_INDEX_NONE)
 		{
 			lowered[2] = item->s.origin[2];
