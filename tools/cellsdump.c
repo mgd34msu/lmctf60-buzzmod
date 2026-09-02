@@ -42,6 +42,7 @@ static void FireProgress(void *context, uint32_t done, uint32_t total)
 
 int main(int argc, char **argv)
 {
+	setvbuf(stdout, NULL, _IOLBF, 0);
 	sg_rune_bsp_t bsp_store, *world = &bsp_store;
 	sg_rune_bsp_fault_t bsp_fault;
 	sg_rune_law_t law4;

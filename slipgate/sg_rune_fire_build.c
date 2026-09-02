@@ -46,6 +46,15 @@ typedef struct floor_s
 	uint8_t representative;
 } floor_t;
 
+typedef struct candidate_s
+{
+	uint32_t floor;
+	float distance;
+} candidate_t;
+
+#define MAX_TARGETS 1500U            /* nearest targets traced per source */
+#define MAX_LOB_TARGETS 256U         /* nearest of those lobbed at when no line */
+
 typedef struct fire_build_s
 {
 	const sg_rune_bsp_t *bsp;
@@ -60,6 +69,8 @@ typedef struct fire_build_s
 	uint32_t *cluster_first;
 	sg_rune_fire_t *scratch;  /* one source's records before sorting */
 	uint32_t scratch_capacity;
+	candidate_t *candidates;  /* one source's targets before the cut */
+	uint32_t candidate_count, candidate_capacity;
 	sg_rune_fire_report_t report;
 } fire_build_t;
 
@@ -248,6 +259,31 @@ static int CompareTarget(const void *a, const void *b)
 	return ta < tb ? -1 : ta > tb ? 1 : 0;
 }
 
+static int CompareDistance(const void *a, const void *b)
+{
+	float da = ((const candidate_t *)a)->distance, db = ((const candidate_t *)b)->distance;
+
+	return da < db ? -1 : da > db ? 1 : 0;
+}
+
+static int PushCandidate(fire_build_t *build, uint32_t floor, float distance)
+{
+	if (build->candidate_count >= build->candidate_capacity)
+	{
+		uint32_t capacity = build->candidate_capacity ? build->candidate_capacity * 2U : 4096U;
+		candidate_t *grown = realloc(build->candidates, (size_t)capacity * sizeof(*grown));
+
+		if (!grown)
+			return 0;
+		build->candidates = grown;
+		build->candidate_capacity = capacity;
+	}
+	build->candidates[build->candidate_count].floor = floor;
+	build->candidates[build->candidate_count].distance = distance;
+	build->candidate_count++;
+	return 1;
+}
+
 static int PushScratch(fire_build_t *build, uint32_t *count, uint32_t target,
 	uint32_t flags)
 {
@@ -278,6 +314,11 @@ static int RelationsFrom(fire_build_t *build, const floor_t *source)
 	memcpy(eye, source->stand, sizeof(eye));
 	eye[2] += EYE_HEIGHT;
 	SG_RuneVisSelect(&build->vis, source->cluster);
+	/* The candidates: every representative in view within range, then the
+	 * nearest so many of them.  An open map where thousands of floor cells
+	 * all see each other would otherwise square the work; the nearest
+	 * targets are the ones a fight is about. */
+	build->candidate_count = 0U;
 	for (c = 0U; c < build->vis.cluster_count; c++)
 	{
 		uint32_t f;
@@ -287,41 +328,53 @@ static int RelationsFrom(fire_build_t *build, const floor_t *source)
 		for (f = build->cluster_first[c]; f != SG_RUNE_CX_INDEX_NONE; f = build->floors[f].next)
 		{
 			const floor_t *target = &build->floors[f];
-			float other_eye[3], body[3], feet[3], reach;
 			float dx = target->stand[0] - source->stand[0];
 			float dy = target->stand[1] - source->stand[1];
 			float dz = target->stand[2] - source->stand[2];
 			float distance = sqrtf(dx * dx + dy * dy + dz * dz);
-			uint32_t flags = 0U;
 
 			if (target == source || distance > FIRE_RANGE)
 				continue;
-			build->report.pairs++;
-			memcpy(other_eye, target->stand, sizeof(other_eye));
-			other_eye[2] += EYE_HEIGHT;
-			memcpy(body, target->stand, sizeof(body));
-			body[2] += BODY_HEIGHT;
-			memcpy(feet, target->stand, sizeof(feet));
-			feet[2] += FEET_HEIGHT;
-			if (Clear(build, eye, other_eye, 0.0f, NULL))
-			{
-				flags |= SG_RUNE_FIRE_LINE | SG_RUNE_FIRE_BLAST;
-				if (Clear(build, eye, body, PROJECTILE_HALF, NULL))
-					flags |= SG_RUNE_FIRE_CORRIDOR;
-			}
-			/* No line: a rocket at the feet, the burst where the shot
-			 * stops, may still reach. */
-			else if (Clear(build, eye, feet, 0.0f, &reach) ||
-				reach >= distance - BLAST_RADIUS)
-				flags |= SG_RUNE_FIRE_BLAST;
-			if (!(flags & SG_RUNE_FIRE_LINE) && distance <= LOB_RANGE &&
-				Lobs(build, source->cell, eye, feet))
-				flags |= SG_RUNE_FIRE_LOB;
-			if (flags == 0U)
-				continue;
-			if (!PushScratch(build, &count, target->cell, flags))
+			if (!PushCandidate(build, f, distance))
 				return 0;
 		}
+	}
+	if (build->candidate_count > MAX_LOB_TARGETS)
+		qsort(build->candidates, build->candidate_count, sizeof(*build->candidates),
+			CompareDistance);
+	if (build->candidate_count > MAX_TARGETS)
+		build->candidate_count = MAX_TARGETS;
+	for (c = 0U; c < build->candidate_count; c++)
+	{
+		const floor_t *target = &build->floors[build->candidates[c].floor];
+		float distance = build->candidates[c].distance;
+		float other_eye[3], body[3], feet[3], reach;
+		uint32_t flags = 0U;
+
+		build->report.pairs++;
+		memcpy(other_eye, target->stand, sizeof(other_eye));
+		other_eye[2] += EYE_HEIGHT;
+		memcpy(body, target->stand, sizeof(body));
+		body[2] += BODY_HEIGHT;
+		memcpy(feet, target->stand, sizeof(feet));
+		feet[2] += FEET_HEIGHT;
+		if (Clear(build, eye, other_eye, 0.0f, NULL))
+		{
+			flags |= SG_RUNE_FIRE_LINE | SG_RUNE_FIRE_BLAST;
+			if (Clear(build, eye, body, PROJECTILE_HALF, NULL))
+				flags |= SG_RUNE_FIRE_CORRIDOR;
+		}
+		/* No line: a rocket at the feet, the burst where the shot stops,
+		 * may still reach. */
+		else if (Clear(build, eye, feet, 0.0f, &reach) || reach >= distance - BLAST_RADIUS)
+			flags |= SG_RUNE_FIRE_BLAST;
+		if (!(flags & SG_RUNE_FIRE_LINE) && distance <= LOB_RANGE && c < MAX_LOB_TARGETS &&
+			Lobs(build, source->cell, eye, feet))
+			flags |= SG_RUNE_FIRE_LOB;
+		if (flags == 0U)
+			continue;
+		if (!PushScratch(build, &count, target->cell, flags))
+			return 0;
 	}
 	if (count)
 	{
@@ -404,5 +457,6 @@ done:
 	free(build.floors);
 	free(build.cluster_first);
 	free(build.scratch);
+	free(build.candidates);
 	return ok;
 }

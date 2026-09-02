@@ -57,6 +57,17 @@ static int Token(cursor_t *c, char *out, size_t bytes)
 	return 1;
 }
 
+/* A bounded copy that always terminates. */
+static void Name(char *out, size_t bytes, const char *value)
+{
+	size_t length = strlen(value);
+
+	if (length >= bytes)
+		length = bytes - 1U;
+	memcpy(out, value, length);
+	out[length] = 0;
+}
+
 static int Vec3(const char *text, float out[3])
 {
 	char *rest = (char *)text;
@@ -203,13 +214,13 @@ int SG_RuneEntitiesParse(const sg_rune_bsp_t *bsp, sg_rune_entities_t *out)
 			if (!Token(&c, key, sizeof(key)) || !Token(&c, value, sizeof(value)))
 				break;
 			if (!strcmp(key, "classname"))
-				strncpy(record.classname, value, sizeof(record.classname) - 1U);
+				Name(record.classname, sizeof(record.classname), value);
 			else if (!strcmp(key, "targetname"))
-				strncpy(record.targetname, value, sizeof(record.targetname) - 1U);
+				Name(record.targetname, sizeof(record.targetname), value);
 			else if (!strcmp(key, "target"))
-				strncpy(record.target, value, sizeof(record.target) - 1U);
+				Name(record.target, sizeof(record.target), value);
 			else if (!strcmp(key, "pathtarget"))
-				strncpy(record.pathtarget, value, sizeof(record.pathtarget) - 1U);
+				Name(record.pathtarget, sizeof(record.pathtarget), value);
 			else if (!strcmp(key, "model") && value[0] == '*')
 				record.bmodel = (int32_t)strtol(value + 1, NULL, 10);
 			else if (!strcmp(key, "origin"))

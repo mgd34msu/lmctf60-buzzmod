@@ -273,6 +273,34 @@ static float Dot(const float a[3], const float b[3])
 	return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
+/* Twice the polygon's area, as the length of the summed cross products. */
+static float PolygonArea2(const polygon_t *polygon)
+{
+	float total[3] = { 0.0f, 0.0f, 0.0f };
+	uint32_t index;
+
+	if (polygon->count < 3U)
+		return 0.0f;
+	for (index = 1U; index + 1U < polygon->count; index++)
+	{
+		const float *a = polygon->points[0];
+		const float *b = polygon->points[index];
+		const float *c = polygon->points[index + 1U];
+		float ab[3], ac[3];
+		uint32_t axis;
+
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			ab[axis] = b[axis] - a[axis];
+			ac[axis] = c[axis] - a[axis];
+		}
+		total[0] += ab[1] * ac[2] - ab[2] * ac[1];
+		total[1] += ab[2] * ac[0] - ab[0] * ac[2];
+		total[2] += ab[0] * ac[1] - ab[1] * ac[0];
+	}
+	return sqrtf(Dot(total, total));
+}
+
 static int PolygonHasArea(const polygon_t *polygon)
 {
 	float total[3] = { 0.0f, 0.0f, 0.0f };
@@ -303,75 +331,9 @@ static int PolygonHasArea(const polygon_t *polygon)
 /* Splits a polygon by an edge plane in its own plane: the part with
  * n.p <= d goes to inside, the rest to outside.  Returns -1 on allocation
  * failure. */
-static int PolygonSplit(const polygon_t *polygon, const float normal[3],
-	float distance, polygon_t *inside, polygon_t *outside)
-{
-	uint32_t index;
 
-	memset(inside, 0, sizeof(*inside));
-	memset(outside, 0, sizeof(*outside));
-	for (index = 0U; index < polygon->count; index++)
-	{
-		const float *a = polygon->points[index];
-		const float *b = polygon->points[(index + 1U) % polygon->count];
-		const float da = Dot(normal, a) - distance;
-		const float db = Dot(normal, b) - distance;
-		const int side_a = da > 0.01f ? 1 : da < -0.01f ? -1 : 0;
-		const int side_b = db > 0.01f ? 1 : db < -0.01f ? -1 : 0;
 
-		if (side_a <= 0 && !PolygonPush(inside, a))
-			return -1;
-		if (side_a >= 0 && !PolygonPush(outside, a))
-			return -1;
-		if ((side_a > 0 && side_b < 0) || (side_a < 0 && side_b > 0))
-		{
-			const float t = da / (da - db);
-			float point[3];
-			uint32_t axis;
 
-			for (axis = 0U; axis < 3U; axis++)
-				point[axis] = a[axis] + t * (b[axis] - a[axis]);
-			if (!PolygonPush(inside, point) || !PolygonPush(outside, point))
-				return -1;
-		}
-	}
-	return 1;
-}
-
-typedef struct piece_list_s
-{
-	polygon_t *items;
-	uint32_t count;
-	uint32_t capacity;
-} piece_list_t;
-
-static void PieceListFree(piece_list_t *list)
-{
-	uint32_t index;
-
-	for (index = 0U; index < list->count; index++)
-		PolygonFree(&list->items[index]);
-	free(list->items);
-	memset(list, 0, sizeof(*list));
-}
-
-static int PieceListTake(piece_list_t *list, polygon_t *polygon)
-{
-	if (list->count == list->capacity)
-	{
-		uint32_t capacity = list->capacity ? list->capacity * 2U : 4U;
-		polygon_t *grown = realloc(list->items,
-			(size_t)capacity * sizeof(*grown));
-
-		if (!grown)
-			return 0;
-		list->items = grown;
-		list->capacity = capacity;
-	}
-	list->items[list->count++] = *polygon;
-	memset(polygon, 0, sizeof(*polygon));
-	return 1;
-}
 
 /* ---- output records ------------------------------------------------------ */
 
@@ -550,6 +512,8 @@ static int EmitCells(geometry_build_t *build)
  * remainder as boundary facets.  A portal facet is shared: it is created when
  * the lower-numbered directed portal is seen, and the reverse portal reuses
  * it. */
+#define WALL_AREA2_MIN 2.0f   /* twice the area a wall must keep beyond its portals */
+
 static int EmitFacets(geometry_build_t *build)
 {
 	sg_rune_cx_t *geometry = build->geometry;
@@ -620,19 +584,15 @@ static int EmitFacets(geometry_build_t *build)
 		{
 			const sg_configuration_face_t *face =
 				&configuration->faces[record->first_face + local];
-			piece_list_t pieces, next_pieces;
 			polygon_t whole;
-			uint32_t at, piece;
+			uint32_t at;
+			float open_area2 = 0.0f;
 
 			face_index = record->first_face + local;
-			memset(&pieces, 0, sizeof(pieces));
-			memset(&next_pieces, 0, sizeof(next_pieces));
 			if (!PolygonFromVertices(&whole,
-				&configuration->vertices[face->first_vertex], face->vertex_count) ||
-				!PieceListTake(&pieces, &whole))
+				&configuration->vertices[face->first_vertex], face->vertex_count))
 			{
 				PolygonFree(&whole);
-				PieceListFree(&pieces);
 				goto out_of_memory;
 			}
 			for (at = face_first_portal[face_index]; at != UINT32_MAX;
@@ -641,7 +601,7 @@ static int EmitFacets(geometry_build_t *build)
 				const sg_configuration_portal_t *portal_record =
 					&configuration->portals[at];
 				polygon_t overlap;
-				uint32_t facet, negative, positive, edge;
+				uint32_t facet, negative, positive;
 				uint32_t reverse = UINT32_MAX;
 
 				if (!PolygonFromVertices(&overlap,
@@ -649,8 +609,6 @@ static int EmitFacets(geometry_build_t *build)
 					portal_record->vertex_count))
 				{
 					PolygonFree(&overlap);
-					PieceListFree(&pieces);
-					PieceListFree(&next_pieces);
 					goto out_of_memory;
 				}
 				if (portal_facet[at] == UINT32_MAX)
@@ -701,8 +659,6 @@ static int EmitFacets(geometry_build_t *build)
 						&negative, &positive))
 					{
 						PolygonFree(&overlap);
-						PieceListFree(&pieces);
-						PieceListFree(&next_pieces);
 						goto out_of_memory;
 					}
 					portal_facet[at] = facet;
@@ -716,85 +672,25 @@ static int EmitFacets(geometry_build_t *build)
 				geometry->portals[at].valid_stances =
 					geometry->cells[cell].valid_stances &
 					geometry->cells[portal_record->to_cell].valid_stances;
-				/* Subtract the overlap from every remainder piece: what is
-				 * outside an edge is kept, what is inside all edges is the
-				 * portal itself. */
-				for (piece = 0U; piece < pieces.count; piece++)
-				{
-					polygon_t current = pieces.items[piece];
-
-					memset(&pieces.items[piece], 0, sizeof(pieces.items[piece]));
-					for (edge = 0U; edge < overlap.count && current.count >= 3U;
-						edge++)
-					{
-						const float *p = overlap.points[edge];
-						const float *q = overlap.points[(edge + 1U) % overlap.count];
-						float along[3], normal[3], length;
-						polygon_t inside, outside;
-						uint32_t axis;
-
-						for (axis = 0U; axis < 3U; axis++)
-							along[axis] = q[axis] - p[axis];
-						/* Outward edge normal of a polygon wound counter-
-						 * clockwise about the face normal: edge x normal. */
-						normal[0] = along[1] * face->plane.normal[2] -
-							along[2] * face->plane.normal[1];
-						normal[1] = along[2] * face->plane.normal[0] -
-							along[0] * face->plane.normal[2];
-						normal[2] = along[0] * face->plane.normal[1] -
-							along[1] * face->plane.normal[0];
-						length = sqrtf(Dot(normal, normal));
-						if (!(length > 0.0f))
-							continue;
-						for (axis = 0U; axis < 3U; axis++)
-							normal[axis] /= length;
-						if (PolygonSplit(&current, normal, Dot(normal, p), &inside,
-							&outside) < 0)
-						{
-							PolygonFree(&current);
-							PolygonFree(&overlap);
-							PieceListFree(&pieces);
-							PieceListFree(&next_pieces);
-							goto out_of_memory;
-						}
-						PolygonFree(&current);
-						if (PolygonHasArea(&outside) &&
-							!PieceListTake(&next_pieces, &outside))
-						{
-							PolygonFree(&outside);
-							PolygonFree(&inside);
-							PolygonFree(&overlap);
-							PieceListFree(&pieces);
-							PieceListFree(&next_pieces);
-							goto out_of_memory;
-						}
-						PolygonFree(&outside);
-						current = inside;
-					}
-					PolygonFree(&current);
-				}
-				pieces.count = 0U;
-				{
-					piece_list_t swap = pieces;
-
-					pieces = next_pieces;
-					next_pieces = swap;
-				}
+				open_area2 += PolygonArea2(&overlap);
 				PolygonFree(&overlap);
 			}
-			for (piece = 0U; piece < pieces.count; piece++)
-				if (pieces.items[piece].count >= 3U &&
-					PolygonHasArea(&pieces.items[piece]) &&
-					!AppendFacet(build, cell, UINT32_MAX, &face->plane,
-						record->bsp_leaf.index, &pieces.items[piece], NULL, NULL,
-						NULL))
-				{
-					PieceListFree(&pieces);
-					PieceListFree(&next_pieces);
-					goto out_of_memory;
-				}
-			PieceListFree(&pieces);
-			PieceListFree(&next_pieces);
+			/* The face itself, as the boundary facet: its plane is the
+			 * constraint; the portal facets on it say where it opens.  A
+			 * flight or a body at the face decides between them by whether
+			 * the point is inside the cell beyond (cells are convex), so no
+			 * remainder is cut: cutting it once per portal overlap squares
+			 * on a face that touches many cells.  A face the portals cover
+			 * entirely is no wall at all. */
+			if (whole.count >= 3U && PolygonHasArea(&whole) &&
+				PolygonArea2(&whole) - open_area2 > WALL_AREA2_MIN &&
+				!AppendFacet(build, cell, UINT32_MAX, &face->plane,
+					record->bsp_leaf.index, &whole, NULL, NULL, NULL))
+			{
+				PolygonFree(&whole);
+				goto out_of_memory;
+			}
+			PolygonFree(&whole);
 		}
 	}
 	PortalFeet(geometry);
