@@ -358,7 +358,7 @@ static int AppendVertices(geometry_build_t *build, const polygon_t *polygon,
 static int AppendFacet(geometry_build_t *build, uint32_t negative_cell,
 	uint32_t positive_cell, const sg_configuration_plane_t *plane,
 	uint32_t leaf, const polygon_t *polygon, uint32_t *facet_out,
-	uint32_t *negative_incidence_out, uint32_t *positive_incidence_out)
+	uint32_t *source_incidence_out, uint32_t *destination_incidence_out)
 {
 	sg_rune_cx_t *geometry = build->geometry;
 	sg_rune_cx_facet_t *facet;
@@ -402,10 +402,10 @@ static int AppendFacet(geometry_build_t *build, uint32_t negative_cell,
 	geometry->incidence_count += incidence_count;
 	if (facet_out)
 		*facet_out = facet_index;
-	if (negative_incidence_out)
-		*negative_incidence_out = incidence_index;
-	if (positive_incidence_out)
-		*positive_incidence_out = incidence_count == 2U ?
+	if (source_incidence_out)
+		*source_incidence_out = incidence_index;
+	if (destination_incidence_out)
+		*destination_incidence_out = incidence_count == 2U ?
 			incidence_index + 1U : SG_RUNE_CX_INDEX_NONE;
 	return 1;
 }
@@ -650,8 +650,8 @@ static int EmitFacets(geometry_build_t *build)
 					portal_facet[at] = facet;
 					geometry->portals[at].source = shared->source;
 					geometry->portals[at].facet = facet;
-					geometry->portals[at].negative_incidence = positive;
-					geometry->portals[at].positive_incidence = negative;
+					geometry->portals[at].source_incidence = positive;
+					geometry->portals[at].destination_incidence = negative;
 				}
 				else
 				{
@@ -668,12 +668,11 @@ static int EmitFacets(geometry_build_t *build)
 					geometry->facets[facet].portal = at;
 					geometry->portals[at].source = geometry->facets[facet].source;
 					geometry->portals[at].facet = facet;
-					geometry->portals[at].negative_incidence = negative;
-					geometry->portals[at].positive_incidence = positive;
+					geometry->portals[at].source_incidence = negative;
+					geometry->portals[at].destination_incidence = positive;
 				}
 				geometry->portals[at].clearance_q8 =
 					(uint32_t)lrintf(fmaxf(portal_record->clearance, 0.0f) * 8.0f);
-				geometry->portals[at].direction = SG_RUNE_CX_CONTINUITY_BOTH;
 				geometry->portals[at].valid_stances =
 					geometry->cells[cell].valid_stances &
 					geometry->cells[portal_record->to_cell].valid_stances;

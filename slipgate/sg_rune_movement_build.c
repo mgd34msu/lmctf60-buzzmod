@@ -44,12 +44,12 @@ int SG_RuneMoveEmitComplex(sg_rune_move_store_t *store,
 		sg_rune_move_crossing_t crossing;
 
 		if (portal->facet >= complex->facet_count ||
-			portal->negative_incidence >= complex->incidence_count ||
-			portal->positive_incidence >= complex->incidence_count)
+			portal->source_incidence >= complex->incidence_count ||
+			portal->destination_incidence >= complex->incidence_count)
 			return 0;
 		facet = &complex->facets[portal->facet];
-		negative = &complex->incidences[portal->negative_incidence];
-		positive = &complex->incidences[portal->positive_incidence];
+		negative = &complex->incidences[portal->source_incidence];
+		positive = &complex->incidences[portal->destination_incidence];
 		if (negative->cell >= complex->cell_count ||
 			positive->cell >= complex->cell_count)
 			return 0;

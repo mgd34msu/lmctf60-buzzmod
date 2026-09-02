@@ -3,6 +3,7 @@
  * print what came out and how long it took. */
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -11,6 +12,7 @@
 #include "slipgate/sg_configuration_space.h"
 #include "slipgate/sg_configuration_semantics.h"
 #include "slipgate/sg_rune_cx_build.h"
+#include "slipgate/sg_rune_artifact.h"
 #include "slipgate/sg_rune_movement.h"
 
 static double Now(void)
@@ -44,9 +46,9 @@ int main(int argc, char **argv)
 	uint32_t standing = 0U, cell, supported = 0U;
 	double t0, t1, t2;
 
-	if (argc != 2)
+	if (argc < 2 || argc > 3)
 	{
-		fprintf(stderr, "usage: cellsdump MAP.bsp\n");
+		fprintf(stderr, "usage: cellsdump MAP.bsp [OUT.rune]\n");
 		return 2;
 	}
 	if (!SG_BspWorldLoadFile(argv[1], &world, &bsp_error))
@@ -177,6 +179,72 @@ int main(int argc, char **argv)
 				if (counts[index])
 					printf("  %-16s %u\n", SG_RuneMoveKindString(
 						(sg_rune_move_kind_t)index), (unsigned)counts[index]);
+			{
+				sg_rune_artifact_t source, loaded;
+				unsigned char *image = NULL;
+				size_t image_size = 0U;
+				sg_rune_artifact_status_t status;
+				const char *rune_path = argc > 2 ? argv[2] : "cellsdump.rune";
+				int os_error = 0;
+				sg_rune_fault_t fault;
+				double t5, t6, t7;
+
+				memset(&source, 0, sizeof(source));
+				source.identity.schema_id = SG_RUNE_ARTIFACT_SCHEMA_ID;
+				memcpy(source.identity.bsp_sha256, world->content_identity.bytes,
+					sizeof(source.identity.bsp_sha256));
+				memcpy(source.law.standing_mins, identity.standing_hull.mins.value,
+					sizeof(source.law.standing_mins));
+				memcpy(source.law.standing_maxs, identity.standing_hull.maxs.value,
+					sizeof(source.law.standing_maxs));
+				memcpy(source.law.crouching_mins, identity.crouching_hull.mins.value,
+					sizeof(source.law.crouching_mins));
+				memcpy(source.law.crouching_maxs, identity.crouching_hull.maxs.value,
+					sizeof(source.law.crouching_maxs));
+				source.law.gravity = identity.physics.gravity;
+				source.law.ground_acceleration = identity.physics.ground_acceleration;
+				source.law.air_acceleration = identity.physics.air_acceleration;
+				source.law.water_acceleration = identity.physics.water_acceleration;
+				source.law.hook_acceleration = identity.physics.hook_acceleration;
+				source.law.water_drag = identity.physics.water_drag;
+				source.law.max_velocity = identity.physics.max_velocity;
+				source.law.frame_ms = identity.physics.frame_ms;
+				source.law.substep_ms = identity.physics.substep_ms;
+				source.complex = view;
+				SG_RuneMoveStoreView(&movement, &source.movement);
+				t5 = Now();
+				status = SG_RuneArtifactEncode(&source, &image, &image_size);
+				t6 = Now();
+				if (status != SG_RUNE_ARTIFACT_OK)
+				{
+					fprintf(stderr, "encode failed: %s\n",
+						SG_RuneArtifactStatusString(status));
+					return 1;
+				}
+				status = SG_RuneArtifactWriteFile(rune_path, image, image_size,
+					&os_error);
+				if (status != SG_RUNE_ARTIFACT_OK)
+				{
+					fprintf(stderr, "write failed: %s (%d)\n",
+						SG_RuneArtifactStatusString(status), os_error);
+					return 1;
+				}
+				t7 = Now();
+				printf("artifact: %zu bytes  [encode %.2fs, write %.2fs] -> %s\n",
+					image_size, t6 - t5, t7 - t6, rune_path);
+				status = SG_RuneArtifactLoadFile(rune_path, &loaded, &os_error,
+					&fault);
+				printf("reload: %s  [%.2fs]  cells %u portals %u capabilities %u\n",
+					SG_RuneArtifactStatusString(status), Now() - t7,
+					(unsigned)loaded.complex.cell_count,
+					(unsigned)loaded.complex.portal_count,
+					(unsigned)loaded.movement.capability_count);
+				if (status != SG_RUNE_ARTIFACT_OK && fault.array)
+					printf("  fault: %s[%u] %s\n", fault.array,
+						(unsigned)fault.record, fault.reason);
+				SG_RuneArtifactRelease(&loaded);
+				free(image);
+			}
 			SG_RuneMoveStoreFree(&movement);
 		}
 		SG_RuneCxDestroy(geometry);

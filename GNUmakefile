@@ -3320,7 +3320,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		host-rocket-jump-law-test \
 		tactic-controller-test \
 		rune-analytic-test \
-		rune-movement-test
+		rune-movement-test \
+		rune-artifact-test
 	./$(HOST_TEST_BIN)
 	./$(ACTION_TEST_BIN)
 	./$(COMPOUND_TEST_BIN)
@@ -4397,3 +4398,10 @@ rune-movement-test: tests/run_sg_rune_movement_test.sh tests/sg_rune_movement_te
 		slipgate/sg_rune_movement.c slipgate/sg_rune_movement.h \
 		slipgate/sg_rune_analytic.c slipgate/sg_rune_analytic.h
 	sh tests/run_sg_rune_movement_test.sh
+
+.PHONY: rune-artifact-test
+rune-artifact-test: tests/run_sg_rune_artifact_test.sh tests/sg_rune_artifact_test.c \
+		slipgate/sg_rune_artifact.c slipgate/sg_rune_artifact.h \
+		slipgate/sg_rune_cx.c slipgate/sg_rune_cx.h \
+		slipgate/sg_rune_movement.c slipgate/sg_rune_analytic.c slipgate/sg_crc32.c
+	sh tests/run_sg_rune_artifact_test.sh

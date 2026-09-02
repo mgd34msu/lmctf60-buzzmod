@@ -190,22 +190,16 @@ typedef struct sg_rune_cx_incidence_s
 	uint32_t boundary;              /* sg_rune_cx_boundary_t */
 } sg_rune_cx_incidence_t;
 
-typedef enum sg_rune_cx_continuity_e
-{
-	SG_RUNE_CX_CONTINUITY_BOTH = 0,
-	SG_RUNE_CX_CONTINUITY_NEGATIVE_TO_POSITIVE,
-	SG_RUNE_CX_CONTINUITY_POSITIVE_TO_NEGATIVE,
-	SG_RUNE_CX_CONTINUITY_COUNT
-} sg_rune_cx_continuity_t;
-
+/* A directed crossing: from the cell of source_incidence to the cell of
+ * destination_incidence through the shared facet.  The reverse crossing is
+ * its own portal. */
 typedef struct sg_rune_cx_portal_s
 {
 	sg_rune_cx_source_t source;
 	uint32_t facet;
-	uint32_t negative_incidence;
-	uint32_t positive_incidence;
+	uint32_t source_incidence;
+	uint32_t destination_incidence;
 	uint32_t clearance_q8;
-	uint32_t direction;             /* sg_rune_cx_continuity_t */
 	sg_rune_cx_stances_t valid_stances;
 	uint8_t reserved[3];
 } sg_rune_cx_portal_t;
@@ -252,8 +246,17 @@ typedef struct sg_rune_cx_view_s
 	uint32_t surface_vertex_count;
 } sg_rune_cx_view_t;
 
+/* Where validation failed: which array, which record, and why. */
+typedef struct sg_rune_fault_s
+{
+	const char *array;
+	uint32_t record;
+	const char *reason;
+} sg_rune_fault_t;
+
 /* Every reference in range, every span inside its array, every portal's two
- * incidences on opposite sides of its facet. */
-int SG_RuneCxViewValid(const sg_rune_cx_view_t *view);
+ * incidences on opposite sides of its facet.  fault_out may be NULL. */
+int SG_RuneCxViewValid(const sg_rune_cx_view_t *view,
+	sg_rune_fault_t *fault_out);
 
 #endif /* SG_RUNE_CX_H */
