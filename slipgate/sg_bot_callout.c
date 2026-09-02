@@ -25,6 +25,7 @@ typedef enum kind_e
 	KIND_HAVE_FLAG,
 	KIND_COVER,
 	KIND_ROLE,
+	KIND_POWERUP,
 	KIND_COUNT
 } kind_t;
 
@@ -269,9 +270,26 @@ void SG_BotCalloutRole(sg_bot_t *bot, int role)
 	case SG_ROLE_RECOVER:
 		Say(e, KIND_ROLE, "going for our flag");
 		return;
+	case SG_ROLE_POWERUP:
+		Say(e, KIND_ROLE, "going for the powerup");
+		return;
 	default:
 		return;
 	}
+}
+
+void SG_BotCalloutPowerup(edict_t *self, edict_t *item)
+{
+	char text[128];
+	const char *name;
+
+	if (!Bot(self) || !item)
+		return;
+	name = item->item && item->item->pickup_name ? item->item->pickup_name :
+		(item->classname ? item->classname : "powerup");
+	Com_sprintf(text, sizeof(text), "%s is up at %s", name,
+		SG_BotCalloutWhere(self->client->ctf.teamnum, item->s.origin));
+	Say(self, KIND_POWERUP, text);
 }
 
 void SG_BotCalloutSeen(edict_t *self, edict_t *enemy)

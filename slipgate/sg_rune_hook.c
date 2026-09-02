@@ -320,7 +320,7 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 			build->report.traces++;
 			build->report.flights++;
 			if (!SG_RuneFlightLandsRobustly(cx, build->law, start, release, velocity,
-				RELEASE_TOLERANCE, &flight) ||
+				RELEASE_TOLERANCE, 1, &flight) ||
 				flight.outcome != SG_RUNE_FLIGHT_LANDED ||
 				flight.landing_cell == cell)
 				continue;

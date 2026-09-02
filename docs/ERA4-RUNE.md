@@ -89,6 +89,52 @@ replacement runs on a real map.
    **Stuck (2026-09-02).** The stuck hop fires only for a plain contact
    crossing: a body easing to a point, lining up a launch, or holding a
    rope is slow on purpose, and a hop there is a hop off the ledge.
+   **Launch commit (2026-09-02).** A launch being lined up is held while
+   the body is within 48 of its run-up point and still behind the portal
+   along the launch line: the cells at a floor's edge are small and a body
+   settling on the point drifts across them, where the field would send it
+   off again. Past the portal the field decides afresh. The run-up approach
+   eases over two body lengths, since a frame at full speed covers one.
+   The rope is fired only under a slow walk's speed, and a rope that never
+   carried the body avoids its ride for a while. A hang is timed from its
+   first frame at the bite, however the body sways there.
+   **Posts (2026-09-02).** A defend post is a cell within three seconds of
+   the flag that stands on floor, is neither water nor hazard, is a body
+   length or more from the flag, and sees the most approach cells by the
+   fire relations; it must also be reachable from the flag, which one
+   forward field from the flag (`SG_RuneFieldBuildFrom`, over departures)
+   answers for every candidate. There are no waypoints anywhere: posts,
+   routes and every target are cells of the carved complex.
+   **Support probes (2026-09-02).** A cell is floor only when the witness
+   column and every corner of its footprint that lies inside the polytope
+   stand on floor at the cell's own lowest height there; a wedge over a
+   slope that is floored on one side only is air.
+   **Sub-frame flights.** A flight over in under 0.15 s is a step onto the
+   floor beside, which the contact crossing already makes; it is no record.
+   **Strategy holds until an event (2026-09-02).** The team pass reassigns
+   roles only when the team's situation changes: where each flag is (home,
+   carried, dropped), who carries, which bots are on the team, what a human
+   ordered. Between events a bot keeps its role; a bot that dies respawns
+   into the same role; the steps under a role change as they like. Before
+   this the pass re-scored every frame with a stickiness weight and a bot
+   flipped between attack, escort and defend within seconds.
+   **Run-up length and the jump press (2026-09-02).** A flight record left
+   its portal at full run speed; a body needs a frame's run to be at that
+   speed, so the run-up sits at least 48 units behind the portal along the
+   launch line, moved back onto whatever floor is there when the cell's
+   middle is nearer. Jump is pressed on the frame that would carry the body
+   over the portal, and only at speed; pressed at the run-up from a standing
+   start it fell short (one such jump over the blue pit drew 91 rescue ropes
+   in four minutes). A launch that ends in a rescue is avoided for a while.
+   **No ricochet rides (2026-09-02).** The flight tracer counts the walls and
+   ceilings a body glances off; a hook release arc must reach its floor with
+   none. bctf01 had a ride whose landing on a ledge came from bouncing off a
+   45-degree bevel at a ceiling's edge (bite at 502 -820 175, ceiling at z
+   192): the model predicted the bounce one way, the body went another, the
+   live check refused the release, and three bots hung at that bite in turn.
+   A ride that ends hanging at the bite without its drop reaching the
+   record's landing is avoided; the avoid list holds 16 for 60 seconds.
+   A rescue rope is one per fall and its hang is three seconds at most.
 3. **Movement capabilities** (era 4, done). One record per crossing per
    admissible kind: cell, portal, destination cell, kind, source and
    destination stances, profile, launch velocity, seconds. Contact

@@ -8,6 +8,7 @@ typedef enum
 {
 	SG_ROLE_ATTACK = 0, SG_ROLE_DEFEND, SG_ROLE_CARRY,
 	SG_ROLE_RECOVER, SG_ROLE_ESCORT,
+	SG_ROLE_POWERUP,            /* the quad or a tech is up and known: go get it */
 	SG_ROLES
 } sg_role_t;
 

@@ -18,6 +18,8 @@ void SG_BotCalloutFrame(void);
 void SG_BotCalloutRole(struct sg_bot_s *bot, int role);
 /* A bot's fight picked a new target it can see. */
 void SG_BotCalloutSeen(edict_t *self, edict_t *enemy);
+/* A bot saw a powerup standing: the team hears where. */
+void SG_BotCalloutPowerup(edict_t *self, edict_t *item);
 /* Where a point is, in the team's words. */
 const char *SG_BotCalloutWhere(int team, const vec3_t point);
 

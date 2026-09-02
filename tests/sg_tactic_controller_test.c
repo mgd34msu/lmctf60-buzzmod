@@ -73,13 +73,19 @@ int main(void)
 	CHECK(SG_TacticControl(&step, &body, &command));
 	CHECK(Near(command.up, -1.0f));
 
-	/* Jump: run while far, press within the jump's reach, never in the air. */
+	/* Jump: run while far, press on the frame that reaches the portal at
+	 * speed, never from a standing start, never in the air. */
 	step = Cross(SG_RUNE_MOVE_JUMP, 500.0f, 0.0f, 0.0f);
 	CHECK(SG_TacticControl(&step, &body, &command));
 	CHECK(command.status == SG_TACTIC_COMMAND_MOVE && Near(command.up, 0.0f));
 	step = Cross(SG_RUNE_MOVE_JUMP, 100.0f, 0.0f, 0.0f);
 	CHECK(SG_TacticControl(&step, &body, &command));
+	CHECK(command.status == SG_TACTIC_COMMAND_MOVE && Near(command.up, 0.0f));
+	step = Cross(SG_RUNE_MOVE_JUMP, 30.0f, 0.0f, 0.0f);
+	body.velocity[0] = 300.0f;
+	CHECK(SG_TacticControl(&step, &body, &command));
 	CHECK(command.status == SG_TACTIC_COMMAND_MOVE && Near(command.up, 1.0f));
+	body.velocity[0] = 0.0f;
 	body.supported = 0U;
 	CHECK(SG_TacticControl(&step, &body, &command));
 	CHECK(command.status == SG_TACTIC_COMMAND_MOVE && Near(command.up, 0.0f));

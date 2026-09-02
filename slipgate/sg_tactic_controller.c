@@ -9,8 +9,8 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#define EASE_DISTANCE 96.0f       /* a walk that must end at a point slows over this */
-#define EASE_FLOOR 0.2f           /* and never below this fraction of full speed */
+#define EASE_DISTANCE 32.0f       /* a walk that must end at a point slows over this */
+#define EASE_FLOOR 0.5f           /* and never below this fraction of full speed */
 
 static int Finite3(const float v[3])
 {
@@ -61,6 +61,8 @@ static float FlightReach(const sg_tactic_body_t *body, float vertical_velocity)
  * along it; otherwise it goes to the run-up point first.  launch_out is
  * the launch's horizontal unit direction when there is one. */
 #define RUN_UP_EASE 64.0f
+#define JUMP_PRESS_SLACK 6.0f     /* jump this much before the frame reaches the portal */
+#define JUMP_PRESS_SPEED 0.8f     /* and only at this fraction of run speed */
 #define RUN_UP_CLOSE 16.0f
 #define RUN_UP_BEHIND 8.0f
 #define RUN_UP_LATERAL 12.0f
@@ -254,8 +256,11 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 		/* Let go where the record's flight was traced from (the eye that
 		 * far from the bite), or once the ride has the body at the
 		 * landing's height, or over the landing and nearly there. */
+		/* Let go where the record's flight was traced from (the eye that
+		 * far from the bite), or over the landing and nearly at its height.
+		 * Height alone is no reason: a ride across a gap starts at the
+		 * landing's height and would be let go of the moment it bit. */
 		if (!have_direction || to_bite <= let_go ||
-			body->origin[2] >= step->target[2] - HOOK_RELEASE_BELOW ||
 			(flat < HOOK_RELEASE_FLAT &&
 			 body->origin[2] >= step->target[2] - 6.0f * HOOK_RELEASE_BELOW))
 		{
@@ -364,15 +369,25 @@ int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 			break;
 		}
 		if (body->supported != 0U && step->launch_present)
-			Toward(&command, launch, 1.0f);
+			Toward(&command, launch, LaunchRun(step, body));
 		else if (have_direction)
 			Toward(&command, direction, 1.0f);
-		if (body->supported != 0U && (distance <=
-			FlightReach(body, body->law ? body->law->jump_velocity : 0.0f) ||
-			!have_direction))
+		/* The record left the portal at full run speed: press jump on the
+		 * frame that would carry the body over the portal, at speed.  A
+		 * jump pressed at the run-up, from a standing start, falls short. */
+		if (body->supported != 0U)
 		{
-			command.up = 1.0f;
-			command.status = SG_TACTIC_COMMAND_MOVE;
+			float speed = sqrtf(body->velocity[0] * body->velocity[0] +
+				body->velocity[1] * body->velocity[1]);
+			float frame = (float)(body->frame_ms ? body->frame_ms : 100U) / 1000.0f;
+
+			if (!have_direction ||
+				(distance <= speed * frame + JUMP_PRESS_SLACK &&
+				 speed >= JUMP_PRESS_SPEED * (body->law ? body->law->max_velocity : 300.0f)))
+			{
+				command.up = 1.0f;
+				command.status = SG_TACTIC_COMMAND_MOVE;
+			}
 		}
 		break;
 	}

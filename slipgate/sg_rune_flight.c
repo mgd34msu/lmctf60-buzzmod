@@ -269,6 +269,7 @@ int SG_RuneFlightTrace(const sg_rune_cx_view_t *cx,
 					speed[0] -= exit_normal[0] * into * OVERCLIP;
 					speed[1] -= exit_normal[1] * into * OVERCLIP;
 					speed[2] -= exit_normal[2] * into * OVERCLIP;
+					flight_out->clips++;
 				}
 			}
 			skip_facet = exit_facet;
@@ -296,7 +297,7 @@ static int LandsWell(const sg_rune_cx_view_t *cx, const sg_rune_flight_t *flight
 
 int SG_RuneFlightLandsRobustly(const sg_rune_cx_view_t *cx,
 	const sg_rune_law_t *law, uint32_t start_cell, const float origin[3],
-	const float velocity[3], float tolerance, sg_rune_flight_t *flight_out)
+	const float velocity[3], float tolerance, int clean, sg_rune_flight_t *flight_out)
 {
 	static const float signs[2] = { -1.0f, 1.0f };
 	sg_rune_flight_t nominal, other;
@@ -306,7 +307,7 @@ int SG_RuneFlightLandsRobustly(const sg_rune_cx_view_t *cx,
 		return 0;
 	if (flight_out)
 		*flight_out = nominal;
-	if (!LandsWell(cx, &nominal))
+	if (!LandsWell(cx, &nominal) || (clean && nominal.clips))
 		return 0;
 	for (index = 0U; index < 2U && tolerance > 0.0f; index++)
 	{
@@ -317,7 +318,7 @@ int SG_RuneFlightLandsRobustly(const sg_rune_cx_view_t *cx,
 		scaled[1] = velocity[1] * (1.0f + signs[index] * tolerance);
 		scaled[2] = velocity[2];
 		if (!SG_RuneFlightTrace(cx, law, start_cell, origin, scaled, &other) ||
-			!LandsWell(cx, &other))
+			!LandsWell(cx, &other) || (clean && other.clips))
 			return 0;
 		/* And a body length's fraction to either side of the line. */
 		if (flat > 1.0f)
@@ -334,7 +335,7 @@ int SG_RuneFlightLandsRobustly(const sg_rune_cx_view_t *cx,
 		shifted[1] = origin[1] + across[1] * signs[index] * LATERAL_TOLERANCE;
 		shifted[2] = origin[2];
 		if (!SG_RuneFlightTrace(cx, law, start_cell, shifted, velocity, &other) ||
-			!LandsWell(cx, &other))
+			!LandsWell(cx, &other) || (clean && other.clips))
 			return 0;
 	}
 	return 1;

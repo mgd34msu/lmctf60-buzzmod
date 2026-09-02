@@ -77,6 +77,49 @@ static void PortalFoot(const sg_rune_cx_view_t *cx,
 	foot[2] = count ? sum[2] / (float)count : 0.0f;
 }
 
+/* The height of a cell's floor under a point: its closed facets facing
+ * down, evaluated at the point, the highest of them.  Two slabs of one
+ * ramp meet at the same height along their shared edge although their
+ * lowest corners differ; the crossing between them is a walk. */
+static int FloorAt(const sg_rune_cx_view_t *cx, uint32_t cell, float x, float y,
+	float *z_out)
+{
+	const sg_rune_cx_cell_t *record = &cx->cells[cell];
+	uint32_t slot;
+	int found = 0;
+	float best = -INFINITY;
+
+	for (slot = 0U; slot < record->incidences.count; slot++)
+	{
+		const sg_rune_cx_incidence_t *incidence = &cx->incidences[
+			cx->cell_incidences[record->incidences.first + slot]];
+		const sg_rune_cx_facet_t *facet = &cx->facets[incidence->facet];
+		float nx = FloatBits(facet->plane.normal_bits[0]);
+		float ny = FloatBits(facet->plane.normal_bits[1]);
+		float nz = FloatBits(facet->plane.normal_bits[2]);
+		float d = FloatBits(facet->plane.distance_bits);
+		float z;
+
+		if (facet->incidences.count != 1U)
+			continue;   /* shared: a portal, not a floor */
+		if (incidence->side == SG_RUNE_CX_POSITIVE_SIDE)
+		{
+			nx = -nx; ny = -ny; nz = -nz; d = -d;
+		}
+		if (nz > -0.7f)
+			continue;   /* not facing down out of the cell */
+		z = (d - nx * x - ny * y) / nz;
+		if (!found || z > best)
+		{
+			best = z;
+			found = 1;
+		}
+	}
+	if (found)
+		*z_out = best;
+	return found;
+}
+
 typedef struct flight_launch_s
 {
 	sg_rune_move_kind_t kind;
@@ -174,7 +217,7 @@ static int EmitFlights(sg_rune_move_store_t *store,
 		/* The arc must land well at the modelled speed and a little slower
 		 * and faster: a body never leaves the edge at exactly that speed. */
 		if (!SG_RuneFlightLandsRobustly(cx, law, source_cell, start, velocity,
-			LAUNCH_TOLERANCE, &flight))
+			LAUNCH_TOLERANCE, 0, &flight))
 			continue;
 		if (flight.landing_cell == source_cell ||
 			flight.landing_cell >= cx->cell_count)
@@ -244,6 +287,15 @@ int SG_RuneMoveEmitComplex(sg_rune_move_store_t *store,
 		crossing.vertical_facet = vertical;
 		crossing.floor_delta = (float)(target->bounds.mins.value[2] -
 			source->bounds.mins.value[2]) / (float)SG_RUNE_CX_Q8_ONE;
+		if (crossing.source_supported && crossing.target_supported)
+		{
+			float foot[3], here, there;
+
+			PortalFoot(complex, portal, foot);
+			if (FloorAt(complex, negative->cell, foot[0], foot[1], &here) &&
+				FloorAt(complex, positive->cell, foot[0], foot[1], &there))
+				crossing.floor_delta = there - here;
+		}
 		if (!SG_RuneMoveEmitCrossing(store, &crossing))
 			return 0;
 		/* Off a floor into the air through a wall: trace the flights. */
