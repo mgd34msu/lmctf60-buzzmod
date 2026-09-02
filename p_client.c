@@ -3,9 +3,8 @@
 #include "m_player.h"
 #include "time.h" // TEAM CODE -- LM_JORM
 #include "g_ctffunc.h" //surt for some nice wrapper functions
-#include "slipgate/sg_cvars.h"
+#include "slipgate/sg_bot_cvars.h"
 #include "slipgate/sg_local.h"
-#include "slipgate/sg_host_law_owner.h"
 #include "ctf_sqlite_unidb.h"	// db_record_t -- ui_boards.h's UI_Records_FormatLine needs it declared first
 #include "ui_boards.h"		// UI_Tick_Dirty -- disconnects change the boards' roster
 
@@ -2965,64 +2964,7 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 		// END CTF CODE -- LM_JORM
 
 		// perform a pmove
-		if (SG_OwnsBot(ent))
-		{
-			sg_host_pmove_request_t request;
-			sg_host_pmove_result_t result;
-			sg_host_pmove_error_t error;
-			sg_host_law_result_t law_result;
-
-			memset(&request, 0, sizeof(request));
-			request.state = pm.s;
-			request.previous_state = client->old_pmove;
-			request.command = pm.cmd;
-			if (client->hookstate == 2)
-			{
-				request.hook_law_id = SG_HOST_PMOVE_HOOK_LAW_ID;
-				request.hook_attached = 1U;
-				request.hook_length = client->hooklength < 0 ? 0U :
-					(uint32_t)client->hooklength;
-			}
-			law_result = SG_HostLawProductionPmove((uint32_t)ent->s.number,
-				&request, &result, &error);
-			if (law_result.status != SG_HOST_LAW_OK)
-			{
-				gi.linkentity(ent);
-				return;
-			}
-			if ((result.grounded &&
-				result.support_instance_id >= (uint64_t)globals.num_edicts) ||
-				result.touch_count > MAXTOUCH)
-			{
-				gi.linkentity(ent);
-				return;
-			}
-			for (i = 0; i < (int)result.touch_count; i++)
-			{
-				if (result.touch_instance_ids[i] >=
-					(uint64_t)globals.num_edicts)
-				{
-					gi.linkentity(ent);
-					return;
-				}
-			}
-			pm.s = result.state;
-			VectorCopy(result.mins, pm.mins);
-			VectorCopy(result.maxs, pm.maxs);
-			VectorCopy(result.view_angles, pm.viewangles);
-			pm.viewheight = result.view_height;
-			pm.watertype = result.water_type;
-			pm.waterlevel = result.water_level;
-			if (result.grounded)
-				pm.groundentity = &g_edicts[result.support_instance_id];
-			pm.numtouch = (int)result.touch_count;
-			for (i = 0; i < pm.numtouch; i++)
-				pm.touchents[i] = &g_edicts[result.touch_instance_ids[i]];
-		}
-		else
-		{
-			gi.Pmove (&pm);
-		}
+		gi.Pmove (&pm);
 
 		// save results of pmove
 		client->ps.pmove = pm.s;

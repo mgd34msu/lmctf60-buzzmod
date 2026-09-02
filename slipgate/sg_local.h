@@ -2,7 +2,7 @@
  * roles, the roster, the frame, and level setup. */
 #pragma once
 
-#include "sg_client_ownership.h"
+qboolean SG_OwnsBot(edict_t *ent);
 
 typedef enum
 {

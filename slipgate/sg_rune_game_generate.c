@@ -6,10 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sg_bsp_world.h"
-#include "sg_host_law_owner.h"
+#include "sg_rune_bsp.h"
+#include "sg_rune_law.h"
 #include "sg_rune_artifact.h"
 #include "sg_rune_generate.h"
+#include "sg_rune_level.h"
 
 static void Progress(void *context, const char *stage, uint32_t done,
 	uint32_t total)
@@ -24,44 +25,6 @@ static void Progress(void *context, const char *stage, uint32_t done,
 			(unsigned int)(((uint64_t)done * 100U) / total));
 }
 
-static void IdentityFromHost(const sg_host_law_construction_view_t *view,
-	sg_rune_identity_t *identity, sg_rune_law_t *law)
-{
-	const sg_host_static_identity_t *host = &view->host_static_identity;
-
-	memset(identity, 0, sizeof(*identity));
-	memcpy(identity->bsp_sha256, host->bsp_identity.bytes,
-		sizeof(identity->bsp_sha256));
-	identity->bsp_bytes = host->bsp_bytes;
-	identity->bsp_checksum = host->engine_checksum;
-	identity->entity_crc32 = host->entity_crc32;
-	identity->physics_abi_id = host->physics_abi_id;
-	identity->collision_law_id = view->laws.collision_law_id;
-	identity->pmove_law_id = view->laws.pmove_law_id;
-	identity->gravity_law_id = view->laws.gravity_law_id;
-	identity->hook_law_id = view->laws.hook_law_id;
-	identity->mechanism_law_id = view->laws.mechanism_law_id;
-	identity->schema_id = SG_RUNE_ARTIFACT_SCHEMA_ID;
-
-	memset(law, 0, sizeof(*law));
-	memcpy(law->standing_mins, host->standing_hull.mins.value,
-		sizeof(law->standing_mins));
-	memcpy(law->standing_maxs, host->standing_hull.maxs.value,
-		sizeof(law->standing_maxs));
-	memcpy(law->crouching_mins, host->crouching_hull.mins.value,
-		sizeof(law->crouching_mins));
-	memcpy(law->crouching_maxs, host->crouching_hull.maxs.value,
-		sizeof(law->crouching_maxs));
-	law->gravity = host->physics.gravity;
-	law->ground_acceleration = host->physics.ground_acceleration;
-	law->air_acceleration = host->physics.air_acceleration;
-	law->water_acceleration = host->physics.water_acceleration;
-	law->hook_acceleration = host->physics.hook_acceleration;
-	law->water_drag = host->physics.water_drag;
-	law->max_velocity = host->physics.max_velocity;
-	law->frame_ms = host->physics.frame_ms;
-	law->substep_ms = host->physics.substep_ms;
-}
 
 int SG_RuneGameGenerate(const char *mapname)
 {
@@ -69,13 +32,8 @@ int SG_RuneGameGenerate(const char *mapname)
 	const char *game_directory;
 	char bsp_path[MAX_OSPATH];
 	char destination[MAX_OSPATH];
-	sg_bsp_world_t *bsp = NULL;
-	sg_bsp_error_t bsp_error;
-	sg_host_collision_authority_t collision_authority;
-	const sg_host_collision_authority_t *authority = NULL;
-	sg_host_law_construction_t *construction = NULL;
-	sg_host_law_construction_view_t view;
-	sg_host_law_result_t host_result;
+	sg_rune_bsp_t bsp;
+	sg_rune_bsp_fault_t bsp_fault;
 	sg_rune_identity_t identity;
 	sg_rune_law_t law;
 	sg_rune_generate_report_t report;
@@ -90,14 +48,6 @@ int SG_RuneGameGenerate(const char *mapname)
 		gi.dprintf("rune: generation refused stage=argument\n");
 		return 0;
 	}
-	host_result = SG_HostLawProductionEnsureLevel(mapname);
-	if (host_result.status != SG_HOST_LAW_OK)
-	{
-		gi.dprintf("rune: generation refused stage=host status=%s field=%s\n",
-			SG_HostLawStatusString(host_result.status),
-			SG_HostLawFieldString(host_result.field));
-		return 0;
-	}
 	game_directory_cvar = gi.cvar("gamedir", "", 0);
 	game_directory = game_directory_cvar && game_directory_cvar->string &&
 		game_directory_cvar->string[0] ? game_directory_cvar->string : ".";
@@ -109,39 +59,31 @@ int SG_RuneGameGenerate(const char *mapname)
 		gi.dprintf("rune: generation refused stage=path\n");
 		return 0;
 	}
-	memset(&bsp_error, 0, sizeof(bsp_error));
-	if (!SG_BspWorldLoadFile(bsp_path, &bsp, &bsp_error))
+	if (!SG_RuneBspLoadFile(bsp_path, &bsp, &bsp_fault))
 	{
-		gi.dprintf("rune: generation refused stage=bsp code=%u lump=%u "
-			"record=%u\n", (unsigned int)bsp_error.code,
-			(unsigned int)bsp_error.lump, (unsigned int)bsp_error.record);
+		gi.dprintf("rune: generation refused stage=bsp %s lump=%d record=%u\n",
+			bsp_fault.what ? bsp_fault.what : "?", bsp_fault.lump,
+			(unsigned int)bsp_fault.record);
 		return 0;
 	}
-	memset(&collision_authority, 0, sizeof(collision_authority));
-	collision_authority.world = bsp;
-	collision_authority.content_identity = bsp->content_identity;
-	host_result = SG_HostLawProductionConstructionIssue(&collision_authority,
-		&construction);
-	if (host_result.status == SG_HOST_LAW_OK && construction)
-		host_result = SG_HostLawConstructionRead(construction, &view);
-	if (host_result.status == SG_HOST_LAW_OK)
-		authority = SG_HostLawConstructionAuthority(construction);
-	if (host_result.status != SG_HOST_LAW_OK || !construction || !authority)
+	if (SG_RuneLevelEntityText() &&
+		!SG_RuneBspReplaceEntities(&bsp, SG_RuneLevelEntityText()))
 	{
-		gi.dprintf("rune: generation refused stage=construction status=%s "
-			"field=%s element=%u\n",
-			SG_HostLawStatusString(host_result.status),
-			SG_HostLawFieldString(host_result.field),
-			(unsigned int)host_result.element);
-		SG_HostLawConstructionDestroy(construction);
-		SG_BspWorldDestroy(bsp);
+		gi.dprintf("rune: generation refused stage=entities\n");
+		SG_RuneBspFree(&bsp);
 		return 0;
 	}
-	IdentityFromHost(&view, &identity, &law);
+	SG_RuneLawEngine(&law, sv_gravity ? sv_gravity->value : 800.0f);
+	memset(&identity, 0, sizeof(identity));
+	identity.bsp_crc32 = bsp.file_crc32;
+	identity.entity_crc32 = bsp.entity_crc32;
+	identity.bsp_bytes = bsp.file_bytes;
+	identity.law_crc32 = SG_RuneLawCrc(&law);
+	identity.schema_id = SG_RUNE_ARTIFACT_SCHEMA_ID;
 	gi.dprintf("rune: generation map=%s gravity=%g frame=%ums substep=%ums\n",
 		mapname, (double)law.gravity, (unsigned int)law.frame_ms,
 		(unsigned int)law.substep_ms);
-	if (!SG_RuneGenerate(bsp, authority, &identity, &law, Progress,
+	if (!SG_RuneGenerate(&bsp, &identity, &law, Progress,
 		(void *)mapname, &image, &image_size, &report))
 		gi.dprintf("rune: generation failed map=%s stage=%s error=%s\n",
 			mapname, report.stage ? report.stage : "?",
@@ -171,7 +113,6 @@ int SG_RuneGameGenerate(const char *mapname)
 		}
 	}
 	free(image);
-	SG_HostLawConstructionDestroy(construction);
-	SG_BspWorldDestroy(bsp);
+	SG_RuneBspFree(&bsp);
 	return generated;
 }

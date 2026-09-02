@@ -9,7 +9,7 @@
 #include <string.h>
 
 #include "sg_rune_level.h"
-#include "sg_util.h"
+#include "sg_bot_util.h"
 
 #define DETOUR_RADIUS 900.0f      /* farther than this is a trip, not a detour */
 #define WORTH_FLOOR 12.0f         /* worth per second of detour below which no */

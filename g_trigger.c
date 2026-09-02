@@ -1,6 +1,5 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
-#include "slipgate/sg_host_mechanism_law.h"
 
 
 void InitTrigger (edict_t *self)
@@ -108,7 +107,7 @@ void SP_trigger_multiple (edict_t *ent)
 		ent->noise_index = gi.soundindex ("misc/trigger1.wav");
 	
 	if (!ent->wait)
-		ent->wait = SG_HOST_MECHANISM_TRIGGER_DEFAULT_WAIT_SECONDS;
+		ent->wait = 0.2f;
 	ent->touch = Touch_Multi;
 	ent->movetype = MOVETYPE_NONE;
 	ent->svflags |= SVF_NOCLIENT;

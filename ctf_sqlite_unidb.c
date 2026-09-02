@@ -11,7 +11,7 @@
 #include "ctf_file_io.h"
 #include "ctf_sqlite_core.h"
 #include "ctf_sqlite_unidb.h"
-#include "slipgate/sg_cvars.h"
+#include "slipgate/sg_bot_cvars.h"
 
 #define DB_CREATEUDATA \
 	"CREATE TABLE IF NOT EXISTS [userdata] ([char_idx] INTEGER, [playername] CHAR(64), " \

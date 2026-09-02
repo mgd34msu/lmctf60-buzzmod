@@ -9,12 +9,12 @@
 #include <math.h>
 #include <string.h>
 
-#include "sg_cvars.h"
+#include "sg_bot_cvars.h"
 #include "sg_rune_level.h"
-#include "sg_hooks.h"
-#include "sg_persona.h"
-#include "sg_util.h"
-#include "sg_weapon_effect_profile.h"
+#include "sg_bot_persona.h"
+#include "sg_bot_util.h"
+#include "sg_bot_weapons.h"
+#include "sg_rune_fire.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -22,61 +22,41 @@
 
 /* ---- the weapons the bot can hold ------------------------------------------ */
 
-typedef struct weapon_slot_s
-{
-	const char *pickup;       /* FindItem name */
-	sg_weapon_profile_id_t profile;
-	int rank;                 /* tie-break only: later is better */
-} weapon_slot_t;
-
-/* Every weapon the profiles describe, by the item name the game uses. */
-static const weapon_slot_t sg_weapons[] = {
-	{ "Blaster", SG_WEAPON_PROFILE_BLASTER, 0 },
-	{ "Shotgun", SG_WEAPON_PROFILE_SHOTGUN, 1 },
-	{ "Super Shotgun", SG_WEAPON_PROFILE_SUPER_SHOTGUN, 2 },
-	{ "Machinegun", SG_WEAPON_PROFILE_MACHINEGUN, 3 },
-	{ "Chaingun", SG_WEAPON_PROFILE_CHAINGUN, 4 },
-	{ "Grenade Launcher", SG_WEAPON_PROFILE_GRENADE_LAUNCHER, 5 },
-	{ "Rocket Launcher", SG_WEAPON_PROFILE_ROCKET_LAUNCHER, 6 },
-	{ "HyperBlaster", SG_WEAPON_PROFILE_HYPERBLASTER, 7 },
-	{ "Railgun", SG_WEAPON_PROFILE_RAILGUN, 8 },
-	{ "BFG10K", SG_WEAPON_PROFILE_BFG, 9 },
-};
-#define WEAPON_COUNT (sizeof(sg_weapons) / sizeof(sg_weapons[0]))
+#define WEAPON_COUNT 10
 
 static gitem_t *sg_weapon_items[WEAPON_COUNT];
 static gitem_t *sg_hook_item;
-static const sg_weapon_profile_t *sg_weapon_profiles[WEAPON_COUNT];
 static qboolean sg_weapons_cached;
 
 static void CacheWeapons(void)
 {
-	size_t index;
+	int index;
 
 	if (sg_weapons_cached)
 		return;
 	sg_weapons_cached = true;
-	for (index = 0U; index < WEAPON_COUNT; index++)
-	{
-		sg_weapon_items[index] = FindItem((char *)sg_weapons[index].pickup);
-		if (!SG_WeaponProfileLookup(sg_weapons[index].profile,
-			&sg_weapon_profiles[index]))
-			sg_weapon_profiles[index] = NULL;
-	}
+	for (index = 0; index < WEAPON_COUNT && index < SG_BotWeaponCount(); index++)
+		sg_weapon_items[index] = FindItem((char *)SG_BotWeapon(index)->item);
 	sg_hook_item = FindItem("Grappling Hook");
+}
+
+static const sg_bot_weapon_t *Weapon(int slot)
+{
+	return slot >= 0 && slot < WEAPON_COUNT ? SG_BotWeapon(slot) : NULL;
 }
 
 static int SlotOfItem(const gitem_t *item)
 {
-	size_t index;
+	int index;
 
-	for (index = 0U; index < WEAPON_COUNT; index++)
+	if (!item)
+		return -1;
+	for (index = 0; index < WEAPON_COUNT; index++)
 		if (sg_weapon_items[index] == item)
-			return (int)index;
+			return index;
 	return -1;
 }
 
-/* Ammo in the pocket for a weapon, and whether one shot is affordable. */
 static int AmmoFor(const edict_t *self, const gitem_t *item)
 {
 	gitem_t *ammo;
@@ -89,7 +69,7 @@ static int AmmoFor(const edict_t *self, const gitem_t *item)
 
 static qboolean Affordable(const edict_t *self, int slot)
 {
-	const gitem_t *item = sg_weapon_items[slot];
+	const gitem_t *item = slot >= 0 ? sg_weapon_items[slot] : NULL;
 
 	if (!item || self->client->pers.inventory[ITEM_INDEX(item)] <= 0)
 		return false;
@@ -169,11 +149,11 @@ static qboolean Visible(const edict_t *self, const edict_t *other)
 
 	Eye(self, eye);
 	VectorCopy(other->s.origin, point);
-	tr = sg_host.trace(eye, NULL, NULL, point, (edict_t *)self, MASK_OPAQUE);
+	tr = gi.trace(eye, NULL, NULL, point, (edict_t *)self, MASK_OPAQUE);
 	if (tr.fraction == 1.0f)
 		return true;
 	point[2] += other->viewheight;
-	tr = sg_host.trace(eye, NULL, NULL, point, (edict_t *)self, MASK_OPAQUE);
+	tr = gi.trace(eye, NULL, NULL, point, (edict_t *)self, MASK_OPAQUE);
 	return tr.fraction == 1.0f;
 }
 
@@ -300,86 +280,83 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin, int channel,
 static float AimErrorDegrees(const edict_t *self)
 {
 	float skill = sg_cv.skill ? sg_cv.skill->value : 3.0f;
-	int grade = SG_PersonaAimGrade((edict_t *)self);
+	const sg_bot_persona_t *persona = SG_BotPersona(self);
+	int grade = persona ? persona->aim : 0;
 
 	if (skill < 0.0f)
 		skill = 0.0f;
 	if (skill > 4.0f)
 		skill = 4.0f;
-	if (grade >= 0)
-		skill = (skill + (4.0f - (float)grade)) * 0.5f;
+	skill += (float)grade * 0.5f;
+	if (skill < 0.0f)
+		skill = 0.0f;
+	if (skill > 4.0f)
+		skill = 4.0f;
 	return 4.0f - skill * 0.85f;    /* 4 degrees at skill 0, 0.6 at 4 */
 }
 
-static float LandChance(const sg_weapon_profile_t *profile, float range,
+/* The chance one trigger lands on a body at this range, under this aim
+ * error: the body's angular size against the error plus the weapon's own
+ * spread plus, for a projectile, how far the target can drift during the
+ * flight.  A burst widens what counts as landing, by the share of the
+ * damage the burst carries. */
+static float LandChance(const sg_bot_weapon_t *weapon, float range,
 	float error_degrees, float target_speed)
 {
-	float target_radius = 24.0f;    /* half the body's height, roughly */
+	float target_radius = 24.0f;
 	float angular = range > 1.0f ? atanf(target_radius / range) * 180.0f /
 		(float)M_PI : 90.0f;
-	float spread = error_degrees;
+	float spread = error_degrees + weapon->spread;
 	float chance;
 
-	if (profile->effects & SG_WEAPON_EFFECT_SPREAD)
-		spread += profile->yaw_spread_degrees > 0.0f ?
-			profile->yaw_spread_degrees : 3.0f;
-	if (profile->effects & SG_WEAPON_EFFECT_PROJECTILE &&
-		profile->projectile_speed > 0.0f)
+	if (weapon->speed > 0.0f)
 	{
-		/* Where the target will be is uncertain by how far it can move in
-		 * the flight, against the lead's own guess. */
-		float flight = range / profile->projectile_speed;
+		float flight = range / weapon->speed;
 		float drift = target_speed * flight * 0.5f;
 
-		spread += range > 1.0f ? atanf(drift / range) * 180.0f / (float)M_PI :
-			0.0f;
+		spread += range > 1.0f ? atanf(drift / range) * 180.0f / (float)M_PI : 0.0f;
 	}
 	chance = spread > 0.0f ? angular / (angular + spread) : 1.0f;
-	if (profile->splash_radius > 0.0f && range > 1.0f)
+	if (weapon->radius > 0.0f && range > 1.0f)
 	{
-		float splash_angular = atanf(profile->splash_radius / range) * 180.0f /
-			(float)M_PI;
-		float splash_chance = splash_angular / (splash_angular + spread);
+		float burst_angular = atanf(weapon->radius / range) * 180.0f / (float)M_PI;
+		float burst_chance = burst_angular / (burst_angular + spread);
 
-		if (splash_chance > chance)
-			chance = chance + (splash_chance - chance) *
-				(profile->splash_damage / (profile->direct_damage + 1.0f));
+		if (burst_chance > chance)
+			chance += (burst_chance - chance) * (weapon->burst / (weapon->hit + 1.0f));
 	}
 	return chance > 1.0f ? 1.0f : chance;
 }
 
-static float ExpectedDamagePerSecond(const sg_weapon_profile_t *profile,
-	float range, float error_degrees, float target_speed)
+static float ExpectedDamagePerSecond(const sg_bot_weapon_t *weapon, float range,
+	float error_degrees, float target_speed)
 {
-	float shots_per_second = profile->cadence_ms > 0U ?
-		1000.0f / (float)profile->cadence_ms : 10.0f;
-	float per_shot = profile->direct_damage;
+	float triggers_per_second = weapon->seconds > 0.0f ? 1.0f / weapon->seconds : 10.0f;
+	float per_trigger = weapon->hit * (float)(weapon->pellets > 1 ? weapon->pellets : 1) *
+		(float)(weapon->shots > 1 ? weapon->shots : 1);
 
-	if (profile->projectile_count_min > 1U)
-		per_shot *= (float)profile->projectile_count_min;
-	if (per_shot <= 0.0f && profile->splash_damage > 0.0f)
-		per_shot = profile->splash_damage;
-	if (profile->effects & SG_WEAPON_EFFECT_HITSCAN &&
-		profile->ray_distance > 0.0f && range > profile->ray_distance)
+	if (per_trigger <= 0.0f && weapon->burst > 0.0f)
+		per_trigger = weapon->burst;
+	if (range > weapon->limit)
 		return 0.0f;
-	return per_shot * shots_per_second *
-		LandChance(profile, range, error_degrees, target_speed);
+	return per_trigger * triggers_per_second *
+		LandChance(weapon, range, error_degrees, target_speed);
 }
 
-/* A splash weapon is unsafe when its blast would reach the bot itself or a
- * teammate at the impact point. */
-static qboolean SplashSafe(const edict_t *self, const sg_weapon_profile_t *profile,
+/* A burst weapon is unsafe when its burst would reach the bot itself with
+ * too little health to spare, or a teammate at the impact point. */
+static qboolean SplashSafe(const edict_t *self, const sg_bot_weapon_t *weapon,
 	const vec3_t impact)
 {
-	float radius = profile->splash_radius + 16.0f;
+	float radius = weapon->radius + 16.0f;
 	vec3_t delta;
 	int i;
 
-	if (profile->splash_radius <= 0.0f)
+	if (weapon->radius <= 0.0f)
 		return true;
 	VectorSubtract(impact, self->s.origin, delta);
-	if (VectorLength(delta) < radius && self->health < profile->splash_damage *
-		profile->self_damage_scale + 20.0f)
+	if (VectorLength(delta) < radius &&
+		self->health < weapon->burst * weapon->self_burst + 20.0f)
 		return false;
 	for (i = 1; i <= game.maxclients; i++)
 	{
@@ -395,38 +372,24 @@ static qboolean SplashSafe(const edict_t *self, const sg_weapon_profile_t *profi
 	return true;
 }
 
-/* The weapon to hold against this target at this range; the one in hand
- * keeps its place unless another is clearly better, so a target drifting
- * across a range boundary does not cost a switch every frame. */
-/* What the rune says about the pair of cells the fight is in: which effect
- * families have a way from here to there.  1 when nothing is recorded. */
-static float FireScale(const sg_weapon_profile_t *profile, uint32_t relation)
+/* What the rune says about the pair of cells the fight is in, against
+ * what this weapon reaches through: a full match when the shot itself
+ * gets there, a part when only the burst or the lob does, nothing when
+ * neither.  With no relation recorded, the live sight decides alone. */
+static float FireScale(const sg_bot_weapon_t *weapon, uint32_t relation)
 {
+	uint32_t open;
+
 	if (relation == 0U)
 		return 1.0f;
-	switch (profile->family)
-	{
-	case SG_WEAPON_FAMILY_HITSCAN:
-	case SG_WEAPON_FAMILY_SPREAD:
-	case SG_WEAPON_FAMILY_BFG:
-	case SG_WEAPON_FAMILY_SPECIAL:
-		return (relation & SG_RUNE_FIRE_LINE) ? 1.0f : 0.0f;
-	case SG_WEAPON_FAMILY_STRAIGHT_PROJECTILE:
-	case SG_WEAPON_FAMILY_HYPERBLASTER:
-	case SG_WEAPON_FAMILY_PLASMA_REFLECT:
-	case SG_WEAPON_FAMILY_PLASMA_SPREAD:
-		return (relation & SG_RUNE_FIRE_CORRIDOR) ? 1.0f : 0.0f;
-	case SG_WEAPON_FAMILY_ROCKET_SPLASH:
-		if (relation & SG_RUNE_FIRE_CORRIDOR)
-			return 1.0f;
-		return (relation & SG_RUNE_FIRE_BLAST) ? 0.6f : 0.0f;
-	case SG_WEAPON_FAMILY_GRENADE_BOUNCE:
-		if (relation & SG_RUNE_FIRE_CORRIDOR)
-			return 1.0f;
-		return (relation & SG_RUNE_FIRE_LOB) ? 0.5f : 0.0f;
-	default:
+	open = weapon->reach & relation;
+	if (open & (SG_RUNE_FIRE_LINE | SG_RUNE_FIRE_CORRIDOR))
 		return 1.0f;
-	}
+	if (open & SG_RUNE_FIRE_BLAST)
+		return 0.6f;
+	if (open & SG_RUNE_FIRE_LOB)
+		return 0.5f;
+	return 0.0f;
 }
 
 static uint32_t FireRelation(const edict_t *self, const vec3_t target_origin)
@@ -440,6 +403,9 @@ static uint32_t FireRelation(const edict_t *self, const vec3_t target_origin)
 	return SG_RuneLevelFire(here, there);
 }
 
+/* The weapon to hold against this target at this range: the highest
+ * expected damage the rune allows, the one in hand keeping its place
+ * unless another is clearly better. */
 static int Choose(edict_t *self, combat_state_t *state, float range,
 	float target_speed, const vec3_t impact)
 {
@@ -448,26 +414,25 @@ static int Choose(edict_t *self, combat_state_t *state, float range,
 	int best = -1;
 	float best_value = 0.0f, held_value = 0.0f;
 	uint32_t relation = range < 1.0e5f ? FireRelation(self, impact) : 0U;
-	size_t index;
+	int index;
 
-	for (index = 0U; index < WEAPON_COUNT; index++)
+	for (index = 0; index < WEAPON_COUNT; index++)
 	{
-		const sg_weapon_profile_t *profile = sg_weapon_profiles[index];
+		const sg_bot_weapon_t *weapon = Weapon(index);
 		float value;
 
-		if (!profile || !Affordable(self, (int)index))
+		if (!weapon || !Affordable(self, index))
 			continue;
-		if (!SplashSafe(self, profile, impact))
+		if (!SplashSafe(self, weapon, impact))
 			continue;
-		value = ExpectedDamagePerSecond(profile, range, error, target_speed) *
-			FireScale(profile, relation);
-		if ((int)index == held)
+		value = ExpectedDamagePerSecond(weapon, range, error, target_speed) *
+			FireScale(weapon, relation);
+		if (index == held)
 			held_value = value;
-		if (value > best_value || (value == best_value && best >= 0 &&
-			sg_weapons[index].rank > sg_weapons[best].rank))
+		if (value > best_value || (value == best_value && index > best))
 		{
 			best_value = value;
-			best = (int)index;
+			best = index;
 		}
 	}
 	if (best < 0)
@@ -500,7 +465,7 @@ static void Hold(edict_t *self, int slot)
 /* Where to point for this weapon: the target's centre, led by its velocity
  * over the projectile's flight, and for a lobbed projectile raised by the
  * arc the map's gravity needs. */
-static void AimPoint(const edict_t *self, const sg_weapon_profile_t *profile,
+static void AimPoint(const edict_t *self, const sg_bot_weapon_t *weapon,
 	const edict_t *target, vec3_t point)
 {
 	vec3_t eye, delta;
@@ -510,10 +475,9 @@ static void AimPoint(const edict_t *self, const sg_weapon_profile_t *profile,
 	VectorCopy(target->s.origin, point);
 	VectorSubtract(point, eye, delta);
 	range = VectorLength(delta);
-	if (profile && (profile->effects & SG_WEAPON_EFFECT_PROJECTILE) &&
-		profile->projectile_speed > 0.0f)
+	if (weapon && weapon->speed > 0.0f)
 	{
-		float flight = range / profile->projectile_speed;
+		float flight = range / weapon->speed;
 
 		vec3_t velocity;
 
@@ -522,14 +486,12 @@ static void AimPoint(const edict_t *self, const sg_weapon_profile_t *profile,
 		VectorMA(point, flight, velocity, point);
 		if (target->groundentity == NULL)
 			point[2] -= 0.5f * sv_gravity->value * flight * flight;
-		if (profile->gravity_scale > 0.0f)
+		if (weapon->falls)
 		{
 			/* A lobbed projectile drops g t^2 / 2 over its flight: aim that
-			 * much higher, plus what its own upward launch gives back. */
-			float g = sv_gravity->value * profile->gravity_scale;
-
-			point[2] += 0.5f * g * flight * flight -
-				profile->launch_vertical_speed * flight;
+			 * much higher, less what its own upward launch gives back. */
+			point[2] += 0.5f * sv_gravity->value * flight * flight -
+				weapon->rise * flight;
 		}
 	}
 }
@@ -601,13 +563,12 @@ static void Slew(combat_state_t *state, float want_yaw, float want_pitch,
 /* The shot as it would leave: from the eye along the view, to where it
  * stops.  Fire when it reaches the target's body, or lands its splash
  * within the radius of the target while safe for us and ours. */
-static qboolean ShotLands(edict_t *self, const sg_weapon_profile_t *profile,
+static qboolean ShotLands(edict_t *self, const sg_bot_weapon_t *weapon,
 	const edict_t *target, float yaw, float pitch, vec3_t impact_out)
 {
 	vec3_t eye, forward, end, angles, delta;
 	trace_t tr;
-	float reach = profile && profile->ray_distance > 0.0f ?
-		profile->ray_distance : 8192.0f;
+	float reach = weapon && weapon->limit > 0.0f ? weapon->limit : 8192.0f;
 
 	Eye(self, eye);
 	angles[PITCH] = pitch;
@@ -615,16 +576,16 @@ static qboolean ShotLands(edict_t *self, const sg_weapon_profile_t *profile,
 	angles[ROLL] = 0.0f;
 	AngleVectors(angles, forward, NULL, NULL);
 	VectorMA(eye, reach, forward, end);
-	tr = sg_host.trace(eye, NULL, NULL, end, self, MASK_SHOT);
+	tr = gi.trace(eye, NULL, NULL, end, self, MASK_SHOT);
 	VectorCopy(tr.endpos, impact_out);
 	if (!target)
 		return tr.fraction < 1.0f;
 	if (tr.ent == target)
 		return true;
-	if (profile && profile->splash_radius > 0.0f)
+	if (weapon && weapon->radius > 0.0f)
 	{
 		VectorSubtract(tr.endpos, target->s.origin, delta);
-		if (VectorLength(delta) < profile->splash_radius * 0.8f)
+		if (VectorLength(delta) < weapon->radius * 0.8f)
 			return true;
 	}
 	/* A near miss still fires when the ray gets as far as the target and
@@ -648,8 +609,8 @@ static qboolean ShotLands(edict_t *self, const sg_weapon_profile_t *profile,
 		 * tremor decides whether it lands. */
 		{
 			float cone = tanf(AimErrorDegrees(self) * (float)M_PI / 180.0f);
-			float spread = profile && profile->horizontal_spread > 0.0f ?
-				profile->horizontal_spread / 8192.0f : 0.0f;
+			float spread = weapon && weapon->spread > 0.0f ?
+				tanf(weapon->spread * (float)M_PI / 180.0f) : 0.0f;
 
 			allowed = 20.0f + distance * (cone > spread ? cone : spread);
 		}
@@ -674,7 +635,7 @@ void SG_BotCombatFrame(edict_t *self, usercmd_t *cmd, qboolean *engaged_out)
 {
 	combat_state_t *state;
 	edict_t *target;
-	const sg_weapon_profile_t *profile = NULL;
+	const sg_bot_weapon_t *weapon = NULL;
 	vec3_t eye, point, impact, delta;
 	float range, want_yaw, want_pitch, yaw, pitch, target_speed;
 	int slot;
@@ -705,7 +666,7 @@ void SG_BotCombatFrame(edict_t *self, usercmd_t *cmd, qboolean *engaged_out)
 		if (engaged_out)
 			*engaged_out = true;
 		if (held >= 0 && self->client->weaponstate == WEAPON_READY &&
-			ShotLands(self, sg_weapon_profiles[held], NULL, yaw, pitch, impact))
+			ShotLands(self, Weapon(held), NULL, yaw, pitch, impact))
 		{
 			VectorSubtract(impact, state->shoot_point, delta);
 			if (VectorLength(delta) < 48.0f)
@@ -762,9 +723,8 @@ void SG_BotCombatFrame(edict_t *self, usercmd_t *cmd, qboolean *engaged_out)
 	target_speed = VectorLength(target->velocity);
 	slot = Choose(self, state, range, target_speed, target->s.origin);
 	Hold(self, slot);
-	if (slot >= 0)
-		profile = sg_weapon_profiles[slot];
-	AimPoint(self, profile, target, point);
+	weapon = Weapon(slot);
+	AimPoint(self, weapon, target, point);
 	AnglesFor(eye, point, &want_yaw, &want_pitch);
 	Slew(state, want_yaw, want_pitch, AimErrorDegrees(self), &yaw, &pitch);
 	cmd->angles[YAW] = (short)(ANGLE2SHORT(yaw) -
@@ -776,17 +736,17 @@ void SG_BotCombatFrame(edict_t *self, usercmd_t *cmd, qboolean *engaged_out)
 	/* Fire only with the chosen weapon in hand and ready, when the shot as
 	 * aimed lands, and never into our own blast. */
 	if (self->client->pers.weapon != (slot >= 0 ? sg_weapon_items[slot] : NULL) ||
-		self->client->weaponstate != WEAPON_READY || !profile)
+		self->client->weaponstate != WEAPON_READY || !weapon)
 	{
 		CombatDebug(self, target, slot, range, "weapon not ready");
 		return;
 	}
-	if (!ShotLands(self, profile, target, yaw, pitch, impact))
+	if (!ShotLands(self, weapon, target, yaw, pitch, impact))
 	{
 		CombatDebug(self, target, slot, range, "shot misses");
 		return;
 	}
-	if (!SplashSafe(self, profile, impact))
+	if (!SplashSafe(self, weapon, impact))
 	{
 		CombatDebug(self, target, slot, range, "splash unsafe");
 		return;

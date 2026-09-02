@@ -188,7 +188,9 @@ int main(void)
 {
 	sg_rune_artifact_t artifact;
 	sg_rune_move_store_t store;
-	sg_rune_move_law_t movement_law = { 800.0f, 100U, 25U };
+	sg_rune_move_law_t movement_law;
+
+	SG_RuneLawEngine(&movement_law, 800.0f);
 	sg_rune_locator_t locator;
 	sg_rune_router_t router;
 	sg_rune_field_t field;
@@ -217,18 +219,9 @@ int main(void)
 
 	memset(&artifact, 0, sizeof(artifact));
 	artifact.identity.schema_id = SG_RUNE_ARTIFACT_SCHEMA_ID;
-	artifact.law.gravity = 800.0f;
-	artifact.law.frame_ms = 100U;
-	artifact.law.substep_ms = 25U;
+	SG_RuneLawEngine(&artifact.law, 800.0f);
 	artifact.law.max_velocity = 2000.0f;
-	artifact.law.standing_mins[0] = artifact.law.standing_mins[1] = -16.0f;
-	artifact.law.standing_mins[2] = -24.0f;
-	artifact.law.standing_maxs[0] = artifact.law.standing_maxs[1] = 16.0f;
-	artifact.law.standing_maxs[2] = 32.0f;
-	artifact.law.crouching_mins[0] = artifact.law.crouching_mins[1] = -16.0f;
-	artifact.law.crouching_mins[2] = -24.0f;
-	artifact.law.crouching_maxs[0] = artifact.law.crouching_maxs[1] = 16.0f;
-	artifact.law.crouching_maxs[2] = 4.0f;
+	artifact.identity.law_crc32 = SG_RuneLawCrc(&artifact.law);
 	artifact.complex.cells = build.cells;
 	artifact.complex.cell_count = build.cell_count;
 	artifact.complex.facets = build.facets;

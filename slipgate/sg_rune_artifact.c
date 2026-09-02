@@ -10,7 +10,7 @@
 #include <unistd.h>
 #endif
 
-#include "sg_crc32.h"
+#include "sg_rune_crc.h"
 
 #define ALIGNMENT 16U
 
@@ -160,7 +160,7 @@ sg_rune_artifact_status_t SG_RuneArtifactEncode(const sg_rune_artifact_t *source
 	memcpy(image + sizeof(header), sections, sizeof(sections));
 	free(facets);
 	facets = NULL;
-	if (!SG_CRC32Buffer(image + sizeof(header), total - sizeof(header), &crc))
+	if (((crc = SG_RuneCrc32(image + sizeof(header), total - sizeof(header))), 0))
 	{
 		free(image);
 		return SG_RUNE_ARTIFACT_INVALID_ARGUMENT;
@@ -222,8 +222,8 @@ sg_rune_artifact_status_t SG_RuneArtifactDecode(const unsigned char *image,
 		return SG_RUNE_ARTIFACT_BAD_VERSION;
 	if (header.image_bytes != image_size)
 		return SG_RUNE_ARTIFACT_TRUNCATED;
-	if (!SG_CRC32Buffer(image + sizeof(header), image_size - sizeof(header),
-		&crc) || crc != header.payload_crc32)
+	crc = SG_RuneCrc32(image + sizeof(header), image_size - sizeof(header));
+	if (crc != header.payload_crc32)
 		return SG_RUNE_ARTIFACT_BAD_CHECKSUM;
 	memcpy(sections, image + sizeof(header), sizeof(sections));
 	for (index = 0U; index < SG_RUNE_SECTION_COUNT; index++)
@@ -306,24 +306,7 @@ static int Finite(float value)
 
 static int LawValid(const sg_rune_law_t *law)
 {
-	uint32_t axis;
-
-	for (axis = 0U; axis < 3U; axis++)
-		if (!Finite(law->standing_mins[axis]) ||
-			!Finite(law->standing_maxs[axis]) ||
-			!Finite(law->crouching_mins[axis]) ||
-			!Finite(law->crouching_maxs[axis]) ||
-			!(law->standing_mins[axis] < law->standing_maxs[axis]) ||
-			!(law->crouching_mins[axis] < law->crouching_maxs[axis]))
-			return 0;
-	return Finite(law->gravity) && law->gravity > 0.0f &&
-		Finite(law->ground_acceleration) && Finite(law->air_acceleration) &&
-		Finite(law->water_acceleration) && Finite(law->hook_acceleration) &&
-		Finite(law->water_drag) && Finite(law->max_velocity) &&
-		law->frame_ms > 0U && law->substep_ms > 0U &&
-		law->substep_ms <= law->frame_ms &&
-		law->reserved[0] == 0U && law->reserved[1] == 0U &&
-		law->reserved[2] == 0U;
+	return SG_RuneLawValid(law);
 }
 
 static int Fault(sg_rune_fault_t *fault_out, const char *array,
@@ -490,12 +473,14 @@ int SG_RuneArtifactValid(const sg_rune_artifact_t *artifact,
 int SG_RuneIdentityMatches(const sg_rune_identity_t *a,
 	const sg_rune_identity_t *b)
 {
-	return a && b && memcmp(a, b, sizeof(*a)) == 0;
+	return a && b && a->bsp_crc32 == b->bsp_crc32 &&
+		a->entity_crc32 == b->entity_crc32 && a->bsp_bytes == b->bsp_bytes &&
+		a->law_crc32 == b->law_crc32 && a->schema_id == b->schema_id;
 }
 
 int SG_RuneLawMatches(const sg_rune_law_t *a, const sg_rune_law_t *b)
 {
-	return a && b && memcmp(a, b, sizeof(*a)) == 0;
+	return SG_RuneLawSame(a, b);
 }
 
 /* ---- files ---------------------------------------------------------------- */

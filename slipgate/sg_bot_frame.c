@@ -17,20 +17,15 @@
 
 #include "sg_bot_orders.h"
 #include "sg_bot_callout.h"
+#include "sg_bot_host.h"
 #include "sg_bot_combat.h"
 #include "sg_bot_items.h"
-#include "sg_cvars.h"
-#include "sg_client_ownership.h"
-#include "sg_host_engine_pmove.h"
-#include "sg_host_law_owner.h"
-#include "sg_hooks.h"
-#include "sg_net.h"
+#include "sg_bot_cvars.h"
 #include "sg_rune_flight.h"
 #include "sg_rune_level.h"
 #include "sg_rune_mechanisms.h"
-#include "sg_rune_source_authority_owner.h"
 #include "sg_tactic_controller.h"
-#include "sg_util.h"
+#include "sg_bot_util.h"
 
 void Cmd_Hook_f(edict_t *ent);
 void ClientThink(edict_t *ent, usercmd_t *ucmd);
@@ -61,7 +56,6 @@ void SG_LevelChange(void)
 	int i;
 
 	SG_RuneLevelClear();
-	SG_RuneSourceAuthorityReset();
 	SG_OrdersReset();
 	SG_BotCombatReset();
 	sg_level_setup_attempted = false;
@@ -390,15 +384,15 @@ static short Move(float value)
 	return (short)lrintf(value);
 }
 
-static sg_host_hook_phase_t HookPhase(const sg_bot_t *bot, const edict_t *e)
+static sg_tactic_hook_phase_t HookPhase(const sg_bot_t *bot, const edict_t *e)
 {
 	if (e->client->hookstate == 1 && e->client->hook)
-		return SG_HOST_HOOK_IN_FLIGHT;
+		return SG_TACTIC_HOOK_IN_FLIGHT;
 	if (e->client->hookstate == 2 && e->client->hook)
-		return SG_HOST_HOOK_ATTACHED;
+		return SG_TACTIC_HOOK_ATTACHED;
 	if (bot->hook_phase == 3 && e->client->hookstate == 0)
-		return SG_HOST_HOOK_COAST;
-	return SG_HOST_HOOK_IDLE;
+		return SG_TACTIC_HOOK_COAST;
+	return SG_TACTIC_HOOK_IDLE;
 }
 
 static void ThinkDead(sg_bot_t *bot, edict_t *e)
@@ -947,8 +941,9 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	body.launcher_ready = SG_BotLauncherReady(e) ? 1U : 0U;
 	body.hook_ready = SG_BotHookReady(e) ? 1U : 0U;
 	body.gravity = sv_gravity->value;
-	body.frame_ms = SG_HOST_ENGINE_FRAME_MS;
-	body.substep_ms = SG_HOST_ENGINE_PMOVE_SUBSTEP_MS;
+	body.frame_ms = sg_rune_level.artifact.law.frame_ms;
+	body.substep_ms = sg_rune_level.artifact.law.substep_ms;
+	body.law = &sg_rune_level.artifact.law;
 	if (!SG_TacticControl(&bot->step, &body, &command))
 	{
 		memset(&command, 0, sizeof(command));
@@ -1104,7 +1099,6 @@ void SG_RunFrame(void)
 	int i;
 
 	SG_CvarsInit();
-	(void)SG_HostLawProductionEnsureLevel(level.mapname);
 	if (!sg_level_setup_attempted)
 		(void)SG_LevelSetup();
 	Botfill_Frame();
@@ -1121,7 +1115,7 @@ void SG_RunFrame(void)
 		if (!ent || !ent->inuse || !ent->client || !(ent->flags & FL_BOT))
 		{
 			if (ent && ent->client && !ent->inuse && (ent->flags & FL_BOT))
-				SG_FreeClientEdict(ent);
+				SG_BotHostFreeClient(ent);
 			SG_DisownBot(ent);
 			continue;
 		}

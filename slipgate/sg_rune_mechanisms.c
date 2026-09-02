@@ -4,8 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sg_bsp_entity_semantics.h"
-#include "sg_bsp_world.h"
+#include "sg_rune_entities.h"
+#include "sg_rune_bsp.h"
 #include "sg_rune_artifact.h"
 #include "sg_rune_cx_build.h"
 #include "sg_rune_flight.h"
@@ -91,20 +91,20 @@ static int AppendCell(sg_rune_mech_store_t *store, uint32_t cell)
 
 typedef struct mover_s
 {
-	const sg_bsp_entity_semantic_t *entity;
+	const sg_rune_entity_t *entity;
 	uint32_t index;           /* into semantics->entities */
 	float mins[3], maxs[3];   /* bounds at spawn, world space */
 	float size[3];
 	float center[3];
 } mover_t;
 
-static float Lip(const sg_bsp_entity_semantic_t *entity)
+static float Lip(const sg_rune_entity_t *entity)
 {
-	return (entity->flags & SG_BSP_ENTITY_LIP_DEFINED) ? entity->lip :
+	return entity->lip_set ? entity->lip :
 		DEFAULT_LIP;
 }
 
-static void MoverFrom(const sg_bsp_entity_semantic_t *entity, uint32_t index,
+static void MoverFrom(const sg_rune_entity_t *entity, uint32_t index,
 	mover_t *mover)
 {
 	uint32_t axis;
@@ -114,8 +114,8 @@ static void MoverFrom(const sg_bsp_entity_semantic_t *entity, uint32_t index,
 	mover->index = index;
 	for (axis = 0U; axis < 3U; axis++)
 	{
-		mover->mins[axis] = entity->bounds.mins.value[axis];
-		mover->maxs[axis] = entity->bounds.maxs.value[axis];
+		mover->mins[axis] = entity->mins[axis];
+		mover->maxs[axis] = entity->maxs[axis];
 		mover->size[axis] = mover->maxs[axis] - mover->mins[axis];
 		mover->center[axis] = (mover->mins[axis] + mover->maxs[axis]) * 0.5f;
 	}
@@ -124,7 +124,7 @@ static void MoverFrom(const sg_bsp_entity_semantic_t *entity, uint32_t index,
 /* A lift spawns at its bottom: how far below its spawn bounds that is. */
 static float PlatformDrop(const mover_t *plat)
 {
-	const sg_bsp_entity_semantic_t *entity = plat->entity;
+	const sg_rune_entity_t *entity = plat->entity;
 
 	if (entity->height > 0.0f)
 		return entity->height;
@@ -134,88 +134,47 @@ static float PlatformDrop(const mover_t *plat)
 /* A door's open offset from its closed position. */
 static void DoorTravel(const mover_t *door, float travel[3])
 {
-	const sg_bsp_entity_semantic_t *entity = door->entity;
-	float distance = fabsf(entity->move_direction.value[0]) * door->size[0] +
-		fabsf(entity->move_direction.value[1]) * door->size[1] +
-		fabsf(entity->move_direction.value[2]) * door->size[2] - Lip(entity);
+	const sg_rune_entity_t *entity = door->entity;
+	float distance = fabsf(entity->move_direction[0]) * door->size[0] +
+		fabsf(entity->move_direction[1]) * door->size[1] +
+		fabsf(entity->move_direction[2]) * door->size[2] - Lip(entity);
 	uint32_t axis;
 
 	for (axis = 0U; axis < 3U; axis++)
-		travel[axis] = entity->move_direction.value[axis] * distance;
+		travel[axis] = entity->move_direction[axis] * distance;
 }
 
-static int IsKind(const sg_bsp_entity_semantic_t *entity,
-	sg_rune_mech_kind_t kind)
+static int IsDoor(const sg_rune_entity_t *e)
 {
-	(void)kind;
-	return (entity->flags & SG_BSP_ENTITY_HAS_MECHANISM) != 0U;
+	return (e->kind == SG_RUNE_ENTITY_DOOR || e->kind == SG_RUNE_ENTITY_SECRET_DOOR) &&
+		e->bmodel >= 0 && e->has_bounds;
 }
 
-static int IsDoor(const sg_bsp_entity_semantic_t *e)
+static int IsPlatform(const sg_rune_entity_t *e)
 {
-	return IsKind(e, SG_RUNE_MECH_DOOR) && e->mechanism_kind == SG_RUNE_MECHANISM_DOOR &&
-		(e->flags & SG_BSP_ENTITY_HAS_BRUSH_MODEL) &&
-		(e->flags & SG_BSP_ENTITY_HAS_BOUNDS);
+	return e->kind == SG_RUNE_ENTITY_PLATFORM && e->bmodel >= 0 && e->has_bounds;
 }
 
-static int IsPlatform(const sg_bsp_entity_semantic_t *e)
+/* Buttons and touch triggers: what a body works by pressing or entering. */
+static int IsButton(const sg_rune_entity_t *e)
 {
-	return IsKind(e, SG_RUNE_MECH_PLATFORM) && e->mechanism_kind == SG_RUNE_MECHANISM_LIFT &&
-		(e->flags & SG_BSP_ENTITY_HAS_BRUSH_MODEL) &&
-		(e->flags & SG_BSP_ENTITY_HAS_BOUNDS);
+	return (e->kind == SG_RUNE_ENTITY_BUTTON || e->kind == SG_RUNE_ENTITY_TRIGGER) &&
+		e->has_bounds;
 }
 
-static int IsButton(const sg_bsp_entity_semantic_t *e)
+static int IsTeleporter(const sg_rune_entity_t *e)
 {
-	return IsKind(e, SG_RUNE_MECH_BUTTON) &&
-		(e->mechanism_kind == SG_RUNE_MECHANISM_BUTTON ||
-		 e->mechanism_kind == SG_RUNE_MECHANISM_TRIGGER) &&
-		(e->flags & SG_BSP_ENTITY_HAS_BOUNDS);
+	return e->kind == SG_RUNE_ENTITY_TELEPORT_TRIGGER;
 }
 
-static int IsTeleporter(const sg_bsp_entity_semantic_t *e)
+static int IsPush(const sg_rune_entity_t *e)
 {
-	return IsKind(e, SG_RUNE_MECH_TELEPORTER) &&
-		e->mechanism_kind == SG_RUNE_MECHANISM_TELEPORT &&
-		e->mechanism_role == SG_MECH_NODE_TELEPORTER;
+	return e->kind == SG_RUNE_ENTITY_PUSH && e->has_bounds;
 }
 
-static int IsPush(const sg_bsp_entity_semantic_t *e)
+static int IsTrain(const sg_rune_entity_t *e)
 {
-	return IsKind(e, SG_RUNE_MECH_PUSH) && e->mechanism_kind == SG_RUNE_MECHANISM_PUSH &&
-		(e->flags & SG_BSP_ENTITY_HAS_BOUNDS);
-}
-
-static int IsTrain(const sg_bsp_entity_semantic_t *e)
-{
-	return IsKind(e, SG_RUNE_MECH_TRAIN) && e->mechanism_kind == SG_RUNE_MECHANISM_TRAIN &&
-		(e->flags & SG_BSP_ENTITY_HAS_BRUSH_MODEL) &&
-		(e->flags & SG_BSP_ENTITY_HAS_BOUNDS);
-}
-
-/* The first entity with an edge of kind into target, or NONE. */
-static uint32_t EdgeInto(const sg_bsp_entity_semantics_t *semantics,
-	uint32_t target, sg_mech_edge_kind_t kind, uint32_t after)
-{
-	uint32_t index;
-
-	for (index = after; index < semantics->edge_count; index++)
-		if (semantics->edges[index].destination == target &&
-			semantics->edges[index].kind == kind)
-			return index;
-	return SG_RUNE_CX_INDEX_NONE;
-}
-
-static uint32_t EdgeFrom(const sg_bsp_entity_semantics_t *semantics,
-	uint32_t source, sg_mech_edge_kind_t kind)
-{
-	uint32_t index;
-
-	for (index = 0U; index < semantics->edge_count; index++)
-		if (semantics->edges[index].source == source &&
-			semantics->edges[index].kind == kind)
-			return semantics->edges[index].destination;
-	return SG_RUNE_CX_INDEX_NONE;
+	return e->kind == SG_RUNE_ENTITY_TRAIN && e->bmodel >= 0 && e->has_bounds;
 }
 
 /* ---- cells ------------------------------------------------------------------- */
@@ -288,19 +247,19 @@ static void TrainAtCorner(const mover_t *train, const float corner[3],
 	}
 }
 
-static int Semantics(const sg_bsp_world_t *world,
-	sg_bsp_entity_semantics_t **semantics_out)
+static int Semantics(const sg_rune_bsp_t *world, sg_rune_entities_t *store,
+	sg_rune_entities_t **semantics_out)
 {
-	sg_bsp_entity_semantics_error_t error;
-
-	memset(&error, 0, sizeof(error));
-	return SG_BspEntitySemanticsBuild(world, 1U, semantics_out, &error);
+	if (!SG_RuneEntitiesParse(world, store))
+		return 0;
+	*semantics_out = store;
+	return 1;
 }
 
-int SG_RuneMechMarkCells(const sg_bsp_world_t *world,
+int SG_RuneMechMarkCells(const sg_rune_bsp_t *world,
 	sg_rune_cx_t *cx)
 {
-	sg_bsp_entity_semantics_t *semantics = NULL;
+	sg_rune_entities_t store, *semantics = NULL;
 	sg_rune_cx_view_t view;
 	sg_rune_cx_cell_t *cells;
 	uint32_t index;
@@ -310,11 +269,11 @@ int SG_RuneMechMarkCells(const sg_bsp_world_t *world,
 	cells = SG_RuneCxCellsMutable(cx);
 	if (!cells)
 		return 0;
-	if (!Semantics(world, &semantics))
+	if (!Semantics(world, &store, &semantics))
 		return 1;   /* a map without readable entities has no mechanisms */
-	for (index = 0U; index < semantics->entity_count; index++)
+	for (index = 0U; index < semantics->count; index++)
 	{
-		const sg_bsp_entity_semantic_t *entity = &semantics->entities[index];
+		const sg_rune_entity_t *entity = &semantics->records[index];
 		mover_t mover;
 
 		if (IsPlatform(entity))
@@ -334,27 +293,27 @@ int SG_RuneMechMarkCells(const sg_bsp_world_t *world,
 			uint32_t corner, first, guard = 0U;
 
 			MoverFrom(entity, index, &mover);
-			first = EdgeFrom(semantics, index, SG_MECH_EDGE_PATH_TARGET);
+			first = SG_RuneEntitiesFind(semantics, semantics->records[index].pathtarget, 0U);
 			if (first == SG_RUNE_CX_INDEX_NONE)
-				first = EdgeFrom(semantics, index, SG_MECH_EDGE_TARGET);
+				first = SG_RuneEntitiesTargetOf(semantics, index);
 			corner = first;
 			while (corner != SG_RUNE_CX_INDEX_NONE &&
-				corner < semantics->entity_count && guard++ < 256U)
+				corner < semantics->count && guard++ < 256U)
 			{
-				const sg_bsp_entity_semantic_t *stop = &semantics->entities[corner];
+				const sg_rune_entity_t *stop = &semantics->records[corner];
 				float mins[3], maxs[3];
 				uint32_t next;
 
-				TrainAtCorner(&mover, stop->origin.value, mins, maxs);
+				TrainAtCorner(&mover, stop->origin, mins, maxs);
 				MarkFloorAt(cells, view.cell_count, mins, maxs, maxs[2]);
-				next = EdgeFrom(semantics, corner, SG_MECH_EDGE_TARGET);
+				next = SG_RuneEntitiesTargetOf(semantics, corner);
 				if (next == SG_RUNE_CX_INDEX_NONE || next == corner || next == first)
 					break;   /* the path ends, or loops back to its start */
 				corner = next;
 			}
 		}
 	}
-	SG_BspEntitySemanticsDestroy(semantics);
+	SG_RuneEntitiesFree(&store);
 	return 1;
 }
 
@@ -362,8 +321,8 @@ int SG_RuneMechMarkCells(const sg_bsp_world_t *world,
 
 typedef struct emit_s
 {
-	const sg_bsp_world_t *world;
-	const sg_bsp_entity_semantics_t *semantics;
+	const sg_rune_bsp_t *world;
+	const sg_rune_entities_t *semantics;
 	const sg_rune_cx_t *complex;
 	sg_rune_cx_view_t view;
 	const sg_rune_law_t *law;
@@ -380,18 +339,17 @@ static void RecordFrom(const mover_t *mover, sg_rune_mech_kind_t kind,
 	memset(record, 0, sizeof(*record));
 	record->kind = (uint8_t)kind;
 	record->activation = SG_RUNE_MECH_ACTIVATE_TOUCH;
-	record->bmodel = (mover->entity->flags & SG_BSP_ENTITY_HAS_BRUSH_MODEL) ?
-		(int32_t)mover->entity->bsp_model : -1;
+	record->bmodel = mover->entity->bmodel;
 	record->entity = mover->index;
 	record->activator = SG_RUNE_CX_INDEX_NONE;
-	if (mover->entity->flags & SG_BSP_ENTITY_HAS_BRUSH_MODEL)
+	if (mover->entity->bmodel >= 0)
 		memcpy(record->origin, mover->center, sizeof(record->origin));
 	else
-		memcpy(record->origin, mover->entity->origin.value, sizeof(record->origin));
+		memcpy(record->origin, mover->entity->origin, sizeof(record->origin));
 	memcpy(record->mins, mover->mins, sizeof(record->mins));
 	memcpy(record->maxs, mover->maxs, sizeof(record->maxs));
 	record->speed = mover->entity->speed;
-	record->wait = mover->entity->dwell_ms / 1000.0f;
+	record->wait = mover->entity->wait;
 	record->first_cell = 0U;
 	record->cell_count = 0U;
 }
@@ -479,18 +437,18 @@ static int EmitTeleporter(emit_t *emit, const mover_t *pad)
 	uint32_t index, destination_entity, from, to;
 	float point[3];
 
-	destination_entity = EdgeFrom(emit->semantics, pad->index, SG_MECH_EDGE_TARGET);
+	destination_entity = SG_RuneEntitiesTargetOf(emit->semantics, pad->index);
 	if (destination_entity == SG_RUNE_CX_INDEX_NONE ||
-		destination_entity >= emit->semantics->entity_count)
+		destination_entity >= emit->semantics->count)
 		return 1;
 	RecordFrom(pad, SG_RUNE_MECH_TELEPORTER, &record);
 	memcpy(record.travel,
-		emit->semantics->entities[destination_entity].origin.value,
+		emit->semantics->records[destination_entity].origin,
 		sizeof(record.travel));
 	index = AppendRecord(emit->store, &record);
 	if (index == SG_RUNE_CX_INDEX_NONE)
 		return 0;
-	memcpy(point, pad->entity->origin.value, sizeof(point));
+	memcpy(point, pad->entity->origin, sizeof(point));
 	from = FloorNear(emit, point, 48.0f);
 	memcpy(point, record.travel, sizeof(point));
 	to = FloorNear(emit, point, 64.0f);
@@ -513,7 +471,7 @@ static int EmitPush(emit_t *emit, const mover_t *push)
 	RecordFrom(push, SG_RUNE_MECH_PUSH, &record);
 	for (axis = 0U; axis < 3U; axis++)
 	{
-		velocity[axis] = push->entity->move_direction.value[axis] * speed * 10.0f;
+		velocity[axis] = push->entity->move_direction[axis] * speed * 10.0f;
 		record.travel[axis] = velocity[axis];
 	}
 	index = AppendRecord(emit->store, &record);
@@ -553,18 +511,18 @@ static int EmitTrain(emit_t *emit, const mover_t *train)
 	index = AppendRecord(emit->store, &record);
 	if (index == SG_RUNE_CX_INDEX_NONE)
 		return 0;
-	first = EdgeFrom(emit->semantics, train->index, SG_MECH_EDGE_PATH_TARGET);
+	first = SG_RuneEntitiesFind(emit->semantics, emit->semantics->records[train->index].pathtarget, 0U);
 	if (first == SG_RUNE_CX_INDEX_NONE)
-		first = EdgeFrom(emit->semantics, train->index, SG_MECH_EDGE_TARGET);
+		first = SG_RuneEntitiesTargetOf(emit->semantics, train->index);
 	corner = first;
 	while (corner != SG_RUNE_CX_INDEX_NONE &&
-		corner < emit->semantics->entity_count && guard++ < 256U)
+		corner < emit->semantics->count && guard++ < 256U)
 	{
-		const sg_bsp_entity_semantic_t *stop = &emit->semantics->entities[corner];
+		const sg_rune_entity_t *stop = &emit->semantics->records[corner];
 		float mins[3], maxs[3], point[3];
 		uint32_t cell, next;
 
-		TrainAtCorner(train, stop->origin.value, mins, maxs);
+		TrainAtCorner(train, stop->origin, mins, maxs);
 		point[0] = (mins[0] + maxs[0]) * 0.5f;
 		point[1] = (mins[1] + maxs[1]) * 0.5f;
 		point[2] = maxs[2];
@@ -586,7 +544,7 @@ static int EmitTrain(emit_t *emit, const mover_t *train)
 			previous_cell = cell;
 			memcpy(previous_point, point, sizeof(point));
 		}
-		next = EdgeFrom(emit->semantics, corner, SG_MECH_EDGE_TARGET);
+		next = SG_RuneEntitiesTargetOf(emit->semantics, corner);
 		if (next == SG_RUNE_CX_INDEX_NONE || next == corner)
 			break;
 		corner = next;
@@ -614,7 +572,7 @@ static int EmitButton(emit_t *emit, const mover_t *button)
 static int EmitDoor(emit_t *emit, const mover_t *door)
 {
 	sg_rune_mech_t record;
-	uint32_t index, edge;
+	uint32_t index, worker;
 
 	RecordFrom(door, SG_RUNE_MECH_DOOR, &record);
 	DoorTravel(door, record.travel);
@@ -623,29 +581,20 @@ static int EmitDoor(emit_t *emit, const mover_t *door)
 	/* Who works it: a button or trigger that targets it, its own area
 	 * trigger, damage, or nothing. */
 	record.activation = SG_RUNE_MECH_ACTIVATE_TOUCH;
-	edge = EdgeInto(emit->semantics, door->index, SG_MECH_EDGE_TARGET, 0U);
-	while (edge != SG_RUNE_CX_INDEX_NONE)
+	worker = SG_RuneEntitiesTargetedBy(emit->semantics, door->index, 0U);
+	while (worker != SG_RUNE_CX_INDEX_NONE)
 	{
-		uint32_t source = emit->semantics->edges[edge].source;
-		const sg_bsp_entity_semantic_t *worker = &emit->semantics->entities[source];
-
-		if (worker->mechanism_role == SG_MECH_NODE_AUTO_DOOR_TRIGGER)
-		{
-			record.activation = SG_RUNE_MECH_ACTIVATE_TOUCH;
-			break;
-		}
-		if (emit->record_of_entity[source] != SG_RUNE_CX_INDEX_NONE)
+		if (emit->record_of_entity[worker] != SG_RUNE_CX_INDEX_NONE)
 		{
 			record.activation = SG_RUNE_MECH_ACTIVATE_TARGETED;
-			record.activator = emit->record_of_entity[source];
+			record.activator = emit->record_of_entity[worker];
 			break;
 		}
-		edge = EdgeInto(emit->semantics, door->index, SG_MECH_EDGE_TARGET,
-			edge + 1U);
+		worker = SG_RuneEntitiesTargetedBy(emit->semantics, door->index, worker + 1U);
 	}
-	if (edge == SG_RUNE_CX_INDEX_NONE && door->entity->health > 0)
+	if (worker == SG_RUNE_CX_INDEX_NONE && door->entity->health > 0)
 		record.activation = SG_RUNE_MECH_ACTIVATE_SHOT;
-	else if (edge == SG_RUNE_CX_INDEX_NONE && door->entity->targetname != 0U)
+	else if (worker == SG_RUNE_CX_INDEX_NONE && door->entity->targetname[0])
 		record.activation = SG_RUNE_MECH_ACTIVATE_NONE;   /* worked by something unknown */
 	index = AppendRecord(emit->store, &record);
 	if (index == SG_RUNE_CX_INDEX_NONE)
@@ -654,12 +603,12 @@ static int EmitDoor(emit_t *emit, const mover_t *door)
 	return GateDoor(emit, index, door);
 }
 
-int SG_RuneMechEmit(const sg_bsp_world_t *world,
+int SG_RuneMechEmit(const sg_rune_bsp_t *world,
 	const sg_rune_cx_t *cx, const sg_rune_law_t *law,
 	sg_rune_move_store_t *movement, sg_rune_mech_store_t *store)
 {
 	emit_t emit;
-	sg_bsp_entity_semantics_t *semantics = NULL;
+	sg_rune_entities_t parsed, *semantics = NULL;
 	uint32_t index;
 	int ok = 0;
 
@@ -668,7 +617,7 @@ int SG_RuneMechEmit(const sg_bsp_world_t *world,
 	memset(&emit, 0, sizeof(emit));
 	if (!SG_RuneCxRead(cx, &emit.view))
 		return 0;
-	if (!Semantics(world, &semantics))
+	if (!Semantics(world, &parsed, &semantics))
 		return 1;
 	emit.world = world;
 	emit.semantics = semantics;
@@ -678,16 +627,16 @@ int SG_RuneMechEmit(const sg_bsp_world_t *world,
 	emit.store = store;
 	emit.artifact.complex = emit.view;
 	emit.artifact.law = *law;
-	emit.record_of_entity = malloc((size_t)(semantics->entity_count ?
-		semantics->entity_count : 1U) * sizeof(uint32_t));
+	emit.record_of_entity = malloc((size_t)(semantics->count ?
+		semantics->count : 1U) * sizeof(uint32_t));
 	if (!emit.record_of_entity || !SG_RuneLocatorBuild(&emit.locator, &emit.artifact))
 		goto done;
-	for (index = 0U; index < semantics->entity_count; index++)
+	for (index = 0U; index < semantics->count; index++)
 		emit.record_of_entity[index] = SG_RUNE_CX_INDEX_NONE;
 	/* Buttons and triggers first, so doors can name their workers. */
-	for (index = 0U; index < semantics->entity_count; index++)
+	for (index = 0U; index < semantics->count; index++)
 	{
-		const sg_bsp_entity_semantic_t *entity = &semantics->entities[index];
+		const sg_rune_entity_t *entity = &semantics->records[index];
 		mover_t mover;
 
 		if (!IsButton(entity) || IsDoor(entity))
@@ -696,9 +645,9 @@ int SG_RuneMechEmit(const sg_bsp_world_t *world,
 		if (!EmitButton(&emit, &mover))
 			goto done;
 	}
-	for (index = 0U; index < semantics->entity_count; index++)
+	for (index = 0U; index < semantics->count; index++)
 	{
-		const sg_bsp_entity_semantic_t *entity = &semantics->entities[index];
+		const sg_rune_entity_t *entity = &semantics->records[index];
 		mover_t mover;
 		int fine = 1;
 
@@ -720,6 +669,6 @@ int SG_RuneMechEmit(const sg_bsp_world_t *world,
 done:
 	SG_RuneLocatorFree(&emit.locator);
 	free(emit.record_of_entity);
-	SG_BspEntitySemanticsDestroy(semantics);
+	SG_RuneEntitiesFree(&parsed);
 	return ok;
 }

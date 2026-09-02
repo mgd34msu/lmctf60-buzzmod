@@ -8,7 +8,7 @@
 #include <ctype.h>
 #include <string.h>
 
-#include "sg_util.h"
+#include "sg_bot_util.h"
 
 #define ORDER_SECONDS 90.0f
 

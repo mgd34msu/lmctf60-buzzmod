@@ -9,7 +9,7 @@
 #include "stdlog.h"
 #include "bat.h"
 #include "g_vote.h"
-#include "slipgate/sg_net.h"        // SG_ClearBotArgs
+#include "slipgate/sg_bot_host.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_bot_orders.h"
 
@@ -3065,5 +3065,5 @@ void ClientCommand(edict_t* ent)
 	else	// anything that doesn't match a command will be a chat
 		Cmd_Say_f (ent, false, true);
 
-	SG_ClearBotArgs();
+	SG_BotHostClearArgs();
 }

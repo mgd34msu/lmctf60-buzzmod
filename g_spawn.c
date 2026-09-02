@@ -1,11 +1,9 @@
 
 #include "g_local.h"
 #include "g_entfile_path.h"
-#include "slipgate/sg_identity.h"
-#include "slipgate/sg_host_law_owner.h"
-#include "slipgate/sg_rune_source_authority_owner.h"
 #include "slipgate/sg_local.h"
-#include "slipgate/sg_net.h"
+#include "slipgate/sg_bot_host.h"
+#include "slipgate/sg_rune_level.h"
 #include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionNewLevel
 #include "g_ctffunc.h"
 #include "g_tourney.h"
@@ -967,15 +965,12 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 
 	char		*com_token;
 	int			i;
-	sg_identity_status_t identity_status;
-	sg_level_identity_t identity = { 0 };
-	sg_rune_source_status_t source_status;
 
 	/* TAG_LEVEL is about to invalidate every SLIPGATE graph/field pointer.
 	 * Retire it while outgoing identity and client state are still visible. */
 	SG_LevelTransitionSaveOutgoingState ();
 
-	SG_NetNewLevel ();
+	SG_BotHostNewLevel ();
 
 	// BUZZKILL - the session recorder's per-level state: chat counts, the
 	// written-match latch, and the match id the rows hang off. All three are
@@ -989,7 +984,6 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 
 	strncpy (level.mapname, mapname, sizeof(level.mapname)-1);
 	strncpy (game.spawnpoint, spawnpoint, sizeof(game.spawnpoint)-1);
-	SG_LevelIdentityBegin(mapname);
 
 	// set client fields on player ents
 	for (i=0 ; i<game.maxclients ; i++)
@@ -1003,8 +997,7 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	// LM_JORM
 	// Select the final entity text before capturing generation authority.
 	entities = ReadEntFile(mapname, entities);
-	SG_LevelIdentityCaptureEntities(mapname, entities);
-	source_status = SG_RuneSourceAuthorityBegin(mapname, entities);
+	SG_RuneLevelEntities(entities);
 	
 	total_ents = 0; //surt
 	// END LM_JORM
@@ -1060,9 +1053,6 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 			ent->spawnflags &= ~(SPAWNFLAG_NOT_EASY|SPAWNFLAG_NOT_MEDIUM|SPAWNFLAG_NOT_HARD|SPAWNFLAG_NOT_COOP|SPAWNFLAG_NOT_DEATHMATCH);
 		}
 
-		if (source_status == SG_RUNE_SOURCE_OK)
-			source_status = SG_RuneSourceAuthorityRecord(
-				(uint32_t)(total_ents - 1), (int32_t)ent->spawnflags);
 		ED_CallSpawn (ent);
 	}	
 	
@@ -1106,45 +1096,6 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 
 	sl_GameStart( &gi, level );	//	StdLog - Mark Davies
 
-	/* Begin the final publication sequence only after entity spawning succeeds. */
-	identity_status = SG_LevelIdentityCommit(mapname);
-	if (identity_status == SG_IDENTITY_OK)
-		identity_status = SG_LevelIdentitySnapshot(mapname, &identity);
-	if (identity_status == SG_IDENTITY_OK)
-		gi.dprintf("slipgate: rune identity committed map=%s bsp=%u "
-		           "entity_crc=%u physics=%u\n",
-		           identity.mapname, (unsigned int)identity.bsp_checksum,
-		           (unsigned int)identity.entity_crc32,
-		           (unsigned int)identity.host_physics_id);
-	else
-		gi.dprintf("slipgate: rune identity unavailable for %s: %s\n",
-		           mapname ? mapname : "<null>",
-		           SG_LevelIdentityReason(identity_status));
-	if (identity_status == SG_IDENTITY_OK)
-	{
-		sg_host_law_result_t host_law_result =
-			SG_HostLawProductionBeginLevel(mapname);
-
-		if (host_law_result.status != SG_HOST_LAW_OK)
-		{
-			gi.dprintf("slipgate: engine movement provider unavailable for %s: %s (%s)\n",
-				mapname ? mapname : "<null>",
-				SG_HostLawStatusString(host_law_result.status),
-				SG_HostLawFieldString(host_law_result.field));
-			SG_RuneSourceAuthorityReset();
-		}
-		else
-		{
-			if (source_status == SG_RUNE_SOURCE_OK)
-				source_status = SG_RuneSourceAuthorityPublish(mapname);
-			if (source_status != SG_RUNE_SOURCE_OK)
-				gi.dprintf("slipgate: rune source authority unavailable for %s: %s\n",
-					mapname ? mapname : "<null>",
-					SG_RuneSourceAuthorityReason(source_status));
-		}
-	}
-	else
-		SG_RuneSourceAuthorityReset();
 }
 
 

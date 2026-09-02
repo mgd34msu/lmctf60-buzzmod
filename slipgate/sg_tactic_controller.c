@@ -3,8 +3,7 @@
 #include <math.h>
 #include <string.h>
 
-#include "sg_host_engine_pmove.h"
-#include "sg_host_rocket_jump_law.h"
+#include "sg_rune_law.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -44,11 +43,13 @@ static void Toward(sg_tactic_command_t *command, const float direction[3],
 
 /* How far the body carries horizontally at full speed during a launch's
  * flight: the range within which pressing jump now reaches the target. */
-static float FlightReach(float vertical_velocity, float gravity)
+static float FlightReach(const sg_tactic_body_t *body, float vertical_velocity)
 {
-	if (!(gravity > 0.0f) || !(vertical_velocity > 0.0f))
+	float speed = body->law ? body->law->max_velocity : 0.0f;
+
+	if (!(body->gravity > 0.0f) || !(vertical_velocity > 0.0f))
 		return 0.0f;
-	return SG_HOST_ENGINE_MAX_SPEED * (2.0f * vertical_velocity / gravity);
+	return speed * (2.0f * vertical_velocity / body->gravity);
 }
 
 static int AimAngles(const float from[3], const float to[3], float *yaw_out,
@@ -76,13 +77,13 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 	int have_direction, const float direction[3], float distance,
 	sg_tactic_command_t *command)
 {
-	const sg_host_hook_phase_t live = body->hook_phase;
+	const sg_tactic_hook_phase_t live = body->hook_phase;
 	float eye[3];
 
 	(void)distance;
 	if (have_direction)
 		Toward(command, direction, 1.0f);
-	if (live == SG_HOST_HOOK_IDLE || live == SG_HOST_HOOK_COAST)
+	if (live == SG_TACTIC_HOOK_IDLE || live == SG_TACTIC_HOOK_COAST)
 	{
 		if (step->hook_point_present == 0U || body->hook_ready == 0U)
 		{
@@ -101,7 +102,7 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 		command->status = SG_TACTIC_COMMAND_MOVE;
 		return;
 	}
-	if (live == SG_HOST_HOOK_ATTACHED)
+	if (live == SG_TACTIC_HOOK_ATTACHED)
 	{
 		float dx = step->target[0] - body->origin[0];
 		float dy = step->target[1] - body->origin[1];
@@ -211,7 +212,7 @@ int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 		if (have_direction)
 			Toward(&command, direction, 1.0f);
 		if (body->supported != 0U && (distance <=
-			FlightReach(SG_HOST_ENGINE_JUMP_VELOCITY, body->gravity) ||
+			FlightReach(body, body->law ? body->law->jump_velocity : 0.0f) ||
 			!have_direction))
 		{
 			command.up = 1.0f;
@@ -220,7 +221,7 @@ int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 		break;
 	case SG_RUNE_MOVE_ROCKET_JUMP:
 	{
-		sg_host_rocket_jump_launch_t launch;
+		sg_rune_rocket_jump_t launch;
 
 		/* The launcher must be in hand first; until it is, close in on the
 		 * crossing.  Then, on the ground, within the launch's reach: face
@@ -228,12 +229,10 @@ int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 		command.want_launcher = 1U;
 		if (have_direction)
 			Toward(&command, direction, 1.0f);
-		if (body->launcher_ready == 0U || body->supported == 0U ||
-			!SG_HostRocketJumpLaunch(body->gravity, body->frame_ms,
-				body->substep_ms, 0, &launch))
+		if (body->launcher_ready == 0U || body->supported == 0U || !body->law ||
+			!SG_RuneLawRocketJump(body->law, &launch))
 			break;
-		if (have_direction && distance >
-			FlightReach(launch.vertical_velocity, body->gravity))
+		if (have_direction && distance > FlightReach(body, launch.vertical_velocity))
 			break;
 		command.aim_owned = 1U;
 		command.yaw = have_direction ? atan2f(direction[1], direction[0]) *

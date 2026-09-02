@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sg_host_engine_pmove.h"
 #include "sg_rune_locate.h"
 
 #define STANCE_CHANGE_COST 0.05f
@@ -39,9 +38,9 @@ static float AirTime(const sg_rune_law_t *law, uint8_t kind, float horizontal,
 	float launch = 0.0f, time;
 
 	if (kind == SG_RUNE_MOVE_JUMP)
-		launch = SG_HOST_ENGINE_JUMP_VELOCITY;
+		launch = law->jump_velocity;
 	else if (kind == SG_RUNE_MOVE_ROCKET_JUMP)
-		launch = SG_HOST_ENGINE_JUMP_VELOCITY + 700.0f;
+		launch = law->jump_velocity + 700.0f;
 	if (launch > 0.0f)
 	{
 		const float rise = launch * launch / (2.0f * gravity);
@@ -52,8 +51,8 @@ static float AirTime(const sg_rune_law_t *law, uint8_t kind, float horizontal,
 	}
 	else
 		time = dz < 0.0f ? sqrtf(-2.0f * dz / gravity) : 0.0f;
-	if (time < horizontal / SG_HOST_ENGINE_MAX_SPEED)
-		time = horizontal / SG_HOST_ENGINE_MAX_SPEED;
+	if (time < horizontal / law->max_velocity)
+		time = horizontal / law->max_velocity;
 	return time;
 }
 

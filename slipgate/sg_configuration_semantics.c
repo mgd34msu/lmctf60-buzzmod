@@ -17,13 +17,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sg_bsp_world.h"
-#include "sg_host_collision.h"
+#include "sg_rune_bsp.h"
+#include "sg_rune_trace.h"
+#include "sg_rune_law.h"
 
 typedef struct semantic_build_s
 {
-	const sg_host_collision_authority_t *authority;
-	const sg_bsp_world_t *world;
+	const sg_rune_law_t *law;
+	const sg_rune_bsp_t *world;
 	const sg_configuration_space_t *configuration;
 	sg_configuration_semantics_limits_t limits;
 	sg_configuration_semantics_t *output;
@@ -77,45 +78,47 @@ static void Copy3(float out[3], const float in[3])
 
 /* Sample heights above the origin for a stance: just above the feet, half
  * way to the eyes, and at the eyes. */
-static int SampleOffsets(const sg_host_collision_authority_t *authority,
-	sg_rune_stance_t stance, float offsets[3])
+static int SampleOffsets(const sg_rune_law_t *law,
+	sg_cfg_stance_t stance, float offsets[3])
 {
-	const sg_rune_hull_profile_t *hull;
+	const float *mins;
 	float view_height, sample_height;
 	int sample2;
 
-	if (stance == SG_RUNE_STANCE_STANDING)
-	{
-		hull = &authority->identity.standing_hull;
-		view_height = SG_HOST_STANDING_VIEW_HEIGHT;
-	}
-	else if (stance == SG_RUNE_STANCE_CROUCHING)
-	{
-		hull = &authority->identity.crouching_hull;
-		view_height = SG_HOST_CROUCHING_VIEW_HEIGHT;
-	}
-	else
+	if (stance != SG_CFG_STANDING && stance != SG_CFG_CROUCHING)
 		return 0;
-	sample_height = view_height - hull->mins.value[2];
+	SG_RuneLawHull(law, stance == SG_CFG_CROUCHING, &mins, NULL, &view_height);
+	sample_height = view_height - mins[2];
 	if (!isfinite(sample_height) || sample_height < (float)INT_MIN ||
 		sample_height >= (float)INT_MAX)
 		return 0;
 	sample2 = (int)sample_height;
-	offsets[0] = hull->mins.value[2] + 1.0f;
-	offsets[1] = hull->mins.value[2] + (float)(sample2 / 2);
-	offsets[2] = hull->mins.value[2] + (float)sample2;
+	offsets[0] = mins[2] + 1.0f;
+	offsets[1] = mins[2] + (float)(sample2 / 2);
+	offsets[2] = mins[2] + (float)sample2;
 	return 1;
 }
 
-static int HostLeafAtPoint(const sg_bsp_world_t *world, const float point[3],
+static int Pose(const semantic_build_t *build, const float point[3],
+	sg_cfg_stance_t stance, sg_rune_pose_t *pose_out)
+{
+	const float *mins, *maxs;
+	float view;
+
+	SG_RuneLawHull(build->law, stance == SG_CFG_CROUCHING, &mins, &maxs, &view);
+	SG_RuneTracePose(build->world, point, mins, maxs, view, pose_out);
+	return 1;
+}
+
+static int HostLeafAtPoint(const sg_rune_bsp_t *world, const float point[3],
 	uint32_t *leaf_out)
 {
 	int32_t child = world->models[0].headnode;
 
 	while (child >= 0)
 	{
-		const sg_bsp_node_t *node;
-		const sg_bsp_plane_t *plane;
+		const sg_rune_bsp_node_t *node;
+		const sg_rune_bsp_plane_t *plane;
 		float distance;
 
 		if ((uint32_t)child >= world->node_count)
@@ -124,7 +127,7 @@ static int HostLeafAtPoint(const sg_bsp_world_t *world, const float point[3],
 		if (node->plane >= world->plane_count)
 			return 0;
 		plane = &world->planes[node->plane];
-		distance = Dot(point, plane->normal.value) - plane->distance;
+		distance = Dot(point, plane->normal) - plane->distance;
 		child = node->children[distance < 0.0f];
 	}
 	*leaf_out = (uint32_t)(-1 - child);
@@ -146,7 +149,7 @@ static int CellHasFloor(const semantic_build_t *build,
 		return 1;
 	for (index = 0; index < sizeof(rises) / sizeof(rises[0]); index++)
 	{
-		sg_host_collision_pose_t pose;
+		sg_rune_pose_t pose;
 		float point[3];
 
 		point[0] = witness[0];
@@ -154,8 +157,7 @@ static int CellHasFloor(const semantic_build_t *build,
 		point[2] = cell->bounds.mins.value[2] + rises[index];
 		if (point[2] > witness[2])
 			return 0;
-		if (!SG_HostCollisionClassifyPose(build->authority, NULL, point,
-			cell->stance, &pose) || !pose.valid)
+		if (!Pose(build, point, cell->stance, &pose) || !pose.valid)
 			continue;
 		return pose.supported ? 1 : 0;
 	}
@@ -168,10 +170,10 @@ static int AppendRegion(semantic_build_t *build, uint32_t cell_index)
 {
 	const sg_configuration_space_t *configuration = build->configuration;
 	const sg_configuration_cell_t *cell = &configuration->cells[cell_index];
-	const sg_bsp_world_t *world = build->world;
+	const sg_rune_bsp_t *world = build->world;
 	sg_configuration_semantics_t *output = build->output;
 	sg_configuration_semantic_region_t *region;
-	sg_host_collision_pose_t pose;
+	sg_rune_pose_t pose;
 	float offsets[3];
 	uint32_t face, sample;
 
@@ -198,7 +200,7 @@ static int AppendRegion(semantic_build_t *build, uint32_t cell_index)
 	region->cell = cell_index;
 	region->bounds = cell->bounds;
 	region->interior_witness = cell->interior_witness;
-	region->origin_contents = (sg_host_collision_contents_t)
+	region->origin_contents = (int32_t)
 		world->leaves[cell->bsp_leaf.index].contents;
 	region->origin_rune_contents = cell->contents;
 	region->first_face = output->face_count;
@@ -253,7 +255,7 @@ static int AppendRegion(semantic_build_t *build, uint32_t cell_index)
 	}
 	region->face_count = output->face_count - region->first_face;
 	/* Samples: the host's leaves at the stance's heights over the witness. */
-	if (!SampleOffsets(build->authority, cell->stance, offsets))
+	if (!SampleOffsets(build->law, cell->stance, offsets))
 	{
 		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
 			cell_index);
@@ -274,33 +276,32 @@ static int AppendRegion(semantic_build_t *build, uint32_t cell_index)
 		}
 		region->sample_leaves[sample] = leaf;
 		region->sample_contents[sample] =
-			(sg_host_collision_contents_t)world->leaves[leaf].contents;
+			(int32_t)world->leaves[leaf].contents;
 		region->sample_areas[sample] = world->leaves[leaf].area;
 		region->sample_clusters[sample] = world->leaves[leaf].cluster;
 	}
-	if (region->sample_contents[0] & SG_HOST_MASK_WATER)
+	if (region->sample_contents[0] & SG_RUNE_MASK_WATER)
 	{
 		region->water_level = 1;
 		region->water_type = region->sample_contents[0];
-		if (region->sample_contents[1] & SG_HOST_MASK_WATER)
+		if (region->sample_contents[1] & SG_RUNE_MASK_WATER)
 		{
 			region->water_level = 2;
-			if (region->sample_contents[2] & SG_HOST_MASK_WATER)
+			if (region->sample_contents[2] & SG_RUNE_MASK_WATER)
 				region->water_level = 3;
 		}
 	}
-	if (region->water_type & SG_HOST_CONTENTS_WATER)
+	if (region->water_type & SG_RUNE_CONTENTS_WATER)
 		region->flags |= SG_CONFIGURATION_SEMANTIC_REGION_WATER;
-	if (region->water_type & SG_HOST_CONTENTS_LAVA)
+	if (region->water_type & SG_RUNE_CONTENTS_LAVA)
 		region->flags |= SG_CONFIGURATION_SEMANTIC_REGION_LAVA |
 			SG_CONFIGURATION_SEMANTIC_REGION_HAZARD;
-	if (region->water_type & SG_HOST_CONTENTS_SLIME)
+	if (region->water_type & SG_RUNE_CONTENTS_SLIME)
 		region->flags |= SG_CONFIGURATION_SEMANTIC_REGION_SLIME |
 			SG_CONFIGURATION_SEMANTIC_REGION_HAZARD;
 	/* Support from the host at the witness, then at the floor. */
 	memset(&pose, 0, sizeof(pose));
-	if (!SG_HostCollisionClassifyPose(build->authority, NULL,
-		cell->interior_witness.value, cell->stance, &pose))
+	if (!Pose(build, cell->interior_witness.value, cell->stance, &pose))
 		pose.valid = 0;
 	region->flags |= CellHasFloor(build, cell, cell->interior_witness.value,
 		pose.valid && pose.supported) ?
@@ -314,22 +315,22 @@ static int AppendRegion(semantic_build_t *build, uint32_t cell_index)
 
 static int BuildSideToBrush(semantic_build_t *build)
 {
-	const sg_bsp_world_t *world = build->world;
+	const sg_rune_bsp_t *world = build->world;
 	uint32_t brush;
 
-	build->side_to_brush = malloc((size_t)(world->brush_side_count ?
-		world->brush_side_count : 1U) * sizeof(*build->side_to_brush));
+	build->side_to_brush = malloc((size_t)(world->side_count ?
+		world->side_count : 1U) * sizeof(*build->side_to_brush));
 	if (!build->side_to_brush)
 		return 0;
 	memset(build->side_to_brush, 0xFF,
-		(size_t)world->brush_side_count * sizeof(*build->side_to_brush));
+		(size_t)world->side_count * sizeof(*build->side_to_brush));
 	for (brush = 0; brush < world->brush_count; brush++)
 	{
-		const sg_bsp_brush_t *record = &world->brushes[brush];
+		const sg_rune_bsp_brush_t *record = &world->brushes[brush];
 		uint32_t side;
 
-		if (record->first_side > world->brush_side_count ||
-			record->side_count > world->brush_side_count - record->first_side)
+		if (record->first_side > world->side_count ||
+			record->side_count > world->side_count - record->first_side)
 			return 0;
 		for (side = 0; side < record->side_count; side++)
 			build->side_to_brush[record->first_side + side] = brush;
@@ -342,7 +343,7 @@ static int AppendBoundaries(semantic_build_t *build, uint32_t cell_index)
 {
 	const sg_configuration_space_t *configuration = build->configuration;
 	const sg_configuration_cell_t *cell = &configuration->cells[cell_index];
-	const sg_bsp_world_t *world = build->world;
+	const sg_rune_bsp_t *world = build->world;
 	sg_configuration_semantics_t *output = build->output;
 	uint32_t local;
 
@@ -368,17 +369,17 @@ static int AppendBoundaries(semantic_build_t *build, uint32_t cell_index)
 			boundary.flags = SG_CONFIGURATION_BOUNDARY_VOID;
 		else
 		{
-			const sg_bsp_brush_side_t *side;
+			const sg_rune_bsp_side_t *side;
 			const uint32_t side_index = face->plane.source_index;
 
-			if (side_index >= world->brush_side_count ||
+			if (side_index >= world->side_count ||
 				build->side_to_brush[side_index] == UINT32_MAX)
 			{
 				SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
 					face_index);
 				return 0;
 			}
-			side = &world->brush_sides[side_index];
+			side = &world->sides[side_index];
 			if (side->plane >= world->plane_count)
 			{
 				SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
@@ -386,7 +387,7 @@ static int AppendBoundaries(semantic_build_t *build, uint32_t cell_index)
 				return 0;
 			}
 			Copy3(boundary.surface_normal,
-				world->planes[side->plane].normal.value);
+				world->planes[side->plane].normal);
 			boundary.surface_distance = world->planes[side->plane].distance;
 			boundary.brush = build->side_to_brush[side_index];
 			boundary.brush_side = side_index;
@@ -433,15 +434,15 @@ static int AppendHookSurface(void *context, uint32_t brush,
 {
 	hook_surface_context_t *hook = context;
 	semantic_build_t *build = hook->build;
-	const sg_bsp_world_t *world = build->world;
+	const sg_rune_bsp_t *world = build->world;
 	sg_configuration_semantics_t *output = build->output;
-	const sg_bsp_brush_side_t *side;
+	const sg_rune_bsp_side_t *side;
 	sg_configuration_hook_surface_t *surface;
 	uint32_t vertex, axis;
 
-	if (brush_side >= world->brush_side_count || count < 3U)
+	if (brush_side >= world->side_count || count < 3U)
 		return 1;
-	side = &world->brush_sides[brush_side];
+	side = &world->sides[brush_side];
 	if (side->plane >= world->plane_count)
 		return 1;
 	if (!Grow((void **)&output->hook_surfaces, &build->hook_surface_capacity,
@@ -461,7 +462,7 @@ static int AppendHookSurface(void *context, uint32_t brush,
 	surface->brush = brush;
 	surface->brush_side = brush_side;
 	surface->texinfo = SG_CONFIGURATION_SEMANTICS_INDEX_NONE;
-	Copy3(surface->normal, world->planes[side->plane].normal.value);
+	Copy3(surface->normal, world->planes[side->plane].normal);
 	surface->distance = world->planes[side->plane].distance;
 	surface->first_vertex = output->hook_vertex_count;
 	surface->vertex_count = count;
@@ -472,7 +473,7 @@ static int AppendHookSurface(void *context, uint32_t brush,
 	}
 	for (vertex = 0; vertex < count; vertex++)
 	{
-		sg_rune_vec3_t *out = &output->hook_vertices[output->hook_vertex_count +
+		sg_cfg_vec3_t *out = &output->hook_vertices[output->hook_vertex_count +
 			vertex];
 
 		for (axis = 0; axis < 3; axis++)
@@ -491,7 +492,7 @@ static int AppendHookSurface(void *context, uint32_t brush,
 		surface->texinfo = (uint32_t)side->texinfo;
 		surface->surface_flags = world->texinfos[side->texinfo].flags;
 	}
-	if (surface->surface_flags & SG_HOST_SURFACE_SKY)
+	if (surface->surface_flags & SG_RUNE_SURF_SKY)
 		surface->flags |= SG_CONFIGURATION_HOOK_SURFACE_SKY;
 	else
 		surface->flags |= SG_CONFIGURATION_HOOK_SURFACE_HOOKABLE;
@@ -505,7 +506,7 @@ static int AppendHookSurface(void *context, uint32_t brush,
 /* Every solid brush of the model, found through its leaves. */
 static int MarkModelBrushes(semantic_build_t *build, int32_t node)
 {
-	const sg_bsp_world_t *world = build->world;
+	const sg_rune_bsp_t *world = build->world;
 
 	while (node >= 0)
 	{
@@ -517,7 +518,7 @@ static int MarkModelBrushes(semantic_build_t *build, int32_t node)
 	}
 	{
 		const uint32_t leaf = (uint32_t)(-1 - node);
-		const sg_bsp_leaf_t *record;
+		const sg_rune_bsp_leaf_t *record;
 		uint32_t offset;
 
 		if (leaf >= world->leaf_count)
@@ -538,7 +539,7 @@ static int MarkModelBrushes(semantic_build_t *build, int32_t node)
 
 static int BuildHookSurfaces(semantic_build_t *build)
 {
-	const sg_bsp_world_t *world = build->world;
+	const sg_rune_bsp_t *world = build->world;
 	uint32_t model, brush;
 
 	build->brush_marks = calloc(world->brush_count ? world->brush_count : 1U,
@@ -563,7 +564,7 @@ static int BuildHookSurfaces(semantic_build_t *build)
 		for (brush = 0; brush < world->brush_count; brush++)
 		{
 			if (!build->brush_marks[brush] ||
-				!(world->brushes[brush].contents & SG_HOST_CONTENTS_SOLID))
+				!(world->brushes[brush].contents & SG_RUNE_CONTENTS_SOLID))
 				continue;
 			if (!SG_ConfigurationBrushPolygons(world, brush, AppendHookSurface,
 				&context))
@@ -594,7 +595,7 @@ void SG_ConfigurationSemanticsDefaultLimits(
 }
 
 int SG_ConfigurationSemanticsBuild(
-	const sg_host_collision_authority_t *authority,
+	const sg_rune_bsp_t *bsp, const sg_rune_law_t *law,
 	const sg_configuration_space_t *configuration,
 	const sg_configuration_semantics_limits_t *limits,
 	sg_configuration_semantics_t **semantics_out,
@@ -606,7 +607,7 @@ int SG_ConfigurationSemanticsBuild(
 
 	if (error_out)
 		memset(error_out, 0, sizeof(*error_out));
-	if (!authority || !authority->world || !configuration || !limits ||
+	if (!bsp || !law || !configuration || !limits ||
 		!semantics_out || *semantics_out || !limits->max_regions ||
 		!limits->max_faces || !limits->max_vertices ||
 		!limits->max_boundaries || !limits->max_hook_surfaces ||
@@ -617,8 +618,8 @@ int SG_ConfigurationSemanticsBuild(
 		return 0;
 	}
 	memset(&build, 0, sizeof(build));
-	build.authority = authority;
-	build.world = authority->world;
+	build.law = law;
+	build.world = bsp;
 	build.configuration = configuration;
 	build.limits = *limits;
 	build.output = calloc(1, sizeof(*build.output));
@@ -627,7 +628,6 @@ int SG_ConfigurationSemanticsBuild(
 		SetError(&build, SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY, 0U);
 		goto done;
 	}
-	build.output->identity = configuration->identity;
 	for (cell = 0; cell < configuration->cell_count; cell++)
 		if (!AppendRegion(&build, cell) || !AppendBoundaries(&build, cell))
 			goto done;

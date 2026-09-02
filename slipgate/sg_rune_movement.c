@@ -4,8 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sg_host_engine_pmove.h"
-#include "sg_host_rocket_jump_law.h"
 
 /* A rocket jump costs about 47 health; charged as seconds of route. */
 #define SG_RUNE_MOVE_ROCKET_HEALTH_COST_SECONDS 4.0f
@@ -179,7 +177,7 @@ static int AddAirMotion(sg_rune_fn_store_t *store,
 static int BuildProfiles(sg_rune_move_store_t *store)
 {
 	const sg_rune_move_law_t *law = &store->law;
-	sg_host_rocket_jump_launch_t launch;
+	sg_rune_rocket_jump_t launch;
 	uint32_t index;
 
 	store->profiles = calloc(PROFILE_COUNT, sizeof(*store->profiles));
@@ -189,35 +187,31 @@ static int BuildProfiles(sg_rune_move_store_t *store)
 	for (index = 0U; index < PROFILE_COUNT; index++)
 		ProfileClear(&store->profiles[index]);
 	if (!AddContactMotion(&store->analytic, &store->profiles[PROFILE_GROUND],
-			SG_HOST_ENGINE_MAX_SPEED) ||
+			law->max_velocity) ||
 		!AddContactMotion(&store->analytic, &store->profiles[PROFILE_WATER],
-			SG_HOST_ENGINE_WATER_SPEED) ||
+			law->water_velocity) ||
 		!AddAirMotion(&store->analytic, &store->profiles[PROFILE_AIR], law,
 			0.0f, 0.0f, 0.0f, 0.0f) ||
 		!AddAirMotion(&store->analytic, &store->profiles[PROFILE_JUMP], law,
-			SG_HOST_ENGINE_JUMP_VELOCITY, 0.0f, 0.0f, 0.0f))
+			law->jump_velocity, 0.0f, 0.0f, 0.0f))
 		return 0;
 	store->jump_rise = law->gravity > 0.0f ?
-		(SG_HOST_ENGINE_JUMP_VELOCITY * SG_HOST_ENGINE_JUMP_VELOCITY) /
-			(2.0f * law->gravity) : 0.0f;
+		(law->jump_velocity * law->jump_velocity) / (2.0f * law->gravity) : 0.0f;
 	/* Rocket jump: the air profile from the blast height with the summed
 	 * vertical velocity, its clock offset by the lead frames.  When the law
 	 * yields no launch under this gravity the profile is unreachable and no
 	 * crossing attaches to it. */
-	if (SG_HostRocketJumpLaunch(law->gravity, law->frame_ms, law->substep_ms,
-		0, &launch))
+	if (SG_RuneLawRocketJump(law, &launch))
 	{
 		/* The cost carries the health the blast takes: the seconds a body
 		 * would spend walking to earn that much back are not free. */
 		if (!AddAirMotion(&store->analytic, &store->profiles[PROFILE_ROCKET_JUMP],
 			law, launch.vertical_velocity, launch.pre_blast_rise,
-			(float)launch.lead_frames * (float)law->frame_ms / 1000.0f,
-			SG_RUNE_MOVE_ROCKET_HEALTH_COST_SECONDS))
+			launch.lead_seconds, SG_RUNE_MOVE_ROCKET_HEALTH_COST_SECONDS))
 			return 0;
 		store->rocket_rise = launch.rise;
 		store->rocket_velocity = launch.vertical_velocity;
-		store->rocket_lead_seconds = (float)launch.lead_frames *
-			(float)law->frame_ms / 1000.0f;
+		store->rocket_lead_seconds = launch.lead_seconds;
 		store->rocket_pre_blast_rise = launch.pre_blast_rise;
 	}
 	else
@@ -370,7 +364,7 @@ int SG_RuneMoveEmitCrossing(sg_rune_move_store_t *store,
 		else if (crossing->source_supported && crossing->target_supported &&
 			crossing->vertical_facet)
 		{
-			if (fabsf(crossing->floor_delta) <= SG_HOST_ENGINE_STEP_SIZE)
+			if (fabsf(crossing->floor_delta) <= store->law.step_size)
 			{
 				kind = source_stance == SG_RUNE_MOVE_CROUCHING ?
 					SG_RUNE_MOVE_CROUCH : SG_RUNE_MOVE_WALK;
@@ -503,8 +497,7 @@ int SG_RuneMoveAppendHook(sg_rune_move_store_t *store, uint32_t cell,
 
 float SG_RuneMoveJumpVelocity(const sg_rune_move_store_t *store)
 {
-	(void)store;
-	return SG_HOST_ENGINE_JUMP_VELOCITY;
+	return store ? store->law.jump_velocity : 0.0f;
 }
 
 float SG_RuneMoveRocketVelocity(const sg_rune_move_store_t *store)

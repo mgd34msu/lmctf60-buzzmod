@@ -75,7 +75,7 @@ void SG_RuneMechStoreFree(sg_rune_mech_store_t *store);
 void SG_RuneMechStoreView(const sg_rune_mech_store_t *store,
 	sg_rune_mech_table_t *table_out);
 
-struct sg_bsp_world_s;
+struct sg_rune_bsp_s;
 struct sg_rune_cx_s;
 struct sg_rune_law_s;
 
@@ -84,9 +84,9 @@ struct sg_rune_law_s;
  * emission: appends the records and the crossings the mechanisms make, and
  * gates the crossings into doors.  Both read the map's entities from the
  * world. */
-int SG_RuneMechMarkCells(const struct sg_bsp_world_s *bsp,
+int SG_RuneMechMarkCells(const struct sg_rune_bsp_s *bsp,
 	struct sg_rune_cx_s *cx);
-int SG_RuneMechEmit(const struct sg_bsp_world_s *bsp,
+int SG_RuneMechEmit(const struct sg_rune_bsp_s *bsp,
 	const struct sg_rune_cx_s *cx, const struct sg_rune_law_s *law,
 	sg_rune_move_store_t *movement, sg_rune_mech_store_t *store);
 

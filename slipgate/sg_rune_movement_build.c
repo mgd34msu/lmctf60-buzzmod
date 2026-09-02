@@ -11,7 +11,6 @@
 #include <math.h>
 #include <string.h>
 
-#include "sg_host_engine_pmove.h"
 #include "sg_rune_cx.h"
 #include "sg_rune_flight.h"
 
@@ -150,8 +149,8 @@ static int EmitFlights(sg_rune_move_store_t *store,
 		sg_rune_flight_t flight;
 		const sg_rune_cx_cell_t *landing;
 
-		velocity[0] = direction[0] * SG_HOST_ENGINE_MAX_SPEED;
-		velocity[1] = direction[1] * SG_HOST_ENGINE_MAX_SPEED;
+		velocity[0] = direction[0] * store->law.max_velocity;
+		velocity[1] = direction[1] * store->law.max_velocity;
 		velocity[2] = launch->vertical;
 		start[0] = origin[0];
 		start[1] = origin[1];

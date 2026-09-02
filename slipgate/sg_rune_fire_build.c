@@ -7,14 +7,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sg_bsp_world.h"
-#include "sg_host_collision.h"
+#include "sg_rune_bsp.h"
+#include "sg_rune_trace.h"
+#include "sg_rune_law.h"
 #include "sg_rune_artifact.h"
 #include "sg_rune_cx_build.h"
 #include "sg_rune_flight.h"
 #include "sg_rune_locate.h"
 #include "sg_rune_vis.h"
-#include "sg_weapon_host_constants.h"
+#include "sg_engine_facts.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -27,11 +28,11 @@
 #define BODY_HEIGHT 24.0f
 #define FEET_HEIGHT 8.0f            /* where a rocket at the feet bursts */
 #define PROJECTILE_HALF 4.0f
-#define BLAST_RADIUS ((float)SG_HOST_ROCKET_SPLASH_RADIUS)
-#define LOB_RADIUS ((float)(SG_HOST_GRENADE_DAMAGE + SG_HOST_GRENADE_RADIUS_BONUS))
-#define LOB_SPEED ((float)SG_HOST_GRENADE_SPEED)
-#define LOB_UP ((float)SG_HOST_GRENADE_VERTICAL_SPEED)
-#define LOB_FUSE ((float)SG_HOST_GRENADE_FUSE_SECONDS)
+#define BLAST_RADIUS SG_FACT_ROCKET_SPLASH_RADIUS
+#define LOB_RADIUS SG_FACT_GRENADE_RADIUS
+#define LOB_SPEED SG_FACT_GRENADE_SPEED
+#define LOB_UP SG_FACT_GRENADE_RISE
+#define LOB_FUSE SG_FACT_GRENADE_FUSE
 
 static const float lob_pitches[] = { 10.0f, 25.0f, 40.0f, 55.0f };
 #define LOB_PITCHES (sizeof(lob_pitches) / sizeof(lob_pitches[0]))
@@ -47,8 +48,7 @@ typedef struct floor_s
 
 typedef struct fire_build_s
 {
-	const sg_bsp_world_t *bsp;
-	const sg_host_collision_authority_t *authority;
+	const sg_rune_bsp_t *bsp;
 	sg_rune_cx_view_t view;
 	const sg_rune_law_t *law;
 	sg_rune_fire_store_t *store;
@@ -86,7 +86,7 @@ static int Reserve(sg_rune_fire_store_t *store, uint32_t more)
 static int Clear(fire_build_t *build, const float from[3], const float to[3],
 	float half, float *reach_out)
 {
-	sg_host_collision_trace_t trace;
+	sg_rune_trace_t trace;
 	float mins[3] = { -half, -half, -half }, maxs[3] = { half, half, half };
 	float dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
 	float length = sqrtf(dx * dx + dy * dy + dz * dz);
@@ -94,8 +94,8 @@ static int Clear(fire_build_t *build, const float from[3], const float to[3],
 	build->report.traces++;
 	if (reach_out)
 		*reach_out = 0.0f;
-	if (!SG_HostCollisionTrace(build->authority, NULL, from, mins, maxs, to,
-		SG_HOST_MASK_PLAYER_SOLID, &trace) || trace.startsolid)
+	if (!SG_RuneTraceBox(build->bsp, 0U, NULL, from, mins, maxs, to,
+		SG_RUNE_MASK_PLAYER_SOLID, &trace) || trace.startsolid)
 		return 0;
 	if (reach_out)
 		*reach_out = trace.fraction * length;
@@ -349,8 +349,8 @@ static int RelationsFrom(fire_build_t *build, const floor_t *source)
 	return 1;
 }
 
-int SG_RuneFireEmit(const sg_bsp_world_t *bsp,
-	const sg_host_collision_authority_t *authority, const sg_rune_cx_t *cx,
+int SG_RuneFireEmit(const sg_rune_bsp_t *bsp,
+	const sg_rune_cx_t *cx,
 	const sg_rune_law_t *law, sg_rune_fire_store_t *store,
 	sg_rune_fire_progress_fn progress, void *progress_context,
 	sg_rune_fire_report_t *report_out)
@@ -361,13 +361,12 @@ int SG_RuneFireEmit(const sg_bsp_world_t *bsp,
 
 	if (report_out)
 		memset(report_out, 0, sizeof(*report_out));
-	if (!bsp || !authority || !cx || !law || !store)
+	if (!bsp || !cx || !law || !store)
 		return 0;
 	memset(&build, 0, sizeof(build));
 	if (!SG_RuneCxRead(cx, &build.view))
 		return 0;
 	build.bsp = bsp;
-	build.authority = authority;
 	build.law = law;
 	build.store = store;
 	build.artifact.complex = build.view;

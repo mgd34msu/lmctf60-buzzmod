@@ -8,7 +8,17 @@
 
 #include <stdint.h>
 
-#include "sg_host_hook_law.h"
+/* Where the rope is: nothing out, the bolt flying, the body being pulled,
+ * or let go and coasting on the pull's last velocity. */
+struct sg_rune_law_s;
+
+typedef enum sg_tactic_hook_phase_e
+{
+	SG_TACTIC_HOOK_IDLE = 0,
+	SG_TACTIC_HOOK_IN_FLIGHT,
+	SG_TACTIC_HOOK_ATTACHED,
+	SG_TACTIC_HOOK_COAST
+} sg_tactic_hook_phase_t;
 #include "sg_rune_field.h"
 
 typedef enum sg_tactic_command_status_e
@@ -27,12 +37,13 @@ typedef struct sg_tactic_body_s
 	uint8_t supported;
 	uint8_t waterlevel;
 	uint8_t crouched;
-	sg_host_hook_phase_t hook_phase;
+	sg_tactic_hook_phase_t hook_phase;
 	uint8_t launcher_ready;   /* rocket launcher in hand, ready, loaded */
 	uint8_t hook_ready;       /* the offhand hook may be fired now */
 	float gravity;
 	uint32_t frame_ms;
 	uint32_t substep_ms;
+	const struct sg_rune_law_s *law;  /* the level's law: speeds, the jump, the rocket jump */
 } sg_tactic_body_t;
 
 typedef struct sg_tactic_command_s

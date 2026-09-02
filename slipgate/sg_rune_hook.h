@@ -16,8 +16,7 @@
 
 #include "sg_rune_movement.h"
 
-struct sg_bsp_world_s;
-struct sg_host_collision_authority_s;
+struct sg_rune_bsp_s;
 struct sg_rune_cx_s;
 struct sg_rune_law_s;
 
@@ -33,8 +32,7 @@ typedef struct sg_rune_hook_report_s
 	uint32_t flights;         /* releases that were traced */
 } sg_rune_hook_report_t;
 
-int SG_RuneHookEmit(const struct sg_bsp_world_s *bsp,
-	const struct sg_host_collision_authority_s *authority,
+int SG_RuneHookEmit(const struct sg_rune_bsp_s *bsp,
 	const struct sg_rune_cx_s *cx, const struct sg_rune_law_s *law,
 	sg_rune_move_store_t *movement, sg_rune_hook_report_t *report_out);
 

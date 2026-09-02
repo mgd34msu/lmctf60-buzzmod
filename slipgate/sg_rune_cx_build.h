@@ -70,10 +70,10 @@ typedef struct sg_rune_cx_error_s
  * transactional caller code. */
 /* Geometry straight from a configuration space and its regions, without the
  * builder: what the builder path calls, and what the map driver calls. */
-struct sg_bsp_world_s;
+struct sg_rune_bsp_s;
 struct sg_configuration_space_s;
 struct sg_configuration_semantics_s;
-int SG_RuneCxFromSpace(const struct sg_bsp_world_s *world,
+int SG_RuneCxFromSpace(const struct sg_rune_bsp_s *world,
 	const struct sg_configuration_space_s *configuration,
 	const struct sg_configuration_semantics_s *semantics,
 	const sg_rune_cx_allocator_t *allocator,

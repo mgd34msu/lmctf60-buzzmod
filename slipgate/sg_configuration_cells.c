@@ -26,15 +26,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sg_bsp_world.h"
-#include "sg_host_collision.h"
+#include "sg_rune_bsp.h"
+#include "sg_rune_trace.h"
+#include "sg_rune_law.h"
 
 #define CELL_EPSILON 0.01f
 #define CELL_AREA_EPSILON 0.001f
 #define CELL_STANDING_RISE 28.0f
 #define CELL_GRID_SPAN 256.0f
-#define CELL_PLAYER_SOLID (SG_HOST_CONTENTS_SOLID | SG_HOST_CONTENTS_WINDOW | \
-	SG_HOST_CONTENTS_PLAYER_CLIP | SG_HOST_CONTENTS_MONSTER)
+#define CELL_PLAYER_SOLID (SG_RUNE_CONTENTS_SOLID | SG_RUNE_CONTENTS_WINDOW | \
+	SG_RUNE_CONTENTS_PLAYERCLIP | SG_RUNE_CONTENTS_MONSTER)
 
 /* ---- transient polytopes ------------------------------------------------ */
 
@@ -489,12 +490,37 @@ failure:
 	return -1;
 }
 
+/* ---- the body at a point ----------------------------------------------------- */
+
+static const sg_rune_law_t *sg_cells_law;
+static const sg_rune_bsp_t *sg_cells_bsp;
+
+static int Pose(const sg_rune_law_t *law, const float point[3],
+	sg_cfg_stance_t stance, sg_rune_pose_t *pose_out)
+{
+	const float *mins, *maxs;
+	float view;
+
+	SG_RuneLawHull(law, stance == SG_CFG_CROUCHING, &mins, &maxs, &view);
+	SG_RuneTracePose(sg_cells_bsp, point, mins, maxs, view, pose_out);
+	return 1;
+}
+
+static int Clear(const sg_rune_law_t *law, const float from[3], const float to[3],
+	sg_cfg_stance_t stance)
+{
+	const float *mins, *maxs;
+
+	SG_RuneLawHull(law, stance == SG_CFG_CROUCHING, &mins, &maxs, NULL);
+	return SG_RuneTraceClear(sg_cells_bsp, from, to, mins, maxs);
+}
+
 /* ---- build state --------------------------------------------------------- */
 
 typedef struct cell_build_s
 {
-	const sg_host_collision_authority_t *authority;
-	const sg_bsp_world_t *world;
+	const sg_rune_law_t *law;
+	const sg_rune_bsp_t *world;
 	sg_configuration_limits_t limits;
 	sg_configuration_space_t *space;
 	sg_configuration_progress_fn progress;
@@ -549,12 +575,12 @@ static float Q8(float value)
 static int GatherBrushesInBox(cell_build_t *build, int32_t node,
 	const float mins[3], const float maxs[3], uint32_t leaf_mark)
 {
-	const sg_bsp_world_t *world = build->world;
+	const sg_rune_bsp_t *world = build->world;
 
 	while (node >= 0)
 	{
-		const sg_bsp_node_t *record;
-		const sg_bsp_plane_t *plane;
+		const sg_rune_bsp_node_t *record;
+		const sg_rune_bsp_plane_t *plane;
 		float low = 0.0f, high = 0.0f;
 		uint32_t axis;
 
@@ -566,7 +592,7 @@ static int GatherBrushesInBox(cell_build_t *build, int32_t node,
 		plane = &world->planes[record->plane];
 		for (axis = 0U; axis < 3U; axis++)
 		{
-			const float n = plane->normal.value[axis];
+			const float n = plane->normal[axis];
 
 			low += n < 0.0f ? n * maxs[axis] : n * mins[axis];
 			high += n < 0.0f ? n * mins[axis] : n * maxs[axis];
@@ -585,7 +611,7 @@ static int GatherBrushesInBox(cell_build_t *build, int32_t node,
 	}
 	{
 		const uint32_t leaf = (uint32_t)(-1 - node);
-		const sg_bsp_leaf_t *record;
+		const sg_rune_bsp_leaf_t *record;
 		uint32_t offset;
 
 		if (leaf >= world->leaf_count)
@@ -617,7 +643,7 @@ static int GatherBrushesInBox(cell_build_t *build, int32_t node,
 
 /* ---- carving one leaf ---------------------------------------------------- */
 
-static float HullOffset(const sg_rune_hull_profile_t *hull,
+static float HullOffset(const sg_cfg_hull_t *hull,
 	const float normal[3])
 {
 	float result = 0.0f;
@@ -634,11 +660,11 @@ static float HullOffset(const sg_rune_hull_profile_t *hull,
  * outside any side are free and go to the output; what is inside every side
  * is solid and is dropped. */
 static int SubtractBrush(cell_build_t *build, uint32_t brush_index,
-	const sg_rune_hull_profile_t *hull, polytope_list_t *pieces,
+	const sg_cfg_hull_t *hull, polytope_list_t *pieces,
 	polytope_list_t *out)
 {
-	const sg_bsp_world_t *world = build->world;
-	const sg_bsp_brush_t *brush = &world->brushes[brush_index];
+	const sg_rune_bsp_t *world = build->world;
+	const sg_rune_bsp_brush_t *brush = &world->brushes[brush_index];
 	uint32_t piece;
 
 	for (piece = 0U; piece < pieces->count; piece++)
@@ -650,26 +676,26 @@ static int SubtractBrush(cell_build_t *build, uint32_t brush_index,
 		for (side = 0U; side < brush->side_count && current.count; side++)
 		{
 			const uint32_t side_index = brush->first_side + side;
-			const sg_bsp_brush_side_t *record;
-			const sg_bsp_plane_t *source;
+			const sg_rune_bsp_side_t *record;
+			const sg_rune_bsp_plane_t *source;
 			sg_configuration_plane_t plane;
 			polytope_t inside, outside;
 			uint32_t axis;
 
-			if (side_index >= world->brush_side_count)
+			if (side_index >= world->side_count)
 				goto invalid;
-			record = &world->brush_sides[side_index];
+			record = &world->sides[side_index];
 			if (record->plane >= world->plane_count)
 				goto invalid;
 			source = &world->planes[record->plane];
 			memset(&plane, 0, sizeof(plane));
 			for (axis = 0U; axis < 3U; axis++)
-				plane.normal[axis] = source->normal.value[axis];
+				plane.normal[axis] = source->normal[axis];
 			/* Inside the expanded brush: n.p <= d - hull offset. */
 			plane.distance = source->distance - HullOffset(hull, plane.normal);
 			plane.source_kind = SG_CONFIGURATION_PLANE_EXPANDED_BRUSH;
 			plane.source_index = side_index;
-			plane.source_variant = SG_RUNE_STANCE_CROUCHING;
+			plane.source_variant = SG_CFG_CROUCHING;
 			if (SplitPolytope(&current, &plane, &inside, &outside) < 0)
 			{
 				PolytopeFree(&current);
@@ -713,27 +739,27 @@ invalid:
 }
 
 static int EmitCell(cell_build_t *build, const polytope_t *poly,
-	uint32_t leaf_index, sg_rune_stance_t stance, uint32_t *cell_out);
+	uint32_t leaf_index, sg_cfg_stance_t stance, uint32_t *cell_out);
 
 static int CarveLeaf(cell_build_t *build, uint32_t leaf_index,
-	const polytope_t *leaf_poly, const sg_rune_hull_profile_t *hull)
+	const polytope_t *leaf_poly, const sg_cfg_hull_t *hull)
 {
-	const sg_bsp_world_t *world = build->world;
-	const sg_bsp_leaf_t *leaf = &world->leaves[leaf_index];
+	const sg_rune_bsp_t *world = build->world;
+	const sg_rune_bsp_leaf_t *leaf = &world->leaves[leaf_index];
 	polytope_list_t pieces, next;
 	float mins[3], maxs[3];
 	uint32_t brush, axis, index;
 
-	if (leaf->contents & SG_HOST_CONTENTS_SOLID)
+	if (leaf->contents & SG_RUNE_CONTENTS_SOLID)
 		return 1;
 	memset(&pieces, 0, sizeof(pieces));
 	memset(&next, 0, sizeof(next));
 	/* Brushes whose hull expansion can reach this leaf. */
 	for (axis = 0U; axis < 3U; axis++)
 	{
-		mins[axis] = (float)leaf->bounds.mins[axis] +
+		mins[axis] = (float)leaf->mins[axis] +
 			hull->mins.value[axis] - 1.0f;
-		maxs[axis] = (float)leaf->bounds.maxs[axis] +
+		maxs[axis] = (float)leaf->maxs[axis] +
 			hull->maxs.value[axis] + 1.0f;
 	}
 	build->brush_list_count = 0U;
@@ -782,7 +808,7 @@ static int CarveLeaf(cell_build_t *build, uint32_t leaf_index,
 		uint32_t cell;
 
 		if (!EmitCell(build, &pieces.items[index], leaf_index,
-			SG_RUNE_STANCE_CROUCHING, &cell))
+			SG_CFG_CROUCHING, &cell))
 		{
 			ListFree(&pieces);
 			ListFree(&next);
@@ -819,11 +845,11 @@ static void ReportLeaf(cell_build_t *build)
 /* Walks the tree with the polytope of the region seen so far; at a leaf that
  * polytope is the leaf's, cut by nothing but node planes and the domain. */
 static int CarveNode(cell_build_t *build, int32_t node, polytope_t *region,
-	const sg_rune_hull_profile_t *hull)
+	const sg_cfg_hull_t *hull)
 {
-	const sg_bsp_world_t *world = build->world;
-	const sg_bsp_node_t *record;
-	const sg_bsp_plane_t *source;
+	const sg_rune_bsp_t *world = build->world;
+	const sg_rune_bsp_node_t *record;
+	const sg_rune_bsp_plane_t *source;
 	sg_configuration_plane_t plane;
 	polytope_t inside, outside;
 	uint32_t axis;
@@ -856,7 +882,7 @@ static int CarveNode(cell_build_t *build, int32_t node, polytope_t *region,
 	source = &world->planes[record->plane];
 	memset(&plane, 0, sizeof(plane));
 	for (axis = 0U; axis < 3U; axis++)
-		plane.normal[axis] = source->normal.value[axis];
+		plane.normal[axis] = source->normal[axis];
 	plane.distance = source->distance;
 	plane.source_kind = SG_CONFIGURATION_PLANE_BSP;
 	plane.source_index = record->plane;
@@ -940,12 +966,12 @@ static int CellWitness(const sg_configuration_space_t *space,
 }
 
 static int EmitCell(cell_build_t *build, const polytope_t *poly,
-	uint32_t leaf_index, sg_rune_stance_t stance, uint32_t *cell_out)
+	uint32_t leaf_index, sg_cfg_stance_t stance, uint32_t *cell_out)
 {
 	sg_configuration_space_t *space = build->space;
-	const sg_bsp_leaf_t *leaf = &build->world->leaves[leaf_index];
+	const sg_rune_bsp_leaf_t *leaf = &build->world->leaves[leaf_index];
 	sg_configuration_cell_t *cell;
-	sg_host_collision_pose_t pose;
+	sg_rune_pose_t pose;
 	const uint32_t cell_index = space->cell_count;
 	uint32_t face, axis;
 	float witness[3];
@@ -990,14 +1016,14 @@ static int EmitCell(cell_build_t *build, const polytope_t *poly,
 		record->first_vertex = space->vertex_count;
 		for (point = 0U; point < source->count; point++)
 		{
-			sg_rune_vec3_t *vertex = &space->vertices[space->vertex_count + kept];
+			sg_cfg_vec3_t *vertex = &space->vertices[space->vertex_count + kept];
 			int distinct = 1;
 
 			for (axis = 0U; axis < 3U; axis++)
 				vertex->value[axis] = Q8(source->points[point][axis]);
 			if (kept)
 			{
-				const sg_rune_vec3_t *prev =
+				const sg_cfg_vec3_t *prev =
 					&space->vertices[space->vertex_count + kept - 1U];
 
 				distinct = memcmp(prev, vertex, sizeof(*vertex)) != 0;
@@ -1015,7 +1041,7 @@ static int EmitCell(cell_build_t *build, const polytope_t *poly,
 		}
 		if (kept >= 2U && memcmp(&space->vertices[space->vertex_count],
 			&space->vertices[space->vertex_count + kept - 1U],
-			sizeof(sg_rune_vec3_t)) == 0)
+			sizeof(sg_cfg_vec3_t)) == 0)
 			kept--;
 		if (kept < 3U)
 			continue;
@@ -1030,17 +1056,10 @@ static int EmitCell(cell_build_t *build, const polytope_t *poly,
 		space->face_count = cell->first_face;
 		return 1;
 	}
-	cell->order.source_set_identity = space->identity.source_set_identity;
-	cell->order.domain = SG_RUNE_ORDER_CELL;
-	cell->order.source_index = leaf_index;
-	cell->order.local_ordinal = cell_index;
-	cell->order.variant = (uint32_t)stance;
-	cell->id.value = SG_RuneModelStableIdFromOrderKey(&cell->order);
 	cell->bsp_leaf.index = leaf_index;
 	cell->bsp_area.index = leaf->area;
 	cell->bsp_cluster.index = (uint32_t)leaf->cluster;
-	cell->contents = SG_HostCollisionRuneContents(
-		(sg_host_collision_contents_t)leaf->contents);
+	cell->contents = leaf->contents;
 	if (!CellWitness(space, cell, witness))
 	{
 		space->face_count = cell->first_face;
@@ -1048,8 +1067,7 @@ static int EmitCell(cell_build_t *build, const polytope_t *poly,
 	}
 	for (axis = 0U; axis < 3U; axis++)
 		cell->interior_witness.value[axis] = witness[axis];
-	if (SG_HostCollisionClassifyPose(build->authority, NULL, witness, stance,
-		&pose) && pose.valid)
+	if (Pose(build->law, witness, stance, &pose) && pose.valid)
 	{
 		cell->witness_pose_flags |= pose.supported ?
 			SG_CONFIGURATION_POSE_SUPPORTED : SG_CONFIGURATION_POSE_AIRBORNE;
@@ -1118,7 +1136,7 @@ static int GridBuild(cell_grid_t *grid, const sg_configuration_space_t *space,
 	memset(grid->first, 0xFF, (size_t)buckets * sizeof(*grid->first));
 	for (cell = 0U; cell < cell_count; cell++)
 	{
-		const sg_rune_bounds_t *bounds = &space->cells[cell].bounds;
+		const sg_cfg_bounds_t *bounds = &space->cells[cell].bounds;
 		uint32_t low[3], high[3], x, y, z;
 
 		for (axis = 0U; axis < 3U; axis++)
@@ -1212,7 +1230,7 @@ static int EmitStancePieces(cell_build_t *build)
 	for (lower = 0U; lower < crouch_count; lower++)
 	{
 		const sg_configuration_cell_t *original = &originals[lower];
-		sg_rune_bounds_t lifted = original->bounds;
+		sg_cfg_bounds_t lifted = original->bounds;
 		polytope_list_t pending, next, standing;
 		uint32_t low[3], high[3], x, y, z, axis, index;
 		polytope_t *first;
@@ -1280,7 +1298,7 @@ static int EmitStancePieces(cell_build_t *build)
 								plane.distance -= plane.normal[2] *
 									CELL_STANDING_RISE;
 								plane.source_variant =
-									SG_RUNE_STANCE_STANDING;
+									SG_CFG_STANDING;
 								if (SplitPolytope(&current, &plane, &inside,
 									&outside) < 0)
 								{
@@ -1322,7 +1340,7 @@ static int EmitStancePieces(cell_build_t *build)
 				}
 		for (index = 0U; index < standing.count; index++)
 			if (!EmitCell(build, &standing.items[index],
-				original->bsp_leaf.index, SG_RUNE_STANCE_STANDING, NULL))
+				original->bsp_leaf.index, SG_CFG_STANDING, NULL))
 			{
 				ListFree(&pending);
 				ListFree(&next);
@@ -1331,7 +1349,7 @@ static int EmitStancePieces(cell_build_t *build)
 			}
 		for (index = 0U; index < pending.count; index++)
 			if (!EmitCell(build, &pending.items[index],
-				original->bsp_leaf.index, SG_RUNE_STANCE_CROUCHING, NULL))
+				original->bsp_leaf.index, SG_CFG_CROUCHING, NULL))
 			{
 				ListFree(&pending);
 				ListFree(&next);
@@ -1372,7 +1390,7 @@ typedef struct face_ref_s
 } face_ref_t;
 
 static uint64_t FaceKey(const sg_configuration_plane_t *plane,
-	sg_rune_stance_t stance)
+	sg_cfg_stance_t stance)
 {
 	uint64_t key = ((uint64_t)plane->source_kind << 56) ^
 		((uint64_t)plane->source_variant << 40) ^
@@ -1493,7 +1511,7 @@ static int SideWitness(const cell_build_t *build, uint32_t cell_index,
 	const sg_configuration_cell_t *cell = &space->cells[cell_index];
 	float centre[3] = { 0.0f, 0.0f, 0.0f };
 	float primary[3], fallback[3];
-	sg_host_collision_pose_t pose;
+	sg_rune_pose_t pose;
 	uint32_t vertex, axis, step;
 	int have = 0;
 
@@ -1523,14 +1541,12 @@ static int SideWitness(const cell_build_t *build, uint32_t cell_index,
 	}
 	if (!have)
 		return 0;
-	if (SG_HostCollisionClassifyPose(build->authority, NULL, primary,
-		cell->stance, &pose) && pose.valid)
+	if (Pose(build->law, primary, cell->stance, &pose) && pose.valid)
 	{
 		memcpy(witness, primary, sizeof(primary));
 		return 1;
 	}
-	if (SG_HostCollisionClassifyPose(build->authority, NULL, fallback,
-		cell->stance, &pose) && pose.valid)
+	if (Pose(build->law, fallback, cell->stance, &pose) && pose.valid)
 	{
 		memcpy(witness, fallback, sizeof(fallback));
 		return 1;
@@ -1545,13 +1561,10 @@ static int EmitPortal(cell_build_t *build, uint32_t from, uint32_t to,
 	sg_configuration_space_t *space = build->space;
 	sg_configuration_portal_t *portal;
 	const uint32_t index = space->portal_count;
-	sg_host_collision_transition_t transition;
 	uint32_t vertex, axis;
 	float clearance = INFINITY;
 
-	if (!SG_HostCollisionTransition(build->authority, NULL, from_witness,
-		to_witness, space->cells[from].stance, &transition) ||
-		!transition.clear)
+	if (!Clear(build->law, from_witness, to_witness, space->cells[from].stance))
 	{
 		portal_stats.transition_failed++;
 		return 1;
@@ -1603,12 +1616,6 @@ static int EmitPortal(cell_build_t *build, uint32_t from, uint32_t to,
 	}
 	space->vertex_count += polygon->count;
 	portal->clearance = isfinite(clearance) ? clearance : 0.0f;
-	portal->order.source_set_identity = space->identity.source_set_identity;
-	portal->order.domain = SG_RUNE_ORDER_PORTAL;
-	portal->order.source_index = from;
-	portal->order.local_ordinal = to;
-	portal->order.variant = index;
-	portal->id.value = SG_RuneModelStableIdFromOrderKey(&portal->order);
 	space->portal_count++;
 	return 1;
 }
@@ -1727,17 +1734,16 @@ void SG_ConfigurationDefaultLimits(sg_configuration_limits_t *limits_out)
 		SG_CONFIGURATION_DEFAULT_MAX_STANCE_OVERLAPS;
 }
 
-int SG_ConfigurationBuild(const sg_host_collision_authority_t *authority,
+int SG_ConfigurationBuild(const sg_rune_bsp_t *bsp, const sg_rune_law_t *law,
 	const sg_configuration_limits_t *limits,
 	sg_configuration_space_t **space_out, sg_configuration_error_t *error_out)
 {
-	return SG_ConfigurationBuildWithProgress(authority, limits, NULL, NULL,
+	return SG_ConfigurationBuildWithProgress(bsp, law, limits, NULL, NULL,
 		space_out, error_out);
 }
 
-int SG_ConfigurationBuildWithProgress(
-	const sg_host_collision_authority_t *authority,
-	const sg_configuration_limits_t *limits,
+int SG_ConfigurationBuildWithProgress(const sg_rune_bsp_t *bsp,
+	const sg_rune_law_t *law, const sg_configuration_limits_t *limits,
 	sg_configuration_progress_fn progress, void *progress_context,
 	sg_configuration_space_t **space_out, sg_configuration_error_t *error_out)
 {
@@ -1753,8 +1759,7 @@ int SG_ConfigurationBuildWithProgress(
 	if (!space_out)
 		return 0;
 	*space_out = NULL;
-	if (!authority || !authority->world || !authority->world->models ||
-		!authority->world->model_count)
+	if (!bsp || !law || !bsp->models || !bsp->model_count || !SG_RuneLawValid(law))
 	{
 		if (error_out)
 			error_out->code = SG_CONFIGURATION_ERROR_INVALID_ARGUMENT;
@@ -1763,8 +1768,10 @@ int SG_ConfigurationBuildWithProgress(
 	memset(&build, 0, sizeof(build));
 	memset(&portal_stats, 0, sizeof(portal_stats));
 	memset(&domain, 0, sizeof(domain));
-	build.authority = authority;
-	build.world = authority->world;
+	build.law = law;
+	build.world = bsp;
+	sg_cells_law = law;
+	sg_cells_bsp = bsp;
 	build.progress = progress;
 	build.progress_context = progress_context;
 	if (limits)
@@ -1782,11 +1789,10 @@ int SG_ConfigurationBuildWithProgress(
 		SetError(&build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, 0U);
 		goto done;
 	}
-	build.space->identity = authority->identity;
 	for (axis = 0U; axis < 3U; axis++)
 	{
-		mins[axis] = build.world->models[0].mins.value[axis];
-		maxs[axis] = build.world->models[0].maxs.value[axis];
+		mins[axis] = build.world->models[0].mins[axis];
+		maxs[axis] = build.world->models[0].maxs[axis];
 		build.space->domain.mins.value[axis] = mins[axis];
 		build.space->domain.maxs.value[axis] = maxs[axis];
 		if (!(maxs[axis] > mins[axis]))
@@ -1800,9 +1806,14 @@ int SG_ConfigurationBuildWithProgress(
 		SetError(&build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, 0U);
 		goto done;
 	}
-	if (!CarveNode(&build, build.world->models[0].headnode, &domain,
-		&authority->identity.crouching_hull))
-		goto done;
+	{
+		sg_cfg_hull_t crouching;
+
+		memcpy(crouching.mins.value, law->crouching_mins, sizeof(crouching.mins.value));
+		memcpy(crouching.maxs.value, law->crouching_maxs, sizeof(crouching.maxs.value));
+		if (!CarveNode(&build, build.world->models[0].headnode, &domain, &crouching))
+			goto done;
+	}
 	if (!EmitStancePieces(&build))
 		goto done;
 	if (!EmitPortals(&build))
@@ -1857,10 +1868,10 @@ const char *SG_ConfigurationErrorString(sg_configuration_error_code_t code)
 	}
 }
 
-int SG_ConfigurationBrushPolygons(const sg_bsp_world_t *world, uint32_t brush,
+int SG_ConfigurationBrushPolygons(const sg_rune_bsp_t *world, uint32_t brush,
 	sg_configuration_brush_polygon_fn fn, void *context)
 {
-	const sg_bsp_brush_t *record;
+	const sg_rune_bsp_brush_t *record;
 	polytope_t poly;
 	float mins[3], maxs[3];
 	uint32_t side, axis, face;
@@ -1871,8 +1882,8 @@ int SG_ConfigurationBrushPolygons(const sg_bsp_world_t *world, uint32_t brush,
 	record = &world->brushes[brush];
 	for (axis = 0U; axis < 3U; axis++)
 	{
-		mins[axis] = world->models[0].mins.value[axis] - 64.0f;
-		maxs[axis] = world->models[0].maxs.value[axis] + 64.0f;
+		mins[axis] = world->models[0].mins[axis] - 64.0f;
+		maxs[axis] = world->models[0].maxs[axis] + 64.0f;
 	}
 	memset(&poly, 0, sizeof(poly));
 	if (!BoxPolytope(&poly, mins, maxs))
@@ -1883,20 +1894,20 @@ int SG_ConfigurationBrushPolygons(const sg_bsp_world_t *world, uint32_t brush,
 	for (side = 0U; side < record->side_count && poly.count; side++)
 	{
 		const uint32_t side_index = record->first_side + side;
-		const sg_bsp_plane_t *source;
+		const sg_rune_bsp_plane_t *source;
 		sg_configuration_plane_t plane;
 		polytope_t inside, outside;
 
-		if (side_index >= world->brush_side_count ||
-			world->brush_sides[side_index].plane >= world->plane_count)
+		if (side_index >= world->side_count ||
+			world->sides[side_index].plane >= world->plane_count)
 		{
 			PolytopeFree(&poly);
 			return 0;
 		}
-		source = &world->planes[world->brush_sides[side_index].plane];
+		source = &world->planes[world->sides[side_index].plane];
 		memset(&plane, 0, sizeof(plane));
 		for (axis = 0U; axis < 3U; axis++)
-			plane.normal[axis] = source->normal.value[axis];
+			plane.normal[axis] = source->normal[axis];
 		plane.distance = source->distance;
 		plane.source_kind = SG_CONFIGURATION_PLANE_EXPANDED_BRUSH;
 		plane.source_index = side_index;

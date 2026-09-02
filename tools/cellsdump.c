@@ -7,8 +7,8 @@
 #include <string.h>
 #include <time.h>
 
-#include "slipgate/sg_bsp_world.h"
-#include "slipgate/sg_host_collision.h"
+#include "slipgate/sg_rune_bsp.h"
+#include "slipgate/sg_rune_law.h"
 #include "slipgate/sg_configuration_space.h"
 #include "slipgate/sg_configuration_semantics.h"
 #include "slipgate/sg_rune_cx_build.h"
@@ -42,11 +42,9 @@ static void FireProgress(void *context, uint32_t done, uint32_t total)
 
 int main(int argc, char **argv)
 {
-	sg_bsp_world_t *world = NULL;
-	sg_bsp_error_t bsp_error;
-	sg_host_collision_authority_t authority;
-	sg_host_collision_error_t host_error;
-	sg_rune_model_identity_t identity;
+	sg_rune_bsp_t bsp_store, *world = &bsp_store;
+	sg_rune_bsp_fault_t bsp_fault;
+	sg_rune_law_t law4;
 	sg_configuration_space_t *space = NULL;
 	sg_configuration_error_t error;
 	sg_configuration_semantics_t *semantics = NULL;
@@ -60,44 +58,19 @@ int main(int argc, char **argv)
 		fprintf(stderr, "usage: cellsdump MAP.bsp [OUT.rune]\n");
 		return 2;
 	}
-	if (!SG_BspWorldLoadFile(argv[1], &world, &bsp_error))
+	if (!SG_RuneBspLoadFile(argv[1], world, &bsp_fault))
 	{
-		fprintf(stderr, "bsp load failed: code %d\n", (int)bsp_error.code);
+		fprintf(stderr, "bsp load failed: %s lump %d record %u\n",
+			bsp_fault.what ? bsp_fault.what : "?", bsp_fault.lump,
+			(unsigned)bsp_fault.record);
 		return 1;
 	}
-	memset(&identity, 0, sizeof(identity));
-	memcpy(&identity.bsp_content_id, world->content_identity.bytes,
-		sizeof(identity.bsp_content_id));
-	identity.physics_abi_id = 1U;
-	identity.source_set_identity = 1U;
-	identity.standing_hull.mins.value[0] = -16.0f;
-	identity.standing_hull.mins.value[1] = -16.0f;
-	identity.standing_hull.mins.value[2] = -24.0f;
-	identity.standing_hull.maxs.value[0] = 16.0f;
-	identity.standing_hull.maxs.value[1] = 16.0f;
-	identity.standing_hull.maxs.value[2] = 32.0f;
-	identity.crouching_hull = identity.standing_hull;
-	identity.crouching_hull.maxs.value[2] = 4.0f;
-	identity.physics.gravity = 800.0f;
-	identity.physics.ground_acceleration = 10.0f;
-	identity.physics.air_acceleration = 1.0f;
-	identity.physics.water_acceleration = 10.0f;
-	identity.physics.hook_acceleration = 800.0f;
-	identity.physics.external_acceleration = 1.0f;
-	identity.physics.water_drag = 1.0f;
-	identity.physics.max_velocity = 2000.0f;
-	identity.physics.frame_ms = 100U;
-	identity.physics.substep_ms = 25U;
-	if (!SG_HostCollisionInit(&authority, world, &identity, &host_error))
-	{
-		fprintf(stderr, "host init failed\n");
-		return 1;
-	}
+	SG_RuneLawEngine(&law4, 800.0f);
 	printf("%s: %u leaves, %u brushes, %u planes\n", argv[1],
 		(unsigned)world->leaf_count, (unsigned)world->brush_count,
 		(unsigned)world->plane_count);
 	t0 = Now();
-	if (!SG_ConfigurationBuildWithProgress(&authority, NULL, Progress, NULL,
+	if (!SG_ConfigurationBuildWithProgress(world, &law4, NULL, Progress, NULL,
 		&space, &error))
 	{
 		fprintf(stderr, "cell build failed: %s (source %u)\n",
@@ -107,7 +80,7 @@ int main(int argc, char **argv)
 	}
 	t1 = Now();
 	for (cell = 0U; cell < space->cell_count; cell++)
-		if (space->cells[cell].stance == SG_RUNE_STANCE_STANDING)
+		if (space->cells[cell].stance == SG_CFG_STANDING)
 			standing++;
 	printf("cells: %u (%u crouching, %u standing), faces %u, vertices %u, "
 		"portals %u, overlaps %u  [%.2fs]\n", (unsigned)space->cell_count,
@@ -125,7 +98,7 @@ int main(int argc, char **argv)
 			(unsigned long long)stats->transition_failed);
 	}
 	SG_ConfigurationSemanticsDefaultLimits(&semantics_limits);
-	if (!SG_ConfigurationSemanticsBuild(&authority, space, &semantics_limits,
+	if (!SG_ConfigurationSemanticsBuild(world, &law4, space, &semantics_limits,
 		&semantics, &semantics_error))
 	{
 		fprintf(stderr, "semantics failed: %s (source %u)\n",
@@ -171,20 +144,11 @@ int main(int argc, char **argv)
 			sg_rune_move_store_t movement;
 			sg_rune_mech_store_t mechanisms;
 			sg_rune_fire_store_t fires;
-			sg_rune_move_law_t law;
-			sg_rune_law_t law4;
 			uint32_t counts[SG_RUNE_MOVE_KIND_COUNT];
 			uint32_t index;
 			double t4;
 
-			law.gravity = identity.physics.gravity;
-			law.frame_ms = identity.physics.frame_ms;
-			law.substep_ms = identity.physics.substep_ms;
-			memset(&law4, 0, sizeof(law4));
-			law4.gravity = identity.physics.gravity;
-			law4.frame_ms = identity.physics.frame_ms;
-			law4.substep_ms = identity.physics.substep_ms;
-			if (!SG_RuneMoveStoreInit(&movement, &law) ||
+			if (!SG_RuneMoveStoreInit(&movement, &law4) ||
 				!SG_RuneMoveEmitComplex(&movement, &view, &law4))
 			{
 				fprintf(stderr, "movement failed\n");
@@ -201,7 +165,7 @@ int main(int argc, char **argv)
 				sg_rune_hook_report_t hooks;
 				double th = Now();
 
-				if (!SG_RuneHookEmit(world, &authority, geometry, &law4, &movement,
+				if (!SG_RuneHookEmit(world, geometry, &law4, &movement,
 					&hooks))
 				{
 					fprintf(stderr, "hook reach failed\n");
@@ -219,7 +183,7 @@ int main(int argc, char **argv)
 				double tf = Now();
 
 				SG_RuneFireStoreInit(&fires);
-				if (!SG_RuneFireEmit(world, &authority, geometry, &law4, &fires,
+				if (!SG_RuneFireEmit(world, geometry, &law4, &fires,
 					FireProgress, &tf, &fire))
 				{
 					fprintf(stderr, "fire relations failed\n");
@@ -266,25 +230,11 @@ int main(int argc, char **argv)
 
 				memset(&source, 0, sizeof(source));
 				source.identity.schema_id = SG_RUNE_ARTIFACT_SCHEMA_ID;
-				memcpy(source.identity.bsp_sha256, world->content_identity.bytes,
-					sizeof(source.identity.bsp_sha256));
-				memcpy(source.law.standing_mins, identity.standing_hull.mins.value,
-					sizeof(source.law.standing_mins));
-				memcpy(source.law.standing_maxs, identity.standing_hull.maxs.value,
-					sizeof(source.law.standing_maxs));
-				memcpy(source.law.crouching_mins, identity.crouching_hull.mins.value,
-					sizeof(source.law.crouching_mins));
-				memcpy(source.law.crouching_maxs, identity.crouching_hull.maxs.value,
-					sizeof(source.law.crouching_maxs));
-				source.law.gravity = identity.physics.gravity;
-				source.law.ground_acceleration = identity.physics.ground_acceleration;
-				source.law.air_acceleration = identity.physics.air_acceleration;
-				source.law.water_acceleration = identity.physics.water_acceleration;
-				source.law.hook_acceleration = identity.physics.hook_acceleration;
-				source.law.water_drag = identity.physics.water_drag;
-				source.law.max_velocity = identity.physics.max_velocity;
-				source.law.frame_ms = identity.physics.frame_ms;
-				source.law.substep_ms = identity.physics.substep_ms;
+				source.identity.bsp_crc32 = world->file_crc32;
+				source.identity.entity_crc32 = world->entity_crc32;
+				source.identity.bsp_bytes = world->file_bytes;
+				source.identity.law_crc32 = SG_RuneLawCrc(&law4);
+				source.law = law4;
 				source.complex = view;
 				SG_RuneMoveStoreView(&movement, &source.movement);
 				SG_RuneMechStoreView(&mechanisms, &source.mechanisms);
@@ -330,6 +280,6 @@ int main(int argc, char **argv)
 	}
 	SG_ConfigurationSemanticsDestroy(semantics);
 	SG_ConfigurationDestroy(space);
-	SG_BspWorldDestroy(world);
+	SG_RuneBspFree(world);
 	return 0;
 }

@@ -71,16 +71,14 @@ void SG_RuneFireStoreFree(sg_rune_fire_store_t *store);
 void SG_RuneFireStoreView(const sg_rune_fire_store_t *store,
 	sg_rune_fire_table_t *table_out);
 
-struct sg_bsp_world_s;
-struct sg_host_collision_authority_s;
+struct sg_rune_bsp_s;
 struct sg_rune_cx_s;
 struct sg_rune_law_s;
 
 typedef void (*sg_rune_fire_progress_fn)(void *context, uint32_t done,
 	uint32_t total);
 
-int SG_RuneFireEmit(const struct sg_bsp_world_s *bsp,
-	const struct sg_host_collision_authority_s *authority,
+int SG_RuneFireEmit(const struct sg_rune_bsp_s *bsp,
 	const struct sg_rune_cx_s *cx, const struct sg_rune_law_s *law,
 	sg_rune_fire_store_t *store, sg_rune_fire_progress_fn progress,
 	void *progress_context, sg_rune_fire_report_t *report_out);

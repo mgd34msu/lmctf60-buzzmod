@@ -9,10 +9,7 @@
 #include "stdlog.h"	//	StdLog - Mark Davies
 #include "gslog.h"	//	StdLog - Mark Davies
 #include "bat.h"
-#include "slipgate/sg_identity.h"
-#include "slipgate/sg_host_law_owner.h"
-#include "slipgate/sg_rune_source_authority_owner.h"
-#include "slipgate/sg_net.h"
+#include "slipgate/sg_bot_host.h"
 #include "slipgate/sg_local.h"
 
 #ifdef _WIN32
@@ -144,9 +141,6 @@ void ShutdownGame (void)
 	sl_GameEnd( &gi, level );	// StdLog - Mark Davies
 
 	SG_RosterStorageReset();
-	SG_RuneSourceAuthorityReset();
-	SG_HostLawProductionReset();
-	SG_LevelIdentityReset();
 	DB_Conn_Cleanup();	// close the shared stats database, if it was opened
 	stats_log_reset();	// free the stats list before its TAG_GAME pool goes
 
@@ -181,7 +175,7 @@ q_exported game_export_t *GetGameAPI (game_import_t *import)
 	 * through this redirection (see slipgate/sg_net.c), so it has to be
 	 * installed before anything uses gi -- and before anything caches a
 	 * copy of a slot. */
-	SG_NetInstall();
+	SG_BotHostInstall();
 
 	globals.apiversion = GAME_API_VERSION;
 	globals.Init = InitGame;

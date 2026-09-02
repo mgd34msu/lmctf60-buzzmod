@@ -15,12 +15,9 @@
 
 #include <string.h>
 
-#include "sg_hooks.h"
-#include "sg_net.h"
-#include "sg_persona.h"
-#include "sg_persona_assignment.h"
-#include "sg_pov_identity.h"
-#include "sg_util.h"
+#include "sg_bot_persona.h"
+#include "sg_bot_host.h"
+#include "sg_bot_util.h"
 
 void ClientDisconnect(edict_t *ent);
 qboolean ClientConnect(edict_t *ent, char *userinfo);
@@ -29,11 +26,6 @@ void ClientUserinfoChanged(edict_t *ent, char *userinfo);
 
 sg_bot_t sg_bots[SG_MAXBOTS];
 
-/* Sixteen names, one per slot, so no two bots ever share an identity. */
-static const char *sg_names[16] = {
-	"Arach", "Caco", "Rune", "Slip", "Gate", "Phase", "Field", "Trace",
-	"Vore", "Fiend", "Scrag", "Ogre", "Knight", "Wizard", "Spawn", "Shal",
-};
 
 /* Scoped across SG_AddBotTeam's synchronous ClientConnect call only, so a
  * server-owned fake client passes the password check without carrying the
@@ -52,7 +44,6 @@ static void SlotClear(sg_bot_t *bot)
 
 	if (slot >= 0 && slot < SG_MAXBOTS && bot->instance_token != 0ULL)
 		POVLock_SGInstanceRetired(slot, bot->instance_token);
-	SG_BotPOVInstanceReset(bot);
 	memset(bot, 0, sizeof(*bot));
 	SG_BotSlotInit(bot);
 }
@@ -66,12 +57,13 @@ static void Drop(int slot)
 	if (ent && ent->client && ent->inuse)
 		ClientDisconnect(ent);
 	if (ent)
-		SG_FreeClientEdict(ent);
+		SG_BotHostFreeClient(ent);
 	SlotClear(&sg_bots[slot]);
 }
 
 /* ---- botfill ---------------------------------------------------------- */
 
+static unsigned long long sg_next_token = 1ULL;
 static float sg_botfill_next_check;
 static int sg_botfill_over_streak[2];
 static int sg_botfill_under_streak[2];
@@ -114,7 +106,7 @@ static qboolean RemoveOne(int team)
 
 	if (worst < 0)
 		return false;
-	sg_host.bprint(PRINT_HIGH, "%s yields its slot.\n",
+	gi.bprintf(PRINT_HIGH, "%s yields its slot.\n",
 		sg_bots[worst].ent->client->pers.netname);
 	Drop(worst);
 	return true;
@@ -126,7 +118,7 @@ static qboolean RemoveOne(int team)
  * empty server fills at once. */
 void Botfill_Frame(void)
 {
-	cvar_t *fill = sg_host.cvar("sv_botfill", "0", 0);
+	cvar_t *fill = gi.cvar("sv_botfill", "0", 0);
 	int want[2];
 	int humans[2] = { 0, 0 }, bots[2] = { 0, 0 };
 	int i, t;
@@ -227,11 +219,12 @@ static uint32_t OccupiedNames(void)
 
 		if (!e->inuse || !e->client)
 			continue;
-		for (row = 0; row < 16; row++)
+		for (row = 0; row < SG_BotPersonaCount(); row++)
 		{
 			char candidate[32];
 
-			Com_sprintf(candidate, sizeof(candidate), "[SG]%s", sg_names[row]);
+			Com_sprintf(candidate, sizeof(candidate), "[SG]%s",
+				SG_BotPersonaAt(row)->name);
 			if (!Q_stricmp(e->client->pers.netname, candidate))
 			{
 				occupied |= UINT32_C(1) << row;
@@ -253,7 +246,7 @@ qboolean SG_AddBotTeam(int teamnum)
 	char userinfo[MAX_INFO_STRING];
 	char name[32];
 	int i, slot = -1;
-	unsigned persona_slot;
+	int persona;
 
 	(void)SG_LevelSetup();
 	for (i = 0; i < SG_MAXBOTS; i++)
@@ -267,14 +260,16 @@ qboolean SG_AddBotTeam(int teamnum)
 	SlotClear(&sg_bots[slot]);
 	memset(userinfo, 0, sizeof(userinfo));
 	/* "[SG]Arach": a name a human or an earlier bot wears is occupied. */
-	persona_slot = SG_PersonaAssignmentChoose(OccupiedNames(), (unsigned)slot);
-	Com_sprintf(name, sizeof(name), "[SG]%s", sg_names[persona_slot]);
+	persona = SG_BotPersonaPick(OccupiedNames(), slot);
+	if (persona < 0)
+		return false;
+	Com_sprintf(name, sizeof(name), "[SG]%s", SG_BotPersonaAt(persona)->name);
 	Info_SetValueForKey(userinfo, "name", name);
 	/* A CTF-conforming skin request; the team letter is corrected once the
 	 * team is known. */
 	Info_SetValueForKey(userinfo, "skin", va("male/rb-rm%d", 1 + (slot % 6)));
 	Info_SetValueForKey(userinfo, "hand", "0");
-	ent = SG_SpawnClientEdict();
+	ent = SG_BotHostSpawnClient();
 	if (!ent)
 		return false;
 	/* Recycled gclient storage: CTF state is not part of the new identity. */
@@ -285,7 +280,7 @@ qboolean SG_AddBotTeam(int teamnum)
 	if (!ClientConnect(ent, userinfo))
 	{
 		sg_internal_connect_ent = NULL;
-		SG_FreeClientEdict(ent);
+		SG_BotHostFreeClient(ent);
 		return false;
 	}
 	sg_internal_connect_ent = NULL;
@@ -311,7 +306,7 @@ qboolean SG_AddBotTeam(int teamnum)
 		ent->client->ctf.teamnum != CTF_TEAM_BLUE)
 	{
 		ClientDisconnect(ent);
-		SG_FreeClientEdict(ent);
+		SG_BotHostFreeClient(ent);
 		SlotClear(&sg_bots[slot]);
 		return false;
 	}
@@ -323,26 +318,13 @@ qboolean SG_AddBotTeam(int teamnum)
 	ent->client->ctf.extra_flags |=
 		(CTF_EXTRAFLAGS_RADIO_TEXT | CTF_EXTRAFLAGS_RADIO_SOUND);
 	sg_bots[slot].ent = ent;
-	if (!SG_BotPOVInstanceAssign(&sg_bots[slot]))
-	{
-		ClientDisconnect(ent);
-		SG_FreeClientEdict(ent);
-		SlotClear(&sg_bots[slot]);
-		return false;
-	}
 	sg_bots[slot].active = true;
+	sg_bots[slot].instance_token = sg_next_token++;
 	SG_BotSlotInit(&sg_bots[slot]);
 	VectorCopy(ent->s.origin, sg_bots[slot].stuck_origin);
 	sg_bots[slot].stuck_since = level.time;
-	SG_PersonaBind(ent, (int)persona_slot);
-	{
-		const char *pname = SG_PersonaName(ent);
-
-		if (pname)
-			sg_host.dprint("slipgate: %s entered (persona %s)\n", name, pname);
-		else
-			sg_host.dprint("slipgate: %s entered\n", name);
-	}
+	SG_BotPersonaBind(ent, persona);
+	gi.dprintf("slipgate: %s entered\n", name);
 	return true;
 }
 
@@ -383,14 +365,14 @@ void SG_ListBots(void)
 
 		if (!sg_bots[i].active || !ent || !ent->client)
 			continue;
-		sg_host.cprint(NULL, PRINT_HIGH,
+		gi.cprintf(NULL, PRINT_HIGH,
 			"%2d %-16s team %d score %3d role %d cell %u\n", i,
 			ent->client->pers.netname, ent->client->ctf.teamnum,
 			ent->client->resp.score, sg_bots[i].role,
 			(unsigned int)sg_bots[i].cell);
 		n++;
 	}
-	sg_host.cprint(NULL, PRINT_HIGH, "%d bot%s\n", n, n == 1 ? "" : "s");
+	gi.cprintf(NULL, PRINT_HIGH, "%d bot%s\n", n, n == 1 ? "" : "s");
 }
 
 /* By netname, with or without the [SG] tag, or by slot number. */
@@ -428,4 +410,48 @@ qboolean SG_KickWorst(void)
 		return false;
 	Drop(worst);
 	return true;
+}
+
+/* Whether an entity is one of our bots. */
+qboolean SG_OwnsBot(edict_t *ent)
+{
+	int i;
+
+	if (!ent || !(ent->flags & FL_BOT))
+		return false;
+	for (i = 0; i < SG_MAXBOTS; i++)
+		if (sg_bots[i].active && sg_bots[i].ent == ent)
+			return true;
+	return false;
+}
+
+/* A bot's slot and the token of this spawn of it: the chase cam follows a
+ * bot by these so a new bot in the same slot is not mistaken for it. */
+
+qboolean SG_BotPOVIdentity(edict_t *ent, int *slot_out,
+	unsigned long long *instance_out)
+{
+	int i;
+
+	if (!ent || !ent->inuse || !ent->client || !(ent->flags & FL_BOT))
+		return false;
+	for (i = 0; i < SG_MAXBOTS; i++)
+		if (sg_bots[i].active && sg_bots[i].ent == ent)
+		{
+			if (slot_out)
+				*slot_out = i;
+			if (instance_out)
+				*instance_out = sg_bots[i].instance_token;
+			return true;
+		}
+	return false;
+}
+
+edict_t *SG_BotPOVResolve(int slot, unsigned long long instance_token)
+{
+	if (slot < 0 || slot >= SG_MAXBOTS || !sg_bots[slot].active ||
+		sg_bots[slot].instance_token != instance_token || !sg_bots[slot].ent ||
+		!sg_bots[slot].ent->inuse || !sg_bots[slot].ent->client)
+		return NULL;
+	return sg_bots[slot].ent;
 }

@@ -69,6 +69,11 @@ uint32_t SG_RuneLevelFire(uint32_t cell, uint32_t target);
 int SG_RuneLevelDefendPost(uint32_t flag_cell, int slot, float point_out[3],
 	float facing_out[3]);
 
+/* The entity text the level was spawned from (after any override file),
+ * kept for the identity and for generation on this level. */
+void SG_RuneLevelEntities(const char *text);
+const char *SG_RuneLevelEntityText(void);
+
 /* Point to cell under the level's locator. */
 uint32_t SG_RuneLevelLocate(const float origin[3], int crouching,
 	float *violation_out);

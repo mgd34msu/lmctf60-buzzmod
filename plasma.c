@@ -49,7 +49,7 @@ int damage;
 
 	//bat
 	if(quadmeister)
-		damage = PLASMA_BOUNCE_DAMAGE * SG_HOST_DAMAGE_QUAD_SCALE;
+		damage = PLASMA_BOUNCE_DAMAGE * 4;
 	else
 		damage = PLASMA_BOUNCE_DAMAGE;
 
@@ -122,7 +122,7 @@ int damage;
 	
 	//bat
 	if(quadmeister)
-		damage = PLASMA_SPREAD_DAMAGE * SG_HOST_DAMAGE_QUAD_SCALE;
+		damage = PLASMA_SPREAD_DAMAGE * 4;
 	else
 		damage = PLASMA_SPREAD_DAMAGE;
 

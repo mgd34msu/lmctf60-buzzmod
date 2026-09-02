@@ -1,6 +1,5 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
-#include "slipgate/sg_host_mechanism_law.h"
 
 /*
 =========================================================
@@ -70,56 +69,6 @@
 #define SG_MOVER_TRAIN_DEFAULT_DAMAGE	100
 #define SG_MOVER_NONCLIENT_DAMAGE	100000
 
-/* This is the production mover owner queried by the host-law publication.
- * The values mirror the actual Move_Calc/plat/door/train setup in this file;
- * notably SP_func_door doubles its stock 100 speed in deathmatch. */
-int SG_HostMechanismLiveCapture(sg_host_mechanism_law_t *law_out)
-{
-	if (!law_out)
-		return 0;
-	memset(law_out, 0, sizeof(*law_out));
-	law_out->version = SG_HOST_MECHANISM_LAW_VERSION;
-	law_out->frame_ms = (uint32_t)(FRAMETIME * 1000.0f);
-	law_out->move_equation_id = SG_HOST_MECHANISM_MOVE_EQUATION_ID;
-	law_out->acceleration_equation_id = SG_HOST_MECHANISM_ACCEL_EQUATION_ID;
-	law_out->door_equation_id = SG_HOST_MECHANISM_DOOR_EQUATION_ID;
-	law_out->platform_equation_id = SG_HOST_MECHANISM_PLAT_EQUATION_ID;
-	law_out->trigger_equation_id = SG_HOST_MECHANISM_TRIGGER_EQUATION_ID;
-	law_out->train_equation_id = SG_HOST_MECHANISM_TRAIN_EQUATION_ID;
-	law_out->identity = SG_HOST_MECHANISM_LAW_ID;
-	law_out->door_default_wait_ms =
-		(uint32_t)(SG_MOVER_DEFAULT_WAIT * 1000.0f);
-	law_out->platform_top_dwell_ms =
-		(uint32_t)(SG_MOVER_PLAT_TOP_DWELL * 1000.0f);
-	law_out->platform_top_touch_delay_ms =
-		(uint32_t)(SG_MOVER_PLAT_TOP_TOUCH_DELAY * 1000.0f);
-	law_out->door_trigger_debounce_ms =
-		(uint32_t)(SG_MOVER_DOOR_TRIGGER_DEBOUNCE * 1000.0f);
-	law_out->door_message_debounce_ms =
-		(uint32_t)(SG_MOVER_DOOR_MESSAGE_DEBOUNCE * 1000.0f);
-	law_out->train_blocked_debounce_ms =
-		(uint32_t)(SG_MOVER_TRAIN_BLOCKED_DEBOUNCE * 1000.0f);
-	law_out->trigger_default_wait_ms =
-		(uint32_t)(SG_HOST_MECHANISM_TRIGGER_DEFAULT_WAIT_SECONDS * 1000.0f);
-	law_out->trigger_remove_delay_ms = (uint32_t)(FRAMETIME * 1000.0f);
-	law_out->frame_schedule_ms = (uint32_t)(FRAMETIME * 1000.0f);
-	law_out->door_default_speed = deathmatch && deathmatch->value ?
-		SG_MOVER_DOOR_DEFAULT_SPEED * SG_MOVER_DOOR_DEATHMATCH_SCALE :
-		SG_MOVER_DOOR_DEFAULT_SPEED;
-	/* Rotating doors use SP_func_door_rotating's stock speed and are not
-	 * subject to func_door's deathmatch multiplier. */
-	law_out->door_rotating_default_speed = SG_MOVER_DOOR_DEFAULT_SPEED;
-	law_out->button_default_speed = 40.0f;
-	law_out->door_default_lip = 8.0f;
-	law_out->button_default_lip = 4.0f;
-	law_out->platform_default_lip = 8.0f;
-	law_out->platform_default_speed = SG_MOVER_PLAT_DEFAULT_SPEED;
-	law_out->platform_default_accel = SG_MOVER_PLAT_DEFAULT_ACCEL;
-	law_out->platform_default_decel = SG_MOVER_PLAT_DEFAULT_DECEL;
-	law_out->train_default_speed = SG_MOVER_TRAIN_DEFAULT_SPEED;
-	law_out->train_default_damage = SG_MOVER_TRAIN_DEFAULT_DAMAGE;
-	return 1;
-}
 
 
 //

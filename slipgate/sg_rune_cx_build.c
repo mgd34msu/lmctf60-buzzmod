@@ -14,10 +14,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sg_bsp_world.h"
+#include "sg_rune_bsp.h"
 #include "sg_configuration_semantics.h"
 #include "sg_configuration_space.h"
-#include "sg_host_collision.h"
+#include "sg_rune_trace.h"
+#include "sg_rune_law.h"
 
 #define GEOMETRY_STATE UINT32_C(0x47454f4d)
 
@@ -46,7 +47,7 @@ struct sg_rune_cx_s
 typedef struct geometry_build_s
 {
 	sg_rune_cx_t *geometry;
-	const sg_bsp_world_t *world;
+	const sg_rune_bsp_t *world;
 	const sg_configuration_space_t *configuration;
 	const sg_configuration_semantics_t *semantics;
 	uint32_t facet_capacity, incidence_capacity, vertex_capacity;
@@ -190,7 +191,7 @@ static void PortalFeet(sg_rune_cx_t *geometry)
 static sg_rune_cx_source_t FacetSource(const geometry_build_t *build,
 	const sg_configuration_plane_t *plane, uint32_t leaf)
 {
-	const sg_bsp_world_t *world = build->world;
+	const sg_rune_bsp_t *world = build->world;
 	sg_rune_cx_source_t source;
 
 	memset(&source, 0, sizeof(source));
@@ -213,11 +214,11 @@ static sg_rune_cx_source_t FacetSource(const geometry_build_t *build,
 		source.brush_side.model = 0U;
 		source.brush_side.brush_side = plane->source_index;
 		source.brush_side.brush =
-			plane->source_index < world->brush_side_count ?
+			plane->source_index < world->side_count ?
 			build->side_to_brush[plane->source_index] : UINT32_MAX;
 		source.brush_side.plane =
-			plane->source_index < world->brush_side_count ?
-			world->brush_sides[plane->source_index].plane : UINT32_MAX;
+			plane->source_index < world->side_count ?
+			world->sides[plane->source_index].plane : UINT32_MAX;
 		break;
 	}
 	return source;
@@ -256,7 +257,7 @@ static int PolygonPush(polygon_t *polygon, const float point[3])
 }
 
 static int PolygonFromVertices(polygon_t *polygon,
-	const sg_rune_vec3_t *vertices, uint32_t count)
+	const sg_cfg_vec3_t *vertices, uint32_t count)
 {
 	uint32_t index;
 
@@ -455,22 +456,22 @@ static int AppendFacet(geometry_build_t *build, uint32_t negative_cell,
 
 static int BuildSideToBrush(geometry_build_t *build)
 {
-	const sg_bsp_world_t *world = build->world;
+	const sg_rune_bsp_t *world = build->world;
 	uint32_t brush;
 
-	build->side_to_brush = malloc((size_t)(world->brush_side_count ?
-		world->brush_side_count : 1U) * sizeof(*build->side_to_brush));
+	build->side_to_brush = malloc((size_t)(world->side_count ?
+		world->side_count : 1U) * sizeof(*build->side_to_brush));
 	if (!build->side_to_brush)
 		return 0;
 	memset(build->side_to_brush, 0xFF,
-		(size_t)world->brush_side_count * sizeof(*build->side_to_brush));
+		(size_t)world->side_count * sizeof(*build->side_to_brush));
 	for (brush = 0U; brush < world->brush_count; brush++)
 	{
-		const sg_bsp_brush_t *record = &world->brushes[brush];
+		const sg_rune_bsp_brush_t *record = &world->brushes[brush];
 		uint32_t side;
 
 		for (side = 0U; side < record->side_count; side++)
-			if (record->first_side + side < world->brush_side_count)
+			if (record->first_side + side < world->side_count)
 				build->side_to_brush[record->first_side + side] = brush;
 	}
 	return 1;
@@ -509,7 +510,7 @@ static int EmitCells(geometry_build_t *build)
 			record->bounds.maxs.value[axis] = Q8(source->bounds.maxs.value[axis]);
 		}
 		record->contents = (sg_rune_cx_contents_t)source->contents;
-		record->valid_stances = source->stance == SG_RUNE_STANCE_STANDING ?
+		record->valid_stances = source->stance == SG_CFG_STANDING ?
 			(sg_rune_cx_stances_t)SG_RUNE_CX_STANCE_ALL :
 			(sg_rune_cx_stances_t)SG_RUNE_CX_STANCE_CROUCHING;
 		if (cell < semantics->region_count)
@@ -536,7 +537,7 @@ static int EmitCells(geometry_build_t *build)
 		if (record->flags & SG_CONFIGURATION_BOUNDARY_VOID)
 			geometry->cells[record->cell].semantics |=
 				SG_RUNE_CX_CELL_VOID_BOUNDARY;
-		if (record->surface_flags & SG_HOST_SURFACE_SKY)
+		if (record->surface_flags & SG_RUNE_SURF_SKY)
 			geometry->cells[record->cell].semantics |=
 				SG_RUNE_CX_CELL_SKY_BOUNDARY;
 	}
@@ -899,16 +900,16 @@ static int AppendSourceSurface(void *context, uint32_t brush,
 	surface_context_t *surface_context = context;
 	geometry_build_t *build = surface_context->build;
 	sg_rune_cx_t *geometry = build->geometry;
-	const sg_bsp_world_t *world = build->world;
+	const sg_rune_bsp_t *world = build->world;
 	sg_rune_cx_surface_t *surface;
-	const sg_bsp_plane_t *plane;
+	const sg_rune_bsp_plane_t *plane;
 	float normal[3];
 	uint32_t index, axis;
 
-	if (brush_side >= world->brush_side_count ||
-		world->brush_sides[brush_side].plane >= world->plane_count)
+	if (brush_side >= world->side_count ||
+		world->sides[brush_side].plane >= world->plane_count)
 		return 0;
-	plane = &world->planes[world->brush_sides[brush_side].plane];
+	plane = &world->planes[world->sides[brush_side].plane];
 	if (!Grow(&geometry->allocator, (void **)&geometry->surfaces,
 		&build->surface_capacity, geometry->surface_count + 1U,
 		sizeof(*geometry->surfaces)) ||
@@ -922,13 +923,13 @@ static int AppendSourceSurface(void *context, uint32_t brush,
 	surface->source.model = surface_context->model;
 	surface->source.brush = brush;
 	surface->source.brush_side = brush_side;
-	surface->source.plane = world->brush_sides[brush_side].plane;
+	surface->source.plane = world->sides[brush_side].plane;
 	{
-		int32_t texinfo = world->brush_sides[brush_side].texinfo;
+		int32_t texinfo = world->sides[brush_side].texinfo;
 		int32_t flags = texinfo >= 0 && (uint32_t)texinfo < world->texinfo_count ?
 			world->texinfos[texinfo].flags : 0;
 
-		surface->flags = (flags & SG_HOST_SURFACE_SKY) ? SG_RUNE_CX_SURFACE_SKY :
+		surface->flags = (flags & SG_RUNE_SURF_SKY) ? SG_RUNE_CX_SURFACE_SKY :
 			SG_RUNE_CX_SURFACE_HOOKABLE;
 	}
 	surface->frame = surface_context->model == 0U ?
@@ -938,7 +939,7 @@ static int AppendSourceSurface(void *context, uint32_t brush,
 	surface->parent_surface = UINT32_MAX;
 	surface->split_ordinal = 0U;
 	for (axis = 0U; axis < 3U; axis++)
-		normal[axis] = plane->normal.value[axis];
+		normal[axis] = plane->normal[axis];
 	surface->plane = PlaneBits(normal, plane->distance);
 	surface->vertices.first = geometry->surface_vertex_count;
 	surface->vertices.count = count;
@@ -952,7 +953,7 @@ static int AppendSourceSurface(void *context, uint32_t brush,
 	return 1;
 }
 
-static int MarkModelBrushes(const sg_bsp_world_t *world, int32_t node,
+static int MarkModelBrushes(const sg_rune_bsp_t *world, int32_t node,
 	uint8_t *marks)
 {
 	while (node >= 0)
@@ -965,7 +966,7 @@ static int MarkModelBrushes(const sg_bsp_world_t *world, int32_t node,
 	}
 	{
 		const uint32_t leaf = (uint32_t)(-1 - node);
-		const sg_bsp_leaf_t *record;
+		const sg_rune_bsp_leaf_t *record;
 		uint32_t offset;
 
 		if (leaf >= world->leaf_count)
@@ -986,7 +987,7 @@ static int MarkModelBrushes(const sg_bsp_world_t *world, int32_t node,
 
 static int EmitSourceSurfaces(geometry_build_t *build)
 {
-	const sg_bsp_world_t *world = build->world;
+	const sg_rune_bsp_t *world = build->world;
 	uint8_t *marks;
 	uint32_t model, brush;
 	int ok = 0;
@@ -1008,7 +1009,7 @@ static int EmitSourceSurfaces(geometry_build_t *build)
 		for (brush = 0U; brush < world->brush_count; brush++)
 		{
 			if (!marks[brush] ||
-				!(world->brushes[brush].contents & SG_HOST_CONTENTS_SOLID))
+				!(world->brushes[brush].contents & SG_RUNE_CONTENTS_SOLID))
 				continue;
 			if (!SG_ConfigurationBrushPolygons(world, brush, AppendSourceSurface,
 				&context))
@@ -1029,7 +1030,7 @@ done:
 /* ---- public API --------------------------------------------------------- */
 
 
-int SG_RuneCxFromSpace(const sg_bsp_world_t *world,
+int SG_RuneCxFromSpace(const sg_rune_bsp_t *world,
 	const sg_configuration_space_t *configuration,
 	const sg_configuration_semantics_t *semantics,
 	const sg_rune_cx_allocator_t *allocator,

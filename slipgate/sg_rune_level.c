@@ -6,8 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sg_cvars.h"
-#include "sg_host_law_owner.h"
+#include "sg_bot_cvars.h"
+#include "sg_rune_bsp.h"
+#include "sg_rune_law.h"
 
 #define POST_SLOTS 2
 #define POST_FLAGS 2
@@ -23,44 +24,54 @@ static post_set_t sg_posts[POST_FLAGS];
 
 sg_rune_level_t sg_rune_level;
 
-static void IdentityFromAuthority(const sg_host_law_runtime_authority_t *view,
+static char *sg_level_entities;
+
+void SG_RuneLevelEntities(const char *text)
+{
+	free(sg_level_entities);
+	sg_level_entities = NULL;
+	if (text)
+	{
+		size_t length = strlen(text);
+
+		sg_level_entities = malloc(length + 1U);
+		if (sg_level_entities)
+			memcpy(sg_level_entities, text, length + 1U);
+	}
+}
+
+const char *SG_RuneLevelEntityText(void)
+{
+	return sg_level_entities;
+}
+
+/* The live identity: the map file as it is on disk, the entity text the
+ * level was spawned from, and the law the engine runs under now.  The
+ * artifact must have been generated from the same. */
+static int LiveIdentity(const char *game_directory, const char *mapname,
 	sg_rune_identity_t *identity, sg_rune_law_t *law)
 {
-	const sg_host_law_view_t *laws = &view->view;
-	const sg_host_static_identity_t *host = &laws->static_identity;
+	char path[MAX_OSPATH];
+	sg_rune_bsp_t bsp;
+	sg_rune_bsp_fault_t fault;
 
+	if (snprintf(path, sizeof(path), "%s/maps/%s.bsp", game_directory, mapname) >=
+		(int)sizeof(path) || !SG_RuneBspLoadFile(path, &bsp, &fault))
+		return 0;
+	if (sg_level_entities && !SG_RuneBspReplaceEntities(&bsp, sg_level_entities))
+	{
+		SG_RuneBspFree(&bsp);
+		return 0;
+	}
+	SG_RuneLawEngine(law, sv_gravity ? sv_gravity->value : 800.0f);
 	memset(identity, 0, sizeof(*identity));
-	memcpy(identity->bsp_sha256, host->bsp_identity.bytes,
-		sizeof(identity->bsp_sha256));
-	identity->bsp_bytes = host->bsp_bytes;
-	identity->bsp_checksum = host->engine_checksum;
-	identity->entity_crc32 = host->entity_crc32;
-	identity->physics_abi_id = host->physics_abi_id;
-	identity->collision_law_id = laws->collision_law_id;
-	identity->pmove_law_id = laws->pmove_law_id;
-	identity->gravity_law_id = laws->gravity_law_id;
-	identity->hook_law_id = laws->hook_law_id;
-	identity->mechanism_law_id = laws->mechanism_law_id;
+	identity->bsp_crc32 = bsp.file_crc32;
+	identity->entity_crc32 = bsp.entity_crc32;
+	identity->bsp_bytes = bsp.file_bytes;
+	identity->law_crc32 = SG_RuneLawCrc(law);
 	identity->schema_id = SG_RUNE_ARTIFACT_SCHEMA_ID;
-
-	memset(law, 0, sizeof(*law));
-	memcpy(law->standing_mins, host->standing_hull.mins.value,
-		sizeof(law->standing_mins));
-	memcpy(law->standing_maxs, host->standing_hull.maxs.value,
-		sizeof(law->standing_maxs));
-	memcpy(law->crouching_mins, host->crouching_hull.mins.value,
-		sizeof(law->crouching_mins));
-	memcpy(law->crouching_maxs, host->crouching_hull.maxs.value,
-		sizeof(law->crouching_maxs));
-	law->gravity = host->physics.gravity;
-	law->ground_acceleration = host->physics.ground_acceleration;
-	law->air_acceleration = host->physics.air_acceleration;
-	law->water_acceleration = host->physics.water_acceleration;
-	law->hook_acceleration = host->physics.hook_acceleration;
-	law->water_drag = host->physics.water_drag;
-	law->max_velocity = host->physics.max_velocity;
-	law->frame_ms = host->physics.frame_ms;
-	law->substep_ms = host->physics.substep_ms;
+	SG_RuneBspFree(&bsp);
+	return 1;
 }
 
 void SG_RuneLevelClear(void)
@@ -92,8 +103,6 @@ int SG_RuneLevelBegin(const char *mapname)
 	char path[MAX_OSPATH];
 	sg_rune_artifact_status_t status;
 	sg_rune_fault_t fault;
-	sg_host_law_runtime_authority_t authority;
-	sg_host_law_result_t host_result;
 	sg_rune_identity_t identity;
 	sg_rune_law_t law;
 	int os_error = 0;
@@ -126,15 +135,13 @@ int SG_RuneLevelBegin(const char *mapname)
 		SG_RuneLevelClear();
 		return 0;
 	}
-	host_result = SG_HostLawProductionAcquire(&authority);
-	if (host_result.status != SG_HOST_LAW_OK)
+	if (!LiveIdentity(game_directory, mapname, &identity, &law))
 	{
-		gi.dprintf("slipgate: rune refused map=%s: host %s\n", mapname,
-			SG_HostLawStatusString(host_result.status));
+		gi.dprintf("slipgate: rune refused map=%s: the map file could not be "
+			"read for its identity\n", mapname);
 		SG_RuneLevelClear();
 		return 0;
 	}
-	IdentityFromAuthority(&authority, &identity, &law);
 	if (!SG_RuneIdentityMatches(&sg_rune_level.artifact.identity, &identity))
 	{
 		gi.dprintf("slipgate: rune refused map=%s: identity differs from the "

@@ -5,10 +5,11 @@
 #include <string.h>
 #include <time.h>
 
-#include "sg_bsp_world.h"
+#include "sg_rune_bsp.h"
 #include "sg_configuration_semantics.h"
 #include "sg_configuration_space.h"
-#include "sg_host_collision.h"
+#include "sg_rune_trace.h"
+#include "sg_rune_law.h"
 #include "sg_rune_cx_build.h"
 #include "sg_rune_fire.h"
 #include "sg_rune_hook.h"
@@ -59,8 +60,7 @@ static int Fail(sg_rune_generate_report_t *report, const char *error)
 	return 0;
 }
 
-int SG_RuneGenerate(const sg_bsp_world_t *world,
-	const sg_host_collision_authority_t *authority,
+int SG_RuneGenerate(const sg_rune_bsp_t *world,
 	const sg_rune_identity_t *identity, const sg_rune_law_t *law,
 	sg_rune_generate_progress_fn progress, void *progress_context,
 	unsigned char **image_out, size_t *image_size_out,
@@ -76,7 +76,6 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 	sg_rune_cx_t *complex = NULL;
 	sg_rune_cx_error_t complex_error;
 	sg_rune_move_store_t movement;
-	sg_rune_move_law_t movement_law;
 	sg_rune_mech_store_t mechanisms;
 	sg_rune_hook_report_t hooks;
 	sg_rune_fire_store_t fires;
@@ -96,7 +95,7 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 		*image_size_out = 0U;
 	link.fn = progress;
 	link.context = progress_context;
-	if (!world || !authority || !identity || !law || !image_out ||
+	if (!world || !identity || !law || !image_out ||
 		!image_size_out)
 	{
 		Fail(&report, "invalid argument");
@@ -104,7 +103,7 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 	}
 
 	Begin(&link, "cells", &report);
-	if (!SG_ConfigurationBuildWithProgress(authority, NULL, CellProgress,
+	if (!SG_ConfigurationBuildWithProgress(world, law, NULL, CellProgress,
 		&link, &space, &space_error))
 	{
 		Fail(&report, SG_ConfigurationErrorString(space_error.code));
@@ -114,7 +113,7 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 
 	Begin(&link, "regions", &report);
 	SG_ConfigurationSemanticsDefaultLimits(&semantics_limits);
-	if (!SG_ConfigurationSemanticsBuild(authority, space, &semantics_limits,
+	if (!SG_ConfigurationSemanticsBuild(world, law, space, &semantics_limits,
 		&semantics, &semantics_error))
 	{
 		Fail(&report, SG_ConfigurationSemanticsErrorString(
@@ -143,10 +142,7 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 	report.surfaces = source.complex.surface_count;
 
 	Begin(&link, "movement", &report);
-	movement_law.gravity = law->gravity;
-	movement_law.frame_ms = law->frame_ms;
-	movement_law.substep_ms = law->substep_ms;
-	if (!SG_RuneMoveStoreInit(&movement, &movement_law) ||
+	if (!SG_RuneMoveStoreInit(&movement, law) ||
 		!SG_RuneMoveEmitComplex(&movement, &source.complex, law))
 	{
 		Fail(&report, "movement emission failed");
@@ -158,14 +154,14 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 		goto done;
 	}
 	Begin(&link, "hook", &report);
-	if (!SG_RuneHookEmit(world, authority, complex, law, &movement, &hooks))
+	if (!SG_RuneHookEmit(world, complex, law, &movement, &hooks))
 	{
 		Fail(&report, "hook emission failed");
 		goto done;
 	}
 	report.hooks = hooks.records;
 	Begin(&link, "fire", &report);
-	if (!SG_RuneFireEmit(world, authority, complex, law, &fires, FireProgress, &link,
+	if (!SG_RuneFireEmit(world, complex, law, &fires, FireProgress, &link,
 		&fire_report))
 	{
 		Fail(&report, "fire relations failed");

@@ -1,6 +1,6 @@
 
 #include "g_local.h"
-#include "slipgate/sg_client_ownership.h"
+#include "slipgate/sg_local.h"
 #include "m_player.h"
 #include "plasma.h" // SKWiD MOD
 #include "g_ctffunc.h" //surt for some nice wrapper functions

@@ -7,9 +7,9 @@
 
 #include <string.h>
 
-#include "sg_persona.h"
+#include "sg_bot_persona.h"
 #include "sg_rune_level.h"
-#include "sg_util.h"
+#include "sg_bot_util.h"
 
 #define BASE_SECONDS 5.0f          /* route time that still counts as a base */
 #define BOT_GAP 4.0f               /* seconds between one bot's lines */
@@ -229,7 +229,7 @@ void SG_BotCalloutFrame(void)
 void SG_BotCalloutRole(sg_bot_t *bot, int role)
 {
 	edict_t *e = bot ? bot->ent : NULL;
-	const sg_persona_t *persona;
+	const sg_bot_persona_t *persona;
 	int index;
 	char text[128];
 
@@ -250,7 +250,7 @@ void SG_BotCalloutRole(sg_bot_t *bot, int role)
 	if (role == sg_bot_role[index])
 		return;
 	sg_bot_role[index] = role;
-	persona = SG_PersonaFor(e);
+	persona = SG_BotPersona(e);
 	switch (role)
 	{
 	case SG_ROLE_CARRY:
@@ -259,7 +259,7 @@ void SG_BotCalloutRole(sg_bot_t *bot, int role)
 		Say(e, KIND_HAVE_FLAG, text);
 		return;
 	case SG_ROLE_DEFEND:
-		if (persona && persona->banter_freq < 0.8f)
+		if (persona && persona->talk < 0.8f)
 			return;
 		Say(e, KIND_ROLE, "I'm on defense");
 		return;

@@ -85,12 +85,10 @@ typedef struct sg_rune_move_table_s
 } sg_rune_move_table_t;
 
 /* Host movement law the profiles derive from. */
-typedef struct sg_rune_move_law_s
-{
-	float gravity;
-	uint32_t frame_ms;
-	uint32_t substep_ms;
-} sg_rune_move_law_t;
+#include "sg_rune_law.h"
+
+/* The movement law is the rune law: gravity, the frame, the speeds. */
+typedef sg_rune_law_t sg_rune_move_law_t;
 
 /* One crossing as the builder sees it. */
 typedef struct sg_rune_move_crossing_s

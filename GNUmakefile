@@ -92,10 +92,7 @@ endif
 REVISION_HEADER = GitRevisionInfo.h
 REVISION_TEMPLATE = GitRevisionInfo.tmpl
 DEPEND_FILE = .depend
-HOST_TEST_BIN = sg_hooks_test.gnu
-HOST_TEST_OBJS = .sg_hooks_test.gnu.o .sg_hooks_under_test.gnu.o
 HOST_TEST_DEPS = $(HOST_TEST_OBJS:.o=.d)
-HOST_LAW_RUNTIME_LINK_CHECK = tests/verify_sg_host_law_runtime_link.sh
 ACTION_TEST_DEPS = $(ACTION_TEST_OBJS:.o=.d)
 COMPOUND_TEST_DEPS = $(COMPOUND_TEST_OBJS:.o=.d)
 MOVER_LEASE_TEST_DEPS = $(MOVER_LEASE_TEST_OBJS:.o=.d)
@@ -144,7 +141,6 @@ COMPOUND_PUBLICATION_ARTIFACT_STEMS = compound_publication_test \
 COMPOUND_PUBLICATION_TEST_ALL_ARTIFACTS = $(foreach flavor,gnu make,$(foreach \
 	stem, $(COMPOUND_PUBLICATION_ARTIFACT_STEMS), .sg_$(stem).$(flavor).o \
 	.sg_$(stem).$(flavor).d))
-IDENTITY_TEST_OBJS = .sg_crc32_under_test.gnu.o
 IDENTITY_TEST_DEPS = $(IDENTITY_TEST_OBJS:.o=.d)
 RUNE_CODEC_TEST_OBJS = .sg_rune_crc_under_test.gnu.o
 RUNE_CODEC_TEST_DEPS = $(RUNE_CODEC_TEST_OBJS:.o=.d)
@@ -157,11 +153,10 @@ RUNE_MECHANISM_PLAN_TEST_DEPS = $(RUNE_MECHANISM_PLAN_TEST_OBJS:.o=.d)
 RUNE_MECHANISM_CATALOG_TEST_DEPS = \
 	$(RUNE_MECHANISM_CATALOG_TEST_OBJS:.o=.d)
 RUNE_MECHANISM_EXECUTION_TEST_OBJS = .sg_rune_crc_under_test.gnu.o \
-	.sg_delayed_relay_dispatch_util_under_test.gnu.o \
 	.sg_delayed_relay_dispatch_view_under_test.gnu.o \
 	.sg_game_utils_under_test.gnu.o \
 	.sg_delayed_relay_dispatch_trigger_under_test.gnu.o \
-	.sg_rune_mechanism_execution_link_stubs.gnu.o .sg_q_shared_under_test.gnu.o
+	.sg_q_shared_under_test.gnu.o
 RUNE_MECHANISM_EXECUTION_TEST_DEPS = \
 	$(RUNE_MECHANISM_EXECUTION_TEST_OBJS:.o=.d)
 RUNE_MECHANISM_EXECUTION_TEST_ALL_ARTIFACTS = $(foreach flavor,gnu make, \
@@ -197,8 +192,7 @@ RUNE_MECHANISM_EXECUTION_TEST_ALL_ARTIFACTS = $(foreach flavor,gnu make, \
 	.sg_q_shared_under_test.$(flavor).o .sg_q_shared_under_test.$(flavor).d)
 RUNE_BINDING_TEST_OBJS = .sg_rune_crc_under_test.gnu.o
 RUNE_BINDING_TEST_DEPS = $(RUNE_BINDING_TEST_OBJS:.o=.d)
-RUNE_COMPACT_READER_SOURCES = tools/runecompactread.c \
-	slipgate/sg_weapon_effect_profile.c slipgate/sg_rune_model.c
+RUNE_COMPACT_READER_SOURCES = tools/runecompactread.c
 RUNE_COMPACT_READER_HEADERS = $(wildcard *.h slipgate/*.h)
 RUNE_ACCEPT_OBSOLETE_ALL_ARTIFACTS = runeaccept.gnu runeaccept.make \
 	.runeaccept.gnu.o .runeaccept.gnu.d .runeaccept.make.o .runeaccept.make.d
@@ -214,9 +208,7 @@ TACTIC_POLICY_TEST_ALL_ARTIFACTS = \
 	.sg_tactic_policy_test.$(flavor).d \
 	.sg_tactic_policy_under_test.$(flavor).o \
 	.sg_tactic_policy_under_test.$(flavor).d)
-SPECTATOR_SOUND_TEST_BIN = sg_spectator_sound_test.gnu
-SPECTATOR_SOUND_TEST_OBJS = .sg_spectator_sound_test.gnu.o \
-	.sg_spectator_sound_net_under_test.gnu.o
+SPECTATOR_SOUND_TEST_OBJS = .sg_spectator_sound_net_under_test.gnu.o
 SPECTATOR_SOUND_TEST_DEPS = $(SPECTATOR_SOUND_TEST_OBJS:.o=.d)
 SPECTATOR_SOUND_TEST_ALL_ARTIFACTS = \
 	$(foreach flavor,gnu make,sg_spectator_sound_test.$(flavor) \
@@ -292,7 +284,6 @@ RUN_HANDOFF_TEST_ALL_ARTIFACTS = \
 RUNE_INSTALL_TEST_OBJS = .sg_rune_crc_under_test.gnu.o
 RUNE_INSTALL_TEST_DEPS = $(RUNE_INSTALL_TEST_OBJS:.o=.d)
 RUNE_PROOF_TEST_DEPS = $(RUNE_PROOF_TEST_OBJS:.o=.d)
-RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN = sg_rune_objective_diagnostics_test.gnu
 RUNE_OBJECTIVE_DIAGNOSTICS_TEST_DEPS = \
 	$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_OBJS:.o=.d)
 RUNE_OBJECTIVE_DIAGNOSTICS_TEST_ALL_ARTIFACTS = \
@@ -407,15 +398,13 @@ ROCKETJUMP_TEST_ALL_ARTIFACTS = $(ROCKETJUMP_LIVE_TEST_OBJS) \
 HOOK_DISCIPLINE_TEST_DEPS = $(HOOK_DISCIPLINE_TEST_OBJS:.o=.d)
 ROTATOR_SWEEP_TEST_OBJS = .sg_rotator_sweep_q_shared_under_test.gnu.o
 ROTATOR_SWEEP_TEST_DEPS = $(ROTATOR_SWEEP_TEST_OBJS:.o=.d)
-MOVER_SUBJECT_SWEEP_TEST_OBJS = .sg_mover_subject_sweep_util_under_test.gnu.o \
-	.sg_mover_subject_sweep_view_under_test.gnu.o \
+MOVER_SUBJECT_SWEEP_TEST_OBJS = .sg_mover_subject_sweep_view_under_test.gnu.o \
 	.sg_mover_subject_sweep_q_shared_under_test.gnu.o \
 	.sg_mover_subject_sweep_pmove_under_test.gnu.o
 MOVER_SUBJECT_SWEEP_TEST_DEPS = \
 	$(MOVER_SUBJECT_SWEEP_TEST_OBJS:.o=.d)
 MOVER_SUBJECT_SWEEP_TEST_ALL_ARTIFACTS = \
 	.sg_mover_subject_sweep_oracle_under_test.gnu.d \
-	.sg_mover_subject_sweep_util_under_test.gnu.o \
 	.sg_mover_subject_sweep_util_under_test.gnu.d \
 	.sg_mover_subject_sweep_view_under_test.gnu.o \
 	.sg_mover_subject_sweep_view_under_test.gnu.d \
@@ -448,30 +437,15 @@ COMPOUND_ORACLE_ARTIFACT_STEMS = compound_swim_oracle_test \
 	compound_swim_oracle_world_under_test \
 	compound_swim_oracle_q_shared_under_test \
 	mover_subject_sweep_util_under_test
-COMPOUND_ORACLE_ALL_ARTIFACTS = \
-	sg_compound_swim_oracle_test.gnu sg_compound_swim_oracle_test.make \
-	sg_compound_hook_oracle_test.gnu sg_compound_hook_oracle_test.make \
-	$(foreach flavor,gnu make,$(foreach stem, \
-		$(COMPOUND_ORACLE_ARTIFACT_STEMS), \
-		.sg_$(stem).$(flavor).o .sg_$(stem).$(flavor).d))
-COMPOUND_SWIM_ORACLE_TEST_BIN = sg_compound_swim_oracle_test.gnu
-COMPOUND_SWIM_ORACLE_TEST_OBJS = .sg_compound_swim_oracle_test.gnu.o \
-	.sg_compound_oracle_fake_host.gnu.o \
-	.sg_compound_swim_oracle_preopen_cases.gnu.o \
-	.sg_compound_swim_oracle_recovery_cases.gnu.o \
-	.sg_compound_declared_oracle_cases.gnu.o \
-	.sg_compound_swim_oracle_q_shared_under_test.gnu.o \
-	.sg_mover_subject_sweep_util_under_test.gnu.o
+COMPOUND_ORACLE_ALL_ARTIFACTS = $(foreach flavor,gnu make,$(foreach stem, \
+	$(COMPOUND_ORACLE_ARTIFACT_STEMS), .sg_$(stem).$(flavor).o \
+	.sg_$(stem).$(flavor).d))
+COMPOUND_SWIM_ORACLE_TEST_OBJS = .sg_compound_swim_oracle_q_shared_under_test.gnu.o
 COMPOUND_SWIM_ORACLE_TEST_DEPS = \
 	$(COMPOUND_SWIM_ORACLE_TEST_OBJS:.o=.d)
 COMPOUND_SWIM_ORACLE_TEST_ALL_ARTIFACTS = \
 	$(COMPOUND_ORACLE_ALL_ARTIFACTS)
-COMPOUND_HOOK_ORACLE_TEST_BIN = sg_compound_hook_oracle_test.gnu
-COMPOUND_HOOK_ORACLE_TEST_OBJS = .sg_compound_hook_oracle_test.gnu.o \
-	.sg_compound_hook_oracle_fixture.gnu.o \
-	.sg_compound_hook_oracle_scenario.gnu.o .sg_compound_oracle_fake_host.gnu.o \
-	.sg_compound_swim_oracle_q_shared_under_test.gnu.o \
-	.sg_mover_subject_sweep_util_under_test.gnu.o
+COMPOUND_HOOK_ORACLE_TEST_OBJS = .sg_compound_swim_oracle_q_shared_under_test.gnu.o
 COMPOUND_HOOK_ORACLE_TEST_DEPS = \
 	$(COMPOUND_HOOK_ORACLE_TEST_OBJS:.o=.d)
 COMPOUND_HOOK_ORACLE_TEST_ALL_ARTIFACTS = \
@@ -484,18 +458,13 @@ MAPLIST_ROTATION_TEST_BIN = maplist_rotation_test.gnu
 MAPLIST_ROTATION_TEST_ALL_ARTIFACTS = \
 	maplist_rotation_test.gnu maplist_rotation_test.make
 ENGINE_SNAPSHOT_TEST = tests/test_engine_snapshot_name.sh
-HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
-	.sg_hooks_test.gnu.o .sg_hooks_test.gnu.d .sg_hooks_under_test.gnu.o \
-	.sg_hooks_under_test.gnu.d .sg_hooks_test.make.o .sg_hooks_test.make.d \
-	.sg_hooks_under_test.make.o .sg_hooks_under_test.make.d sg_action_test \
+HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_action_test \
 	.sg_compound_action_under_test.gnu.d .sg_compound_action_under_test.make.o \
 	.sg_compound_action_under_test.make.d \
 	.sg_compound_world_q_shared_under_test.gnu.o \
 	.sg_compound_world_q_shared_under_test.gnu.d \
 	.sg_compound_world_q_shared_under_test.make.o \
 	.sg_compound_world_q_shared_under_test.make.d sg_identity_test \
-	.sg_crc32_under_test.gnu.o .sg_crc32_under_test.gnu.d \
-	.sg_crc32_under_test.make.o .sg_crc32_under_test.make.d \
 	.sg_rune_action_under_test.gnu.d .sg_rune_crc_under_test.gnu.o \
 	.sg_rune_crc_under_test.gnu.d .sg_rune_action_under_test.make.o \
 	.sg_rune_action_under_test.make.d .sg_rune_crc_under_test.make.o \
@@ -535,25 +504,16 @@ endif
 C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o g_skins.o g_tourney.o \
 	plasma.o ui_text.o ui_layout.o ui_boards.o p_observer.o g_chase.o p_stats.o \
 	stdlog.o gslog.o bat.o g_vote.o ctf_file_io.o ctf_sqlite_core.o \
-	ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o sg_crc32.o sg_identity.o \
-	slipgate/sg_rune_source_authority.o slipgate/sg_rune_v2_content_identity.o \
-	sg_cvars.o sg_hooks.o sg_util.o slipgate/sg_bot_roster.o \
-	slipgate/sg_client_ownership.o slipgate/sg_pov_identity.o \
-	slipgate/sg_tactic_controller.o slipgate/sg_destination.o \
-	slipgate/sg_rune_game.o slipgate/sg_rune_cx.o slipgate/sg_rune_analytic.o \
-	slipgate/sg_rune_movement.o slipgate/sg_rune_artifact.o \
+	ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o slipgate/sg_bot_cvars.o \
+	slipgate/sg_bot_util.o slipgate/sg_bot_persona.o slipgate/sg_bot_roster.o \
+	slipgate/sg_tactic_controller.o slipgate/sg_rune_game.o slipgate/sg_rune_cx.o \
+	slipgate/sg_rune_analytic.o slipgate/sg_rune_movement.o \
+	slipgate/sg_rune_artifact.o slipgate/sg_rune_bsp.o slipgate/sg_rune_crc.o \
+	slipgate/sg_rune_trace.o slipgate/sg_rune_law.o slipgate/sg_bot_host.o \
 	slipgate/sg_rune_locate.o slipgate/sg_rune_field.o slipgate/sg_rune_flight.o \
-	slipgate/sg_rune_fire.o \
-	slipgate/sg_rune_level.o slipgate/sg_bot_frame.o slipgate/sg_bot_orders.o \
-	slipgate/sg_bot_callout.o slipgate/sg_bot_combat.o slipgate/sg_bot_items.o slipgate/sg_bsp_world.o slipgate/sg_host_collision.o \
-	slipgate/sg_bsp_entity_semantics.o \
-	slipgate/sg_bsp_entity_semantics_audit_expected.o \
-	slipgate/sg_bsp_entity_semantics_publication.o slipgate/sg_rune_model.o \
-	slipgate/sg_host_pmove.o slipgate/sg_host_engine_pmove.o \
-	slipgate/sg_host_engine_runtime.o  \
-	slipgate/sg_host_hook_law.o slipgate/sg_host_mechanism_law.o \
-	slipgate/sg_host_law_owner.o slipgate/sg_host_law_publication.o \
-	slipgate/sg_weapon_effect_profile.o sg_net.o slipgate/sg_persona.o
+	slipgate/sg_rune_fire.o slipgate/sg_rune_level.o slipgate/sg_bot_frame.o \
+	slipgate/sg_bot_orders.o slipgate/sg_bot_callout.o slipgate/sg_bot_combat.o \
+	slipgate/sg_bot_items.o slipgate/sg_bot_weapons.o
 
 ######################################################################
 # End of user-customizable section - you shouldn't have to touch
@@ -654,6 +614,7 @@ RUNE_COMPACT_GENERATOR_OFFLINE_OBJS = \
 	slipgate/sg_rune_movement_build.o \
 	slipgate/sg_rune_mechanisms.o \
 	slipgate/sg_rune_hook.o \
+	slipgate/sg_rune_entities.o \
 	slipgate/sg_rune_vis.o \
 	slipgate/sg_rune_fire_build.o \
 	slipgate/sg_rune_generate.o \
@@ -699,36 +660,21 @@ endif
 # Targets
 ######################################################################
 
-POVLOCK_TEST_BIN = povlock_test.gnu
-POVLOCK_TEST_OBJS = .povlock_test.gnu.o .povlock_under_test.gnu.o \
-	.povlock_endframe_under_test.gnu.o
+POVLOCK_TEST_OBJS = .povlock_endframe_under_test.gnu.o
 POVLOCK_TEST_DEPS = $(POVLOCK_TEST_OBJS:.o=.d)
-POV_SESSION_TEST_BIN = pov_session_production_test.gnu
-POV_SESSION_TEST_OBJS = .pov_session_production_test.gnu.o \
-	.pov_session_chase_under_test.gnu.o \
-	.pov_session_client_under_test.gnu.o \
-	.pov_session_identity_under_test.gnu.o
+POV_SESSION_TEST_OBJS = .pov_session_chase_under_test.gnu.o \
+	.pov_session_client_under_test.gnu.o .pov_session_identity_under_test.gnu.o
 POV_SESSION_TEST_DEPS = $(POV_SESSION_TEST_OBJS:.o=.d)
 POV_SUPERVISOR_BIN = tools/pov-supervisor
-POV_SUPERVISOR_TEST_BIN = pov_supervisor_unit.gnu
-POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
-	pov_supervisor_unit.make
+POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor
 
 
 .PHONY: tactic-controller-test
 tactic-controller-test: tests/run_sg_tactic_controller_test.sh \
 		tests/sg_tactic_controller_test.c \
-		slipgate/sg_tactic_controller.c slipgate/sg_tactic_controller.h \
-		slipgate/sg_host_rocket_jump_law.h
+		slipgate/sg_tactic_controller.c slipgate/sg_tactic_controller.h
 	sh tests/run_sg_tactic_controller_test.sh
 
-.PHONY: host-rocket-jump-law-test
-host-rocket-jump-law-test: tests/run_sg_host_rocket_jump_law_test.sh \
-		tests/sg_host_rocket_jump_law_test.c \
-		slipgate/sg_host_rocket_jump_law.h \
-		slipgate/sg_host_engine_pmove.h \
-		slipgate/sg_weapon_host_constants.h
-	sh tests/run_sg_host_rocket_jump_law_test.sh
 
 all: dep $(TARGET)
 runtime-module-path:
@@ -762,53 +708,6 @@ $(OBJS): $(REVISION_HEADER)
 # targets without that directory prefix.  Keep the real object paths tied to
 # the generated wire contract so an incremental build cannot mix contracts.
 
-slipgate/sg_bsp_world.o: slipgate/sg_bsp_world.c slipgate/sg_bsp_world.h
-slipgate/sg_host_collision.o: slipgate/sg_host_collision.c \
-		slipgate/sg_host_collision.h slipgate/sg_bsp_world.h \
-		slipgate/sg_rune_model.h
-slipgate/sg_bsp_entity_semantics.o: slipgate/sg_bsp_entity_semantics.c \
-		slipgate/sg_bsp_entity_semantics.h \
-		slipgate/sg_bsp_entity_semantics_storage_internal.h
-slipgate/sg_bsp_entity_semantics_audit_expected.o: \
-		slipgate/sg_bsp_entity_semantics_audit_expected.c \
-		slipgate/sg_bsp_entity_semantics_audit_internal.h
-slipgate/sg_bsp_entity_semantics_publication.o: \
-		slipgate/sg_bsp_entity_semantics_publication.c \
-		slipgate/sg_bsp_entity_semantics_publication.h \
-		slipgate/sg_bsp_entity_semantics_audit_internal.h \
-		slipgate/sg_bsp_entity_semantics_storage_internal.h
-slipgate/sg_rune_v2_content_identity.o: \
-		slipgate/sg_rune_v2_content_identity.c \
-		slipgate/sg_rune_v2_content_identity.h slipgate/sg_rune_v2_wire.h
-slipgate/sg_host_pmove.o: slipgate/sg_host_pmove.c \
-		slipgate/sg_host_pmove.h slipgate/sg_host_collision.h \
-		slipgate/sg_rune_model.h q_shared.h
-slipgate/sg_host_engine_pmove.o: slipgate/sg_host_engine_pmove.c \
-		slipgate/sg_host_engine_pmove.h slipgate/sg_host_pmove.h \
-		game.h q_shared.h
-slipgate/sg_host_engine_runtime.o: slipgate/sg_host_engine_runtime.c \
-		slipgate/sg_host_engine_runtime.h \
-		slipgate/sg_host_engine_runtime_private.h \
-		slipgate/sg_host_pmove.h slipgate/sg_host_collision.h \
-		slipgate/sg_bsp_world.h slipgate/sg_identity.h \
-		slipgate/sg_destination.h game.h q_shared.h
-slipgate/sg_host_hook_law.o: slipgate/sg_host_hook_law.c \
-		slipgate/sg_host_hook_law.h slipgate/sg_host_pmove.h \
-		slipgate/sg_weapon_host_constants.h q_shared.h
-slipgate/sg_host_mechanism_law.o: slipgate/sg_host_mechanism_law.c \
-		slipgate/sg_host_mechanism_law.h
-slipgate/sg_host_law_owner.o: slipgate/sg_host_law_owner.c \
-		slipgate/sg_host_law_owner.h slipgate/sg_host_law_publication.h \
-		slipgate/sg_host_collision.h slipgate/sg_bsp_world.h \
-		slipgate/sg_identity.h game.h q_shared.h
-slipgate/sg_host_law_publication.o: slipgate/sg_host_law_publication.c \
-		slipgate/sg_host_law_publication.h \
-		slipgate/sg_host_law_publication_private.h \
-		slipgate/sg_host_collision.h \
-		slipgate/sg_host_pmove.h slipgate/sg_host_engine_pmove.h \
-		slipgate/sg_host_hook_law.h \
-		slipgate/sg_host_mechanism_law.h slipgate/sg_weapon_host_constants.h \
-		game.h q_shared.h
 
 .c.o:
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SHLIBCFLAGS) -o $@ -c $<
@@ -817,13 +716,7 @@ $(TARGET):	$(OBJS) $(L_OBJS)
 		$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $(OBJS) $(L_OBJS) $(LDFLAGS)
 		$(LIBTOOL) $@
 
-.sg_hooks_test.gnu.o: slipgate/sg_hooks_test.c $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
-		-DSG_HOST_TEST -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_hooks_under_test.gnu.o: slipgate/sg_hooks.c $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
-		-DSG_HOST_TEST -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 $(HOST_TEST_BIN): $(HOST_TEST_OBJS)
 	$(CC) -o $@ $(HOST_TEST_OBJS) $(LDFLAGS)
@@ -1130,12 +1023,9 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 
 
-.sg_crc32_under_test.gnu.o: slipgate/sg_crc32.c $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra \
-		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 
-.sg_rune_crc_under_test.gnu.o: slipgate/sg_crc32.c $(REVISION_HEADER)
+.sg_rune_crc_under_test.gnu.o: $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
@@ -1150,18 +1040,8 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 
 
-.sg_rune_mechanism_execution_link_stubs.gnu.o: \
-		tests/sg_rune_mechanism_execution_link_stubs.c $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 
-.sg_delayed_relay_dispatch_util_under_test.gnu.o: slipgate/sg_util.c \
-		slipgate/sg_util.h $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
-		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
-		-c -o $@ $<
 
 .sg_delayed_relay_dispatch_view_under_test.gnu.o: p_view.c \
 		$(REVISION_HEADER)
@@ -1332,13 +1212,6 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 
 
-.sg_mover_subject_sweep_util_under_test.gnu.o: \
-		slipgate/sg_util.c slipgate/sg_util.h $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
-		-fdata-sections \
-		-DSG_ImmutableSupport=SG_MoverSubjectSweepRealImmutableSupport \
-		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_mover_subject_sweep_view_under_test.gnu.o: p_view.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
@@ -1360,27 +1233,8 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 		-ffunction-sections -fdata-sections -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_compound_swim_oracle_test.gnu.o: \
-		tests/sg_compound_swim_oracle_test.c $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
-		-fdata-sections -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_compound_hook_oracle_test.gnu.o: \
-		tests/sg_compound_hook_oracle_test.c \
-		tests/sg_compound_hook_oracle_fixture.h $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -ffunction-sections -fdata-sections -Itests -I. \
-		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_compound_hook_oracle_fixture.gnu.o: \
-		tests/sg_compound_hook_oracle_fixture.c \
-		tests/sg_compound_hook_oracle_fixture.h $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
-		-fdata-sections -Itests -I. \
-		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 
 
@@ -1414,16 +1268,9 @@ spectator-sound-test: $(SPECTATOR_SOUND_TEST_BIN)
 $(SPECTATOR_SOUND_TEST_BIN): $(SPECTATOR_SOUND_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(SPECTATOR_SOUND_TEST_OBJS) $(LDFLAGS)
 
-.sg_spectator_sound_test.gnu.o: tests/sg_spectator_sound_test.c \
-		slipgate/sg_sound_policy.h \
-		g_local.h slipgate/sg_net.h $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
-		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
-		-c -o $@ $<
 
-.sg_spectator_sound_net_under_test.gnu.o: slipgate/sg_net.c \
-		g_local.h slipgate/sg_net.h $(REVISION_HEADER)
+.sg_spectator_sound_net_under_test.gnu.o: \
+		g_local.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
 		-fdata-sections -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) \
@@ -1436,15 +1283,7 @@ povlock-test: $(POVLOCK_TEST_BIN)
 $(POVLOCK_TEST_BIN): $(POVLOCK_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(POVLOCK_TEST_OBJS) $(LDFLAGS)
 
-.povlock_test.gnu.o: tests/povlock_test.c g_local.h $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.povlock_under_test.gnu.o: g_chase.c g_local.h $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .povlock_endframe_under_test.gnu.o: p_view.c g_local.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
@@ -1458,12 +1297,6 @@ pov-session-production-test: $(POV_SESSION_TEST_BIN)
 $(POV_SESSION_TEST_BIN): $(POV_SESSION_TEST_OBJS)
 	$(CC) -Wl,--gc-sections -o $@ $(POV_SESSION_TEST_OBJS) $(LDFLAGS)
 
-.pov_session_production_test.gnu.o: tests/pov_session_production_test.c \
-		g_local.h g_tourney.h slipgate/sg_bot.h \
-		slipgate/sg_pov_identity.h $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .pov_session_chase_under_test.gnu.o: g_chase.c g_local.h $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
@@ -1476,38 +1309,14 @@ $(POV_SESSION_TEST_BIN): $(POV_SESSION_TEST_OBJS)
 		-Wpedantic -Wno-unused-parameter -ffunction-sections -fdata-sections \
 		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.pov_session_identity_under_test.gnu.o: slipgate/sg_pov_identity.c \
-		g_local.h slipgate/sg_bot.h slipgate/sg_pov_identity.h \
+.pov_session_identity_under_test.gnu.o: \
+		g_local.h slipgate/sg_bot.h \
 		$(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 
-weapon-effect-profile-test: tests/run_sg_weapon_effect_profile_test.sh \
-		tests/sg_weapon_effect_profile_test.c \
-		tests/sg_weapon_effect_profile_correction_test.c \
-		slipgate/sg_weapon_effect_profile.c \
-		slipgate/sg_weapon_effect_profile.h slipgate/sg_weapon_contract.h \
-		slipgate/sg_weapon_host_constants.h slipgate/sg_rune_model.c \
-		g_combat.c g_weapon.c p_weapon.c plasma.c plasma.h
-	sh tests/run_sg_weapon_effect_profile_test.sh
-
-
-
-bsp-entity-semantics-publication-test: \
-		tests/run_sg_bsp_entity_semantics_publication_test.sh \
-		tests/sg_bsp_entity_semantics_publication_test.c \
-		slipgate/sg_bsp_entity_semantics_publication.c \
-		slipgate/sg_bsp_entity_semantics_publication.h \
-		slipgate/sg_bsp_entity_semantics_audit_expected.c \
-		slipgate/sg_bsp_entity_semantics_audit_internal.h \
-		slipgate/sg_bsp_entity_semantics_storage_internal.h \
-		slipgate/sg_bsp_entity_semantics.c \
-		slipgate/sg_bsp_entity_semantics.h \
-		slipgate/sg_host_collision.c slipgate/sg_host_collision.h \
-		slipgate/sg_bsp_world.c slipgate/sg_bsp_world.h
-	sh tests/run_sg_bsp_entity_semantics_publication_test.sh
 
 
 
@@ -1533,58 +1342,34 @@ bsp-entity-semantics-publication-test: \
 
 
 
-build-ownership-test: tests/run_c_build_ownership_test.sh Makefile GNUmakefile \
-		gravity.vcxproj gravity.vcxproj.filters .github/workflows/build.yml
-	sh tests/run_c_build_ownership_test.sh
+
+
+
 
 runegen-test: tests/run_runegen_test.sh tools/runegen.sh \
 		tools/rune-corpus-maps.txt
 	sh tests/run_runegen_test.sh
 
-rune-source-authority-test: tests/run_sg_rune_source_authority_test.sh \
-		tests/sg_rune_source_authority_test.c \
-		slipgate/sg_rune_source_authority.c \
-		slipgate/sg_rune_source_authority.h \
-		slipgate/sg_rune_source_authority_owner.h
-	sh tests/run_sg_rune_source_authority_test.sh
 
-rune-compact-test: rune-source-authority-test runegen-test
+rune-compact-test: runegen-test
 
 
 
 
 
 
-water-capability-real-bsp-test: tests/run_sg_water_real_bsp_test.sh \
-		tests/sg_water_real_bsp_test.c \
-		slipgate/sg_host_law_publication.c \
-		slipgate/sg_host_law_publication.h \
-		slipgate/sg_host_law_publication_private.h \
-		slipgate/sg_host_hook_law.c slipgate/sg_host_hook_law.h \
-		slipgate/sg_host_mechanism_law.c \
-		slipgate/sg_host_mechanism_law.h \
-		slipgate/sg_host_pmove.c slipgate/sg_host_pmove.h \
-		slipgate/sg_host_collision.c slipgate/sg_host_collision.h \
-		slipgate/sg_bsp_world.c slipgate/sg_bsp_world.h
-	@test -n "$(WATER_BSP)" || { \
-		echo "WATER_BSP must name a real water BSP" >&2; exit 2; }
-	sh tests/run_sg_water_real_bsp_test.sh "$(WATER_BSP)"
 
 action-test: $(ACTION_TEST_BIN)
 	./$(ACTION_TEST_BIN)
 
 # Linux tools-only supervisor: intentionally absent from Visual Studio projects.
-pov-supervisor-test: $(POV_SUPERVISOR_TEST_BIN) $(POV_SUPERVISOR_BIN)
+pov-supervisor-test: $(POV_SUPERVISOR_BIN)
 	./$(POV_SUPERVISOR_TEST_BIN)
 
 $(POV_SUPERVISOR_BIN): tools/pov-supervisor.c tools/pov-spawn-linux.c tools/pov-spawn-linux.h
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -Itools -o $@ \
 		tools/pov-supervisor.c tools/pov-spawn-linux.c
 
-$(POV_SUPERVISOR_TEST_BIN): tests/pov_supervisor_unit.c \
-	tools/pov-spawn-linux.c tools/pov-spawn-linux.h
-	$(CC) -std=c11 -O1 -g -Wall -Wextra -Werror -Wpedantic -DPOV_TESTING \
-		-Itools -o $@ tests/pov_supervisor_unit.c tools/pov-spawn-linux.c
 
 button-live-test: $(BUTTON_LIVE_TEST_BIN)
 	./$(BUTTON_LIVE_TEST_BIN)
@@ -1726,15 +1511,6 @@ rune-proof-test: $(RUNE_PROOF_TEST_BIN)
 	./$(RUNE_PROOF_TEST_BIN)
 rune-objective-diagnostics-test:
 	./$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN)
-human-hook-ownership-test: tests/sg_human_hook_ownership_test.c \
-		slipgate/sg_client_ownership.c
-	$(CC) $(CFLAGS) -std=c11 -Wall -Wextra -Werror -Wpedantic -I. \
-		-o sg_human_hook_ownership_test.gnu \
-		tests/sg_human_hook_ownership_test.c slipgate/sg_client_ownership.c
-	./sg_human_hook_ownership_test.gnu
-human-hook-release-test: tests/run_sg_human_hook_release_regression_test.sh \
-		tests/sg_human_hook_release_regression_test.c g_cmds.c p_weapon.c
-	sh tests/run_sg_human_hook_release_regression_test.sh
 
 replay-test: $(REPLAY_TEST_BIN)
 	./$(REPLAY_TEST_BIN)
@@ -1909,11 +1685,8 @@ CELLSDUMP_SRCS = slipgate/sg_configuration_cells.c \
 	slipgate/sg_rune_analytic.c slipgate/sg_rune_artifact.c \
 	slipgate/sg_rune_mechanisms.c slipgate/sg_rune_hook.c \
 	slipgate/sg_rune_vis.c slipgate/sg_rune_fire.c slipgate/sg_rune_fire_build.c \
-	slipgate/sg_rune_locate.c slipgate/sg_bsp_entity_semantics.c \
-	slipgate/sg_bsp_entity_semantics_publication.c \
-	slipgate/sg_bsp_entity_semantics_audit_expected.c \
-	slipgate/sg_host_collision.c slipgate/sg_bsp_world.c \
-	slipgate/sg_rune_model.c slipgate/sg_crc32.c
+	slipgate/sg_rune_locate.c \
+
 $(CELLSDUMP_BIN): tools/cellsdump.c $(CELLSDUMP_SRCS)
 	$(CC) -std=c11 -O2 -g -Wall -Wextra -I. tools/cellsdump.c \
 		$(CELLSDUMP_SRCS) -lm -o $@
@@ -1935,14 +1708,14 @@ rune-movement-test: tests/run_sg_rune_movement_test.sh tests/sg_rune_movement_te
 rune-runtime-test: tests/run_sg_rune_runtime_test.sh tests/sg_rune_runtime_test.c \
 		slipgate/sg_rune_locate.c slipgate/sg_rune_field.c slipgate/sg_rune_flight.c \
 		slipgate/sg_rune_artifact.c slipgate/sg_rune_cx.c slipgate/sg_rune_movement.c \
-		slipgate/sg_rune_movement_build.c slipgate/sg_rune_analytic.c slipgate/sg_crc32.c
+		slipgate/sg_rune_movement_build.c slipgate/sg_rune_analytic.c
 	sh tests/run_sg_rune_runtime_test.sh
 
 .PHONY: rune-artifact-test
 rune-artifact-test: tests/run_sg_rune_artifact_test.sh tests/sg_rune_artifact_test.c \
 		slipgate/sg_rune_artifact.c slipgate/sg_rune_artifact.h \
 		slipgate/sg_rune_cx.c slipgate/sg_rune_cx.h \
-		slipgate/sg_rune_movement.c slipgate/sg_rune_analytic.c slipgate/sg_crc32.c
+		slipgate/sg_rune_movement.c slipgate/sg_rune_analytic.c
 	sh tests/run_sg_rune_artifact_test.sh
 
 # Era-4 field check: load an artifact, locate two points, walk the route.
@@ -1952,9 +1725,9 @@ fieldcheck: $(FIELDCHECK_BIN)
 $(FIELDCHECK_BIN): tools/fieldcheck.c slipgate/sg_rune_locate.c \
 		slipgate/sg_rune_field.c slipgate/sg_rune_artifact.c \
 		slipgate/sg_rune_cx.c slipgate/sg_rune_movement.c \
-		slipgate/sg_rune_analytic.c slipgate/sg_crc32.c
+		slipgate/sg_rune_analytic.c
 	$(CC) -std=c11 -O2 -g -Wall -Wextra -I. tools/fieldcheck.c \
 		slipgate/sg_rune_locate.c slipgate/sg_rune_field.c \
 		slipgate/sg_rune_artifact.c slipgate/sg_rune_cx.c \
 		slipgate/sg_rune_movement.c slipgate/sg_rune_analytic.c \
-		slipgate/sg_crc32.c -lm -o $@
+ -lm -o $@

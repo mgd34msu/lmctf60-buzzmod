@@ -14,47 +14,25 @@
 
 #include "sg_rune_analytic.h"
 #include "sg_rune_cx.h"
+#include "sg_rune_law.h"
 #include "sg_rune_fire.h"
 #include "sg_rune_mechanisms.h"
 #include "sg_rune_movement.h"
 
-#define SG_RUNE_ARTIFACT_VERSION UINT32_C(5)
+#define SG_RUNE_ARTIFACT_VERSION UINT32_C(7)
 #define SG_RUNE_ARTIFACT_SCHEMA_ID UINT64_C(0x52554E4534000001)
 
 typedef struct sg_rune_identity_s
 {
-	uint8_t bsp_sha256[32];
+	uint32_t bsp_crc32;       /* of the whole map file */
+	uint32_t entity_crc32;    /* of its entity text */
 	uint64_t bsp_bytes;
-	uint32_t bsp_checksum;
-	uint32_t entity_crc32;
-	uint64_t physics_abi_id;
-	uint64_t collision_law_id;
-	uint64_t pmove_law_id;
-	uint64_t gravity_law_id;
-	uint64_t hook_law_id;
-	uint64_t mechanism_law_id;
+	uint32_t law_crc32;       /* of the law the profiles were derived under */
+	uint32_t reserved;
 	uint64_t schema_id;
 } sg_rune_identity_t;
 
-/* Values the generator derived the profiles under.  The runtime refuses an
- * artifact whose identity matches but whose law does not. */
-typedef struct sg_rune_law_s
-{
-	float standing_mins[3];
-	float standing_maxs[3];
-	float crouching_mins[3];
-	float crouching_maxs[3];
-	float gravity;
-	float ground_acceleration;
-	float air_acceleration;
-	float water_acceleration;
-	float hook_acceleration;
-	float water_drag;
-	float max_velocity;
-	uint32_t frame_ms;
-	uint32_t substep_ms;
-	uint32_t reserved[3];
-} sg_rune_law_t;
+/* The law lives in sg_rune_law.h; the artifact carries one. */
 
 typedef enum sg_rune_section_kind_e
 {

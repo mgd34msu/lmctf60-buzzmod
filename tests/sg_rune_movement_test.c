@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "slipgate/sg_rune_law.h"
 #include "slipgate/sg_rune_movement.h"
 
 static int failures;
@@ -53,7 +54,9 @@ static void Reset(sg_rune_move_store_t *store)
 int main(void)
 {
 	sg_rune_move_store_t store;
-	sg_rune_move_law_t law = { 800.0f, 100U, 25U };
+	sg_rune_move_law_t law;
+
+	SG_RuneLawEngine(&law, 800.0f);
 	sg_rune_move_crossing_t crossing;
 	sg_rune_move_table_t table;
 	float inputs[SG_RUNE_FN_INPUT_COUNT];

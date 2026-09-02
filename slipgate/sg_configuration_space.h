@@ -4,19 +4,46 @@
 
 #include <stdint.h>
 
-#include "sg_host_collision.h"
+#include "sg_rune_trace.h"
+#include "sg_rune_law.h"
 
 #define SG_CONFIGURATION_INDEX_NONE UINT32_MAX
 /* Quake II pmove_state_t stores origin in signed 12.3 fixed-point shorts. */
 #define SG_CONFIGURATION_PMOVE_ORIGIN_MIN (-4096.0f)
 #define SG_CONFIGURATION_PMOVE_ORIGIN_MAX (4095.875f)
-#define SG_CONFIGURATION_DEFAULT_MAX_CELLS SG_RUNE_MODEL_MAX_CELLS
-#define SG_CONFIGURATION_DEFAULT_MAX_FACES SG_RUNE_MODEL_MAX_PLANES
-#define SG_CONFIGURATION_DEFAULT_MAX_VERTICES \
-	SG_RUNE_MODEL_MAX_PORTAL_VERTICES
-#define SG_CONFIGURATION_DEFAULT_MAX_PORTALS SG_RUNE_MODEL_MAX_PORTALS
-#define SG_CONFIGURATION_DEFAULT_MAX_STANCE_OVERLAPS \
-	SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS
+#define SG_CONFIGURATION_DEFAULT_MAX_CELLS (UINT32_C(1) << 21)
+#define SG_CONFIGURATION_DEFAULT_MAX_FACES (UINT32_C(1) << 24)
+#define SG_CONFIGURATION_DEFAULT_MAX_VERTICES (UINT32_C(1) << 26)
+#define SG_CONFIGURATION_DEFAULT_MAX_PORTALS (UINT32_C(1) << 23)
+#define SG_CONFIGURATION_DEFAULT_MAX_STANCE_OVERLAPS (UINT32_C(1) << 22)
+
+typedef struct sg_cfg_vec3_s
+{
+	float value[3];
+} sg_cfg_vec3_t;
+
+typedef struct sg_cfg_bounds_s
+{
+	sg_cfg_vec3_t mins;
+	sg_cfg_vec3_t maxs;
+} sg_cfg_bounds_t;
+
+typedef struct sg_cfg_hull_s
+{
+	sg_cfg_vec3_t mins;
+	sg_cfg_vec3_t maxs;
+} sg_cfg_hull_t;
+
+typedef enum sg_cfg_stance_e
+{
+	SG_CFG_STANDING = 0,
+	SG_CFG_CROUCHING = 1
+} sg_cfg_stance_t;
+
+typedef struct sg_cfg_ref_s
+{
+	uint32_t index;
+} sg_cfg_ref_t;
 
 typedef enum sg_configuration_error_code_e
 {
@@ -92,17 +119,15 @@ enum
 
 typedef struct sg_configuration_cell_s
 {
-	sg_rune_cell_id_t id;
-	sg_rune_order_key_t order;
-	sg_rune_stance_t stance;
+	sg_cfg_stance_t stance;
 	uint32_t first_face;
 	uint32_t face_count;
-	sg_rune_bounds_t bounds;
-	sg_rune_vec3_t interior_witness;
-	sg_rune_bsp_leaf_ref_t bsp_leaf;
-	sg_rune_bsp_area_ref_t bsp_area;
-	sg_rune_bsp_cluster_ref_t bsp_cluster;
-	sg_rune_contents_mask_t contents;
+	sg_cfg_bounds_t bounds;
+	sg_cfg_vec3_t interior_witness;
+	sg_cfg_ref_t bsp_leaf;
+	sg_cfg_ref_t bsp_area;
+	sg_cfg_ref_t bsp_cluster;
+	int32_t contents;
 	/* Diagnostic classification at interior_witness only. Support and water
 	 * level are not uniform over a general 3D cell and must not be serialized
 	 * as cell-wide semantics. */
@@ -113,11 +138,9 @@ typedef struct sg_configuration_cell_s
 
 typedef struct sg_configuration_portal_s
 {
-	sg_rune_portal_id_t id;
-	sg_rune_order_key_t order;
 	uint32_t from_cell;
 	uint32_t to_cell;
-	sg_rune_stance_t stance;
+	sg_cfg_stance_t stance;
 	sg_configuration_plane_t plane;
 	uint32_t first_vertex;
 	uint32_t vertex_count;
@@ -133,19 +156,18 @@ typedef struct sg_configuration_stance_overlap_s
 	uint32_t crouching_cell;
 	uint32_t first_face;
 	uint32_t face_count;
-	sg_rune_bounds_t bounds;
-	sg_rune_vec3_t interior_witness;
+	sg_cfg_bounds_t bounds;
+	sg_cfg_vec3_t interior_witness;
 } sg_configuration_stance_overlap_t;
 
 typedef struct sg_configuration_space_s
 {
-	sg_rune_model_identity_t identity;
-	sg_rune_bounds_t domain;
+	sg_cfg_bounds_t domain;
 	sg_configuration_cell_t *cells;
 	uint32_t cell_count;
 	sg_configuration_face_t *faces;
 	uint32_t face_count;
-	sg_rune_vec3_t *vertices;
+	sg_cfg_vec3_t *vertices;
 	uint32_t vertex_count;
 	sg_configuration_portal_t *portals;
 	uint32_t portal_count;
@@ -158,11 +180,11 @@ void SG_ConfigurationDefaultLimits(sg_configuration_limits_t *limits_out);
 typedef void (*sg_configuration_progress_fn)(void *context, uint32_t done,
 	uint32_t total);
 
-int SG_ConfigurationBuild(const sg_host_collision_authority_t *authority,
+int SG_ConfigurationBuild(const sg_rune_bsp_t *bsp, const sg_rune_law_t *law,
 	const sg_configuration_limits_t *limits,
 	sg_configuration_space_t **space_out, sg_configuration_error_t *error_out);
-int SG_ConfigurationBuildWithProgress(
-	const sg_host_collision_authority_t *authority,
+int SG_ConfigurationBuildWithProgress(const sg_rune_bsp_t *bsp,
+	const sg_rune_law_t *law,
 	const sg_configuration_limits_t *limits,
 	sg_configuration_progress_fn progress, void *progress_context,
 	sg_configuration_space_t **space_out, sg_configuration_error_t *error_out);
@@ -183,7 +205,7 @@ const sg_configuration_portal_stats_t *SG_ConfigurationLastPortalStats(void);
  * one callback per side that survives with area.  Used for hook surfaces. */
 typedef int (*sg_configuration_brush_polygon_fn)(void *context, uint32_t brush,
 	uint32_t brush_side, const float (*points)[3], uint32_t count);
-int SG_ConfigurationBrushPolygons(const struct sg_bsp_world_s *world,
+int SG_ConfigurationBrushPolygons(const struct sg_rune_bsp_s *world,
 	uint32_t brush, sg_configuration_brush_polygon_fn fn, void *context);
 
 #endif

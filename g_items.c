@@ -3,9 +3,6 @@
 #include "g_tourney.h"
 #include "bat.h"
 #include "stdlog.h"
-#include "slipgate/sg_health_pickup.h"
-#include "slipgate/sg_ammo_pickup.h"
-#include "slipgate/sg_armor_pickup.h"
 
 void droptofloor(edict_t* ent);
 
@@ -512,8 +509,7 @@ static qboolean G_AmmoItemPickupEligible(gitem_t *item, edict_t *other)
 	if (max < 0)
 		return false;
 	index = ITEM_INDEX(item);
-	return SG_AmmoPickupAllowed(other->client->pers.inventory[index], max) ?
-	    true : false;
+	return other->client->pers.inventory[index] < max;
 }
 
 qboolean G_AmmoPickupEligible(edict_t *ent, edict_t *other)
@@ -633,8 +629,9 @@ qboolean G_HealthPickupEligible(edict_t *ent, edict_t *other)
 {
 	if (!ent || !ent->item || !other || !other->client)
 		return false;
-	return SG_HealthPickupAllowed(other->health, other->max_health,
-	    (ent->style & HEALTH_IGNORE_MAX) != 0) ? true : false;
+	if (ent->style & HEALTH_IGNORE_MAX)
+		return true;
+	return other->health < other->max_health;
 }
 
 int G_HealthPickupGain(edict_t *ent, edict_t *other)
@@ -748,10 +745,20 @@ qboolean G_ArmorPickupEligible(edict_t *ent, edict_t *other)
 		oldinfo = &bodyarmor_info;
 	else
 		return false;
-	return SG_ArmorPickupAllowed(false, 1,
-	    oldinfo->normal_protection,
-	    other->client->pers.inventory[old_index], oldinfo->max_count,
-	    newinfo->normal_protection, newinfo->base_count) ? true : false;
+	/* Better armor always; the same or worse only when its salvage adds
+	 * to what is worn, up to the worn kind's cap. */
+	if (newinfo->normal_protection > oldinfo->normal_protection)
+		return true;
+	{
+		int worn = other->client->pers.inventory[old_index];
+		int salvage = (int)((newinfo->normal_protection /
+			oldinfo->normal_protection) * (float)newinfo->base_count);
+		int after = worn + salvage;
+
+		if (after > oldinfo->max_count)
+			after = oldinfo->max_count;
+		return worn < after;
+	}
 }
 
 int G_ArmorPickupGain(edict_t *ent, edict_t *other)
@@ -2203,7 +2210,7 @@ always owned, never in the world
 			/* icon */		"w_bfg",
 			/* pickup */	"BFG10K",
 					0,
-					SG_HOST_BFG_AMMO_COST,
+					50,
 					"Cells",
 					IT_WEAPON | IT_STAY_COOP,
 					WEAP_BFG,

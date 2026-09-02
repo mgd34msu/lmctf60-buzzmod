@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../slipgate/sg_rune_law.h"
 #include "../slipgate/sg_tactic_controller.h"
 
 static int failures;
@@ -18,9 +19,12 @@ static int Near(float a, float b)
 
 static sg_tactic_body_t Body(void)
 {
+	static sg_rune_law_t law;
 	sg_tactic_body_t body;
 
 	memset(&body, 0, sizeof(body));
+	SG_RuneLawEngine(&law, 800.0f);
+	body.law = &law;
 	body.supported = 1U;
 	body.view_height = 22.0f;
 	body.gravity = 800.0f;
@@ -114,11 +118,11 @@ int main(void)
 	CHECK(SG_TacticControl(&step, &body, &command));
 	CHECK(command.hook_fire == 1U && command.aim_owned == 1U);
 	CHECK(command.pitch < 0.0f);
-	body.hook_phase = SG_HOST_HOOK_ATTACHED;
+	body.hook_phase = SG_TACTIC_HOOK_ATTACHED;
 	body.origin[0] = 290.0f;
 	CHECK(SG_TacticControl(&step, &body, &command));
 	CHECK(command.hook_release == 1U);
-	body.hook_phase = SG_HOST_HOOK_IDLE;
+	body.hook_phase = SG_TACTIC_HOOK_IDLE;
 	body.origin[0] = 0.0f;
 
 	/* Arrived eases in; hold and unreachable hold. */

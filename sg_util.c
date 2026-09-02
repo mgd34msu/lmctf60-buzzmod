@@ -1,1 +1,0 @@
-slipgate/sg_util.c

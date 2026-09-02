@@ -226,14 +226,8 @@
     <ClCompile Include="q_shared.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_action.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="slipgate\sg_crc32.c">
-    <ClCompile Include="slipgate\sg_configuration_semantics.c" />
-    <ClCompile Include="slipgate\sg_configuration_cells.c" />
     <ClCompile Include="slipgate\sg_bot_frame.c" />
-    <ClCompile Include="slipgate\sg_rune_movement_build.c" />
     <ClCompile Include="slipgate\sg_rune_movement.c" />
     <ClCompile Include="slipgate\sg_rune_locate.c" />
     <ClCompile Include="slipgate\sg_bot_callout.c">
@@ -254,15 +248,10 @@
     <ClCompile Include="slipgate\sg_rune_fire.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_rune_source_authority.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="slipgate\sg_rune_level.c" />
-    <ClCompile Include="slipgate\sg_rune_generate.c" />
     <ClCompile Include="slipgate\sg_rune_game.c" />
     <ClCompile Include="slipgate\sg_rune_flight.c" />
     <ClCompile Include="slipgate\sg_rune_field.c" />
-    <ClCompile Include="slipgate\sg_rune_cx_build.c" />
     <ClCompile Include="slipgate\sg_rune_cx.c" />
     <ClCompile Include="slipgate\sg_rune_artifact.c" />
     <ClCompile Include="slipgate\sg_rune_analytic.c" />
@@ -276,12 +265,10 @@
     </ClCompile>
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_identity.c">
       <Filter>Source Files</Filter>
     </ClCompile>
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_human_speed.c">
       <Filter>Source Files</Filter>
     </ClCompile>
       <Filter>Source Files</Filter>
@@ -290,7 +277,6 @@
     </ClCompile>
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_pov_identity.c">
       <Filter>Source Files</Filter>
     </ClCompile>
       <Filter>Source Files</Filter>
@@ -299,7 +285,6 @@
     </ClCompile>
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_rune_v2_content_identity.c">
       <Filter>Source Files</Filter>
     </ClCompile>
       <Filter>Source Files</Filter>
@@ -316,7 +301,6 @@
     </ClCompile>
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_sidecar_wire.c">
       <Filter>Source Files</Filter>
     </ClCompile>
       <Filter>Source Files</Filter>
@@ -443,58 +427,6 @@
     </ClCompile>
       <Filter>Source Files</Filter>
     </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_bsp_entity_semantics.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_bsp_entity_semantics_audit_expected.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_bsp_entity_semantics_publication.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_bsp_world.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_host_collision.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_host_engine_pmove.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_host_engine_runtime.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_host_engine_parity.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_host_hook_law.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_host_law_owner.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_host_law_publication.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_host_mechanism_law.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_host_pmove.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_weapon_effect_profile.c">
       <Filter>Source Files</Filter>
     </ClCompile>
       <Filter>Source Files</Filter>
@@ -516,40 +448,6 @@
     </ClCompile>
       <Filter>Source Files\slipgate</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_destination.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_rune_model.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_cvars.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_hooks.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_util.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_client.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_clock.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_weights.c">
       <Filter>Source Files</Filter>
     </ClCompile>
       <Filter>Source Files</Filter>
@@ -568,33 +466,22 @@
     </ClCompile>
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_caco.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_chat.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_combat.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_combat_land_lead.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_net.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="slipgate\sg_persona.c">
       <Filter>Source Files</Filter>
     </ClCompile>
       <Filter>Source Files</Filter>
     </ClCompile>
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="slipgate\sg_client_ownership.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+      <Filter>Source Files</Filter>
+    </ClCompile>
+      <Filter>Source Files</Filter>
+    </ClCompile>
+      <Filter>Source Files</Filter>
+    </ClCompile>
+      <Filter>Source Files</Filter>
+    </ClCompile>
       <Filter>Source Files</Filter>
     </ClCompile>
       <Filter>Source Files</Filter>
@@ -787,23 +674,11 @@
     <ClInclude Include="q_shared.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="slipgate\sg_action.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_action_contract.generated.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="slipgate\sg_crc32.h">
     <ClInclude Include="slipgate\sg_configuration_semantics.h" />
     <ClInclude Include="slipgate\sg_configuration_space.h" />
     <ClInclude Include="slipgate\sg_rune_movement.h" />
     <ClInclude Include="slipgate\sg_rune_locate.h" />
-    <ClInclude Include="slipgate\sg_ammo_pickup.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_armor_pickup.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="slipgate\sg_bot_callout.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -814,57 +689,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_bot_orders.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_bsp_entity_semantics_audit_internal.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_bsp_entity_semantics_storage_internal.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_health_pickup.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_hook_visibility_feasibility_internal.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_host_engine_runtime_private.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_host_law_owner_internal.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_host_law_publication_private.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_mechanism_kinds.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_net.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_persona.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_persona_assignment.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_rune_source_authority.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_rune_source_authority_owner.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_rune_v2_wire.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_sound_policy.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_weapon_contract.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_weapon_host_constants.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_rune_level.h" />
@@ -890,14 +714,6 @@
     </ClInclude>
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="slipgate\sg_identity.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_human_speed.h">
       <Filter>Header Files</Filter>
     </ClInclude>
       <Filter>Header Files</Filter>
@@ -906,13 +722,11 @@
     </ClInclude>
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="slipgate\sg_pov_identity.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_local.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="slipgate\sg_belief_contract.h">
       <Filter>Header Files</Filter>
     </ClInclude>
       <Filter>Header Files</Filter>
@@ -973,50 +787,6 @@
     </ClInclude>
       <Filter>Header Files</Filter>
     </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_bsp_entity_semantics.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_bsp_entity_semantics_publication.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_bsp_world.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_host_collision.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_host_engine_pmove.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_host_rocket_jump_law.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_host_engine_runtime.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_host_engine_parity.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_host_hook_law.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_host_law_owner.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_host_law_publication.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_host_mechanism_law.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_host_pmove.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_weapon_effect_profile.h">
       <Filter>Header Files</Filter>
     </ClInclude>
       <Filter>Header Files</Filter>
@@ -1042,31 +812,6 @@
     </ClInclude>
       <Filter>Header Files\slipgate</Filter>
     </ClInclude>
-    <ClInclude Include="slipgate\sg_destination.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_rune_model.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_rune_contract.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_rune_v2_content_identity.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_rune_v2_exact_snapshot_private.h">
       <Filter>Header Files</Filter>
     </ClInclude>
       <Filter>Header Files</Filter>
@@ -1079,13 +824,14 @@
     </ClInclude>
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="slipgate\sg_sidecar_wire.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="slipgate\sg_sidecar_loader.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="slipgate\sg_sidecar_store.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+      <Filter>Header Files</Filter>
+    </ClInclude>
       <Filter>Header Files</Filter>
     </ClInclude>
       <Filter>Header Files</Filter>
@@ -1163,34 +909,6 @@
     </ClInclude>
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="slipgate\sg_client_ownership.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_clock.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_cvars.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_field_key.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_hooks.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="slipgate\sg_oracle_internal.h">
       <Filter>Header Files</Filter>
     </ClInclude>
       <Filter>Header Files</Filter>
@@ -1253,7 +971,14 @@
     </ClInclude>
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="slipgate\sg_util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+      <Filter>Header Files</Filter>
+    </ClInclude>
+      <Filter>Header Files</Filter>
+    </ClInclude>
+      <Filter>Header Files</Filter>
+    </ClInclude>
       <Filter>Header Files</Filter>
     </ClInclude>
       <Filter>Header Files</Filter>

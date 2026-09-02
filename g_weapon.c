@@ -1,6 +1,6 @@
 #include "g_local.h"
 #include "g_ctffunc.h" //surt for some nice wrapper functions
-#include "slipgate/sg_cvars.h"
+#include "slipgate/sg_bot_cvars.h"
 
 
 /*
@@ -28,7 +28,7 @@ static void check_dodge (edict_t *self, vec3_t start, vec3_t dir, int speed)
 		if (random() > 0.25)
 			return;
 	}
-	VectorMA (start, SG_HOST_WEAPON_RAY_DISTANCE, dir, end);
+	VectorMA (start, 8192, dir, end);
 #ifdef MONSTERS_OK
 	tr = gi.trace (start, NULL, NULL, end, self, MASK_SHOT);
 	if ((tr.ent) && (tr.ent->svflags & SVF_MONSTER) && (tr.ent->health > 0) && (tr.ent->monsterinfo.dodge) && infront(tr.ent, self))
@@ -143,7 +143,7 @@ static void fire_lead (edict_t *self, vec3_t start, vec3_t aimdir, int damage, i
 
 		r = crandom()*hspread;
 		u = crandom()*vspread;
-		VectorMA (start, SG_HOST_WEAPON_RAY_DISTANCE, forward, end);
+		VectorMA (start, 8192, forward, end);
 		VectorMA (end, r, right, end);
 		VectorMA (end, u, up, end);
 
@@ -197,7 +197,7 @@ static void fire_lead (edict_t *self, vec3_t start, vec3_t aimdir, int damage, i
 				AngleVectors (dir, forward, right, up);
 				r = crandom()*hspread*2;
 				u = crandom()*vspread*2;
-				VectorMA (water_start, SG_HOST_WEAPON_RAY_DISTANCE,
+				VectorMA (water_start, 8192,
 					forward, end);
 				VectorMA (end, r, right, end);
 				VectorMA (end, u, up, end);
@@ -377,16 +377,16 @@ void fire_blaster (edict_t *self, vec3_t start, vec3_t dir, int damage, int spee
 			bolt->s.skinnum = 0xf3f3f1f1;		// sorta blue
 
 
-		VectorSet (bolt->mins, -SG_HOST_BLASTER_BALANCED_HALF_EXTENT,
-			-SG_HOST_BLASTER_BALANCED_HALF_EXTENT,
-			-SG_HOST_BLASTER_BALANCED_HALF_EXTENT);
-		VectorSet (bolt->maxs, SG_HOST_BLASTER_BALANCED_HALF_EXTENT,
-			SG_HOST_BLASTER_BALANCED_HALF_EXTENT,
-			SG_HOST_BLASTER_BALANCED_HALF_EXTENT);
+		VectorSet (bolt->mins, -8,
+			-8,
+			-8);
+		VectorSet (bolt->maxs, 8,
+			8,
+			8);
 
 		bolt->touch = blaster_touch;
 		bolt->nextthink = level.time +
-			SG_HOST_BLASTER_BALANCED_LIFETIME_SECONDS;
+			4;
 		bolt->think = G_FreeEdict;
 		bolt->dmg = damage;
 		bolt->svflags |= SVF_DEADMONSTER;
@@ -431,7 +431,7 @@ void fire_blaster (edict_t *self, vec3_t start, vec3_t dir, int damage, int spee
 	bolt->s.sound = gi.soundindex ("misc/lasfly.wav");
 	G_ProjectileOwnerSet(bolt, self);
 	bolt->touch = blaster_touch;
-	bolt->nextthink = level.time + SG_HOST_BLASTER_LIFETIME_SECONDS;
+	bolt->nextthink = level.time + 2;
 	bolt->think = G_FreeEdict;
 	bolt->dmg = damage;
 	bolt->classname = "bolt";
@@ -592,9 +592,9 @@ void fire_grenade (edict_t *self, vec3_t start, vec3_t aimdir, int damage, int s
 	VectorCopy (start, grenade->s.origin);
 	VectorScale (aimdir, speed, grenade->velocity);
 	VectorMA (grenade->velocity,
-		SG_HOST_GRENADE_VERTICAL_SPEED + crandom() * SG_HOST_GRENADE_JITTER,
+		200 + crandom() * 10,
 		up, grenade->velocity);
-	VectorMA (grenade->velocity, crandom() * SG_HOST_GRENADE_JITTER,
+	VectorMA (grenade->velocity, crandom() * 10,
 		right, grenade->velocity);
 	VectorSet (grenade->avelocity, 300, 300, 300);
 	grenade->movetype = MOVETYPE_BOUNCE;
@@ -632,9 +632,9 @@ void fire_grenade2 (edict_t *self, vec3_t start, vec3_t aimdir, int damage, int 
 	VectorCopy (start, grenade->s.origin);
 	VectorScale (aimdir, speed, grenade->velocity);
 	VectorMA (grenade->velocity,
-		SG_HOST_GRENADE_VERTICAL_SPEED + crandom() * SG_HOST_GRENADE_JITTER,
+		200 + crandom() * 10,
 		up, grenade->velocity);
-	VectorMA (grenade->velocity, crandom() * SG_HOST_GRENADE_JITTER,
+	VectorMA (grenade->velocity, crandom() * 10,
 		right, grenade->velocity);
 	VectorSet (grenade->avelocity, 300, 300, 300);
 	grenade->movetype = MOVETYPE_BOUNCE;
@@ -750,7 +750,7 @@ void fire_rocket (edict_t *self, vec3_t start, vec3_t dir, int damage, int speed
 	rocket->s.modelindex = gi.modelindex ("models/objects/rocket/tris.md2");
 	G_ProjectileOwnerSet(rocket, self);
 	rocket->touch = rocket_touch;
-	rocket->nextthink = level.time + SG_HOST_PROJECTILE_RETIRE_DISTANCE/speed;
+	rocket->nextthink = level.time + 8000/speed;
 	rocket->think = Rocket_Free;
 	rocket->dmg = damage;
 	rocket->radius_dmg = radius_damage;
@@ -785,15 +785,15 @@ void fire_rail (edict_t *self, vec3_t start, vec3_t aimdir, int damage, int kick
 #ifdef WEAP_BALANCE_OK
 	if ((int)ctfflags->value & CTF_WEAP_BALANCE)
 	{
-		fire_lead (self, start, aimdir, SG_HOST_RAILGUN_AUXILIARY_DAMAGE, 0, TE_GUNSHOT, SG_HOST_RAILGUN_AUXILIARY_SPREAD, SG_HOST_RAILGUN_AUXILIARY_SPREAD, MOD_RAILGUN);
-		fire_lead (self, start, aimdir, SG_HOST_RAILGUN_AUXILIARY_DAMAGE, 0, TE_GUNSHOT, SG_HOST_RAILGUN_AUXILIARY_SPREAD, -SG_HOST_RAILGUN_AUXILIARY_SPREAD, MOD_RAILGUN);
-		fire_lead (self, start, aimdir, SG_HOST_RAILGUN_AUXILIARY_DAMAGE, 0, TE_GUNSHOT, -SG_HOST_RAILGUN_AUXILIARY_SPREAD, SG_HOST_RAILGUN_AUXILIARY_SPREAD, MOD_RAILGUN);
-		fire_lead (self, start, aimdir, SG_HOST_RAILGUN_AUXILIARY_DAMAGE, 0, TE_GUNSHOT, -SG_HOST_RAILGUN_AUXILIARY_SPREAD, -SG_HOST_RAILGUN_AUXILIARY_SPREAD, MOD_RAILGUN);
+		fire_lead (self, start, aimdir, 4, 0, TE_GUNSHOT, 512, 512, MOD_RAILGUN);
+		fire_lead (self, start, aimdir, 4, 0, TE_GUNSHOT, 512, -512, MOD_RAILGUN);
+		fire_lead (self, start, aimdir, 4, 0, TE_GUNSHOT, -512, 512, MOD_RAILGUN);
+		fire_lead (self, start, aimdir, 4, 0, TE_GUNSHOT, -512, -512, MOD_RAILGUN);
 	}
 #endif
 
 
-	VectorMA (start, SG_HOST_WEAPON_RAY_DISTANCE, aimdir, end);
+	VectorMA (start, 8192, aimdir, end);
 	VectorCopy (start, from);
 	ignore = self;
 	water = false;
@@ -881,7 +881,7 @@ void bfg_explode (edict_t *self)
 			dist = VectorLength(v);
 			points = self->radius_dmg * (1.0 - sqrt(dist/self->dmg_radius));
 			if (ent == self->owner)
-				points = points * SG_HOST_RADIUS_SELF_SCALE;
+				points = points * 0.5;
 
 			gi.WriteByte (svc_temp_entity);
 			gi.WriteByte (TE_BFG_EXPLOSION);
@@ -914,9 +914,9 @@ void bfg_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *surf
 	// core explosion - prevents firing it into the wall/floor
 	if (other->takedamage)
 		T_Damage (other, self, self->owner, self->velocity, self->s.origin,
-			plane->normal, SG_HOST_BFG_DAMAGE, 0, 0, MOD_BFG_BLAST);
-	T_RadiusDamage(self, self->owner, SG_HOST_BFG_DAMAGE, other,
-		SG_HOST_BFG_CORE_RADIUS, MOD_BFG_BLAST);
+			plane->normal, 200, 0, 0, MOD_BFG_BLAST);
+	T_RadiusDamage(self, self->owner, 200, other,
+		100, MOD_BFG_BLAST);
 
 	gi.sound (self, CHAN_VOICE, gi.soundindex ("weapons/bfg__x1b.wav"), 1, ATTN_NORM, 0);
 	self->solid = SOLID_NOT;
@@ -950,18 +950,18 @@ void bfg_think (edict_t *self)
 	trace_t	tr;
 
 	if (deathmatch->value)
-		dmg = SG_HOST_BFG_PERIODIC_RAY_DAMAGE;
+		dmg = 5;
 	else
-		dmg = SG_HOST_BFG_NON_DM_PERIODIC_RAY_DAMAGE;
+		dmg = 10;
 
 #ifdef WEAP_BALANCE_OK	
 	if ((int)ctfflags->value & CTF_WEAP_BALANCE)
-		dmg = SG_HOST_BFG_BALANCED_PERIODIC_RAY_DAMAGE;
+		dmg = 3;
 #endif
 
 	ent = NULL;
 	while ((ent = findradius(ent, self->s.origin,
-		SG_HOST_BFG_PERIODIC_RAY_RADIUS)) != NULL)
+		256)) != NULL)
 	{
 		if (ent == self)
 			continue;
@@ -982,7 +982,7 @@ void bfg_think (edict_t *self)
 
 		ignore = self;
 		VectorCopy (self->s.origin, start);
-		VectorMA (start, SG_HOST_BFG_PERIODIC_RAY_DISTANCE, dir, end);
+		VectorMA (start, 2048, dir, end);
 		while(1)
 		{
 			tr = gi.trace (start, NULL, NULL, end, ignore, CONTENTS_SOLID|CONTENTS_MONSTER|CONTENTS_DEADMONSTER);
@@ -1046,7 +1046,7 @@ void fire_bfg (edict_t *self, vec3_t start, vec3_t dir, int damage, int speed, f
 	bfg->s.modelindex = gi.modelindex ("sprites/s_bfg1.sp2");
 	G_ProjectileOwnerSet(bfg, self);
 	bfg->touch = bfg_touch;
-	bfg->nextthink = level.time + SG_HOST_PROJECTILE_RETIRE_DISTANCE/speed;
+	bfg->nextthink = level.time + 8000/speed;
 	bfg->think = G_FreeEdict;
 	bfg->radius_dmg = damage;
 	bfg->dmg_radius = damage_radius;

@@ -28,7 +28,9 @@ int main(int argc, char **argv)
 	sg_rune_cx_vec3_t vertices[4];
 	sg_rune_cx_portal_t portal;
 	sg_rune_move_store_t store;
-	sg_rune_move_law_t law = { 800.0f, 100U, 25U };
+	sg_rune_move_law_t law;
+
+	SG_RuneLawEngine(&law, 800.0f);
 	sg_rune_move_crossing_t crossing;
 	sg_rune_artifact_t source, decoded, loaded;
 	unsigned char *image = NULL;
@@ -78,7 +80,8 @@ int main(int argc, char **argv)
 	memset(&source, 0, sizeof(source));
 	source.identity.schema_id = SG_RUNE_ARTIFACT_SCHEMA_ID;
 	source.identity.bsp_bytes = 12345U;
-	memset(source.identity.bsp_sha256, 0xAB, 32U);
+	source.identity.bsp_crc32 = 0xABCDEF01U;
+	source.identity.entity_crc32 = 0x12345678U;
 	source.law.standing_mins[0] = source.law.standing_mins[1] = -16.0f;
 	source.law.standing_mins[2] = -24.0f;
 	source.law.standing_maxs[0] = source.law.standing_maxs[1] = 16.0f;
@@ -87,8 +90,8 @@ int main(int argc, char **argv)
 	source.law.crouching_mins[2] = -24.0f;
 	source.law.crouching_maxs[0] = source.law.crouching_maxs[1] = 16.0f;
 	source.law.crouching_maxs[2] = 4.0f;
-	source.law.gravity = 800.0f; source.law.max_velocity = 300.0f;
-	source.law.frame_ms = 100U; source.law.substep_ms = 25U;
+	SG_RuneLawEngine(&source.law, 800.0f);
+	source.identity.law_crc32 = SG_RuneLawCrc(&source.law);
 	source.complex.cells = cells; source.complex.cell_count = 2U;
 	source.complex.facets = &facet; source.complex.facet_count = 1U;
 	source.complex.incidences = incidences; source.complex.incidence_count = 2U;

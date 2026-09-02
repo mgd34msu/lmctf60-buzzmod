@@ -100,15 +100,15 @@ typedef struct sg_configuration_semantic_region_s
 	uint32_t cell;
 	uint32_t first_face;
 	uint32_t face_count;
-	sg_rune_bounds_t bounds;
-	sg_rune_vec3_t interior_witness;
-	sg_host_collision_contents_t origin_contents;
-	sg_rune_contents_mask_t origin_rune_contents;
-	sg_host_collision_contents_t sample_contents[3];
+	sg_cfg_bounds_t bounds;
+	sg_cfg_vec3_t interior_witness;
+	int32_t origin_contents;
+	int32_t origin_rune_contents;
+	int32_t sample_contents[3];
 	uint32_t sample_leaves[3];
 	uint32_t sample_areas[3];
 	int32_t sample_clusters[3];
-	sg_host_collision_contents_t water_type;
+	int32_t water_type;
 	sg_configuration_semantic_region_flags_t flags;
 	uint8_t water_level;
 	uint8_t reserved[3];
@@ -158,31 +158,30 @@ typedef struct sg_configuration_hook_surface_s
 	float distance;
 	uint32_t first_vertex;
 	uint32_t vertex_count;
-	sg_rune_bounds_t bounds;
+	sg_cfg_bounds_t bounds;
 	sg_configuration_hook_surface_flags_t flags;
 } sg_configuration_hook_surface_t;
 
 typedef struct sg_configuration_semantics_s
 {
-	sg_rune_model_identity_t identity;
 	sg_configuration_semantic_region_t *regions;
 	uint32_t region_count;
 	sg_configuration_semantic_face_t *faces;
 	uint32_t face_count;
-	sg_rune_vec3_t *vertices;
+	sg_cfg_vec3_t *vertices;
 	uint32_t vertex_count;
 	sg_configuration_boundary_t *boundaries;
 	uint32_t boundary_count;
 	sg_configuration_hook_surface_t *hook_surfaces;
 	uint32_t hook_surface_count;
-	sg_rune_vec3_t *hook_vertices;
+	sg_cfg_vec3_t *hook_vertices;
 	uint32_t hook_vertex_count;
 } sg_configuration_semantics_t;
 
 void SG_ConfigurationSemanticsDefaultLimits(
 	sg_configuration_semantics_limits_t *limits_out);
 int SG_ConfigurationSemanticsBuild(
-	const sg_host_collision_authority_t *authority,
+	const sg_rune_bsp_t *bsp, const sg_rune_law_t *law,
 	const sg_configuration_space_t *configuration,
 	const sg_configuration_semantics_limits_t *limits,
 	sg_configuration_semantics_t **semantics_out,

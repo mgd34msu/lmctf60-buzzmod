@@ -4,14 +4,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "sg_bsp_world.h"
-#include "sg_host_collision.h"
+#include "sg_rune_bsp.h"
+#include "sg_rune_trace.h"
+#include "sg_rune_law.h"
 #include "sg_rune_artifact.h"
 #include "sg_rune_cx_build.h"
 #include "sg_rune_flight.h"
 #include "sg_rune_locate.h"
 #include "sg_rune_vis.h"
-#include "sg_weapon_host_constants.h"
 
 #define ROPE_RANGE 1000.0f
 #define BITE_ABOVE_EYE 24.0f
@@ -32,8 +32,7 @@ typedef struct bite_s
 
 typedef struct hook_build_s
 {
-	const sg_bsp_world_t *bsp;
-	const sg_host_collision_authority_t *authority;
+	const sg_rune_bsp_t *bsp;
 	sg_rune_cx_view_t view;
 	const sg_rune_law_t *law;
 	sg_rune_move_store_t *movement;
@@ -127,15 +126,15 @@ static int CollectBites(hook_build_t *build)
 
 static int LineClear(hook_build_t *build, const float from[3], const float to[3])
 {
-	sg_host_collision_trace_t trace;
+	sg_rune_trace_t trace;
 	float dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
 	float length = sqrtf(dx * dx + dy * dy + dz * dz);
 
 	static const float point[3] = { 0.0f, 0.0f, 0.0f };
 
 	build->report.traces++;
-	if (!SG_HostCollisionTrace(build->authority, NULL, from, point, point, to,
-		SG_HOST_MASK_PLAYER_SOLID, &trace))
+	if (!SG_RuneTraceBox(build->bsp, 0U, NULL, from, point, point, to,
+		SG_RUNE_MASK_PLAYER_SOLID, &trace))
 		return 0;
 	if (trace.startsolid)
 		return 0;
@@ -149,16 +148,16 @@ static int LineClear(hook_build_t *build, const float from[3], const float to[3]
 static float PullClear(hook_build_t *build, const float start[3],
 	const float direction[3], float length)
 {
-	sg_host_collision_trace_t trace;
+	sg_rune_trace_t trace;
 	float end[3];
 
 	end[0] = start[0] + direction[0] * length;
 	end[1] = start[1] + direction[1] * length;
 	end[2] = start[2] + direction[2] * length;
 	build->report.traces++;
-	if (!SG_HostCollisionTrace(build->authority, NULL, start,
+	if (!SG_RuneTraceBox(build->bsp, 0U, NULL, start,
 		build->law->crouching_mins, build->law->crouching_maxs, end,
-		SG_HOST_MASK_PLAYER_SOLID, &trace))
+		SG_RUNE_MASK_PLAYER_SOLID, &trace))
 		return 0.0f;
 	if (trace.startsolid)
 		return 0.0f;
@@ -174,24 +173,6 @@ typedef struct landing_s
 	float release_distance;
 } landing_t;
 
-/* The host's pull: full speed beyond 120 units from the bite, then slower
- * by bands, to a stop within ten; gravity is off within fifty. */
-static float PullSpeed(float distance)
-{
-	if (distance > 120.0f)
-		return (float)SG_HOST_HOOK_PULL_SPEED;
-	if (distance > 100.0f)
-		return distance * 5.0f;
-	if (distance > 80.0f)
-		return distance * 4.0f;
-	if (distance > 40.0f)
-		return distance * 3.0f;
-	if (distance > 20.0f)
-		return distance * 2.0f;
-	if (distance > 10.0f)
-		return distance;
-	return 0.0f;
-}
 
 static int RidesFromCell(hook_build_t *build, uint32_t cell,
 	landing_t *landings, uint32_t *landing_count)
@@ -275,7 +256,7 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 		direction[0] /= length;
 		direction[1] /= length;
 		direction[2] /= length;
-		bolt_seconds = candidate_distance[i] / (float)SG_HOST_HOOK_FIRE_SPEED;
+		bolt_seconds = candidate_distance[i] / build->law->hook_fire_speed;
 		clear = PullClear(build, stand, direction, length - NEAR_BITE_STOP);
 		if (clear < MIN_PULL)
 			continue;
@@ -300,7 +281,7 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 			pull[1] = bite->point[1] - release[1];
 			pull[2] = bite->point[2] - (release[2] + EYE_HEIGHT);
 			remaining = sqrtf(pull[0] * pull[0] + pull[1] * pull[1] + pull[2] * pull[2]);
-			speed = PullSpeed(remaining);
+			speed = SG_RuneLawHookPullSpeed(build->law, remaining);
 			if (remaining < 1.0f || speed <= 0.0f)
 				continue;
 			release_distance = remaining;
@@ -318,7 +299,7 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 				!(cx->cells[flight.landing_cell].semantics & SG_RUNE_CX_CELL_SUPPORTED))
 				continue;
 			seconds = bolt_seconds + clear * fractions[f] /
-				(float)SG_HOST_HOOK_PULL_SPEED + flight.seconds + 0.3f;
+				build->law->hook_pull_speed + flight.seconds + 0.3f;
 			/* One record per landing cell: the cheapest ride there. */
 			slot = NULL;
 			for (k = 0U; k < *landing_count; k++)
@@ -356,8 +337,8 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 	return 1;
 }
 
-int SG_RuneHookEmit(const sg_bsp_world_t *bsp,
-	const sg_host_collision_authority_t *authority, const sg_rune_cx_t *cx,
+int SG_RuneHookEmit(const sg_rune_bsp_t *bsp,
+	const sg_rune_cx_t *cx,
 	const sg_rune_law_t *law, sg_rune_move_store_t *movement,
 	sg_rune_hook_report_t *report_out)
 {
@@ -367,13 +348,12 @@ int SG_RuneHookEmit(const sg_bsp_world_t *bsp,
 
 	if (report_out)
 		memset(report_out, 0, sizeof(*report_out));
-	if (!bsp || !authority || !cx || !law || !movement)
+	if (!bsp || !cx || !law || !movement)
 		return 0;
 	memset(&build, 0, sizeof(build));
 	if (!SG_RuneCxRead(cx, &build.view))
 		return 0;
 	build.bsp = bsp;
-	build.authority = authority;
 	build.law = law;
 	build.movement = movement;
 	build.artifact.complex = build.view;

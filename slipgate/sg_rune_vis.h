@@ -9,21 +9,21 @@
 
 #include <stdint.h>
 
-struct sg_bsp_world_s;
+struct sg_rune_bsp_s;
 
 typedef struct sg_rune_vis_s
 {
-	const struct sg_bsp_world_s *bsp;
+	const struct sg_rune_bsp_s *bsp;
 	uint32_t cluster_count;   /* at least one */
 	uint8_t *row;             /* the selected cluster's decoded row */
 	int32_t row_cluster;      /* which cluster row holds, or -2 */
 } sg_rune_vis_t;
 
-int SG_RuneVisInit(sg_rune_vis_t *vis, const struct sg_bsp_world_s *bsp);
+int SG_RuneVisInit(sg_rune_vis_t *vis, const struct sg_rune_bsp_s *bsp);
 void SG_RuneVisFree(sg_rune_vis_t *vis);
 
 /* The cluster of the leaf holding point, or -1 outside the world. */
-int32_t SG_RuneVisClusterAt(const struct sg_bsp_world_s *bsp,
+int32_t SG_RuneVisClusterAt(const struct sg_rune_bsp_s *bsp,
 	const float point[3]);
 
 /* Decodes cluster's row (everything visible when the map has no data). */
