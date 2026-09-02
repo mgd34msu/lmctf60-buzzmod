@@ -65,8 +65,13 @@ static int AimAngles(const float from[3], const float to[3], float *yaw_out,
 }
 
 /* The hook is a rope the body fires, rides, and lets go of.  Firing needs
- * the aim; the body keeps moving throughout; the rope is released once the
- * body is past the crossing it was pulled toward. */
+ * the aim at the bite; the body keeps pushing toward the landing throughout;
+ * the rope is let go once the ride has carried the body up to the landing's
+ * height or over it, or when the bite is about to be reached. */
+#define HOOK_RELEASE_BELOW 8.0f
+#define HOOK_RELEASE_FLAT 40.0f
+#define HOOK_RELEASE_AT_BITE 60.0f
+
 static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 	int have_direction, const float direction[3], float distance,
 	sg_tactic_command_t *command)
@@ -74,6 +79,7 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 	const sg_host_hook_phase_t live = body->hook_phase;
 	float eye[3];
 
+	(void)distance;
 	if (have_direction)
 		Toward(command, direction, 1.0f);
 	if (live == SG_HOST_HOOK_IDLE || live == SG_HOST_HOOK_COAST)
@@ -95,11 +101,28 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 		command->status = SG_TACTIC_COMMAND_MOVE;
 		return;
 	}
-	if (live == SG_HOST_HOOK_ATTACHED && (!have_direction || distance < 24.0f))
+	if (live == SG_HOST_HOOK_ATTACHED)
 	{
-		command->hook_release = 1U;
-		command->status = SG_TACTIC_COMMAND_MOVE;
-		return;
+		float dx = step->target[0] - body->origin[0];
+		float dy = step->target[1] - body->origin[1];
+		float flat = sqrtf(dx * dx + dy * dy);
+		float to_bite = INFINITY;
+
+		if (step->hook_point_present)
+		{
+			float bx = step->hook_point[0] - body->origin[0];
+			float by = step->hook_point[1] - body->origin[1];
+			float bz = step->hook_point[2] - body->origin[2];
+
+			to_bite = sqrtf(bx * bx + by * by + bz * bz);
+		}
+		if (!have_direction || body->origin[2] >= step->target[2] - HOOK_RELEASE_BELOW ||
+			flat < HOOK_RELEASE_FLAT || to_bite < HOOK_RELEASE_AT_BITE)
+		{
+			command->hook_release = 1U;
+			command->status = SG_TACTIC_COMMAND_MOVE;
+			return;
+		}
 	}
 	command->status = SG_TACTIC_COMMAND_MOVE;
 }

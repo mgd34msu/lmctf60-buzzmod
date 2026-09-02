@@ -27,6 +27,10 @@ typedef struct sg_rune_hook_report_s
 	uint32_t cells;           /* floor cells that got at least one record */
 	uint32_t records;
 	uint32_t traces;
+	uint32_t candidates;      /* bites in view, in range, above, facing */
+	uint32_t bolt_clear;      /* whose line from the eye reached them */
+	uint32_t pull_clear;      /* whose pull had room */
+	uint32_t flights;         /* releases that were traced */
 } sg_rune_hook_report_t;
 
 int SG_RuneHookEmit(const struct sg_bsp_world_s *bsp,

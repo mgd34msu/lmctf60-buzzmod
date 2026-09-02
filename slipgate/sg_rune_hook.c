@@ -193,8 +193,10 @@ static int LineClear(hook_build_t *build, const float from[3], const float to[3]
 	float dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
 	float length = sqrtf(dx * dx + dy * dy + dz * dz);
 
+	static const float point[3] = { 0.0f, 0.0f, 0.0f };
+
 	build->report.traces++;
-	if (!SG_HostCollisionTrace(build->authority, NULL, from, NULL, NULL, to,
+	if (!SG_HostCollisionTrace(build->authority, NULL, from, point, point, to,
 		SG_HOST_MASK_PLAYER_SOLID, &trace))
 		return 0;
 	if (trace.startsolid)
@@ -301,8 +303,10 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 		static const float fractions[] = { 0.5f, 0.75f, 1.0f };
 		uint32_t f;
 
+		build->report.candidates++;
 		if (!LineClear(build, eye, bite->point))
 			continue;
+		build->report.bolt_clear++;
 		direction[0] = bite->point[0] - stand[0];
 		direction[1] = bite->point[1] - stand[1];
 		direction[2] = bite->point[2] - stand[2];
@@ -317,6 +321,7 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 		clear = PullClear(build, stand, direction, length - NEAR_BITE_STOP);
 		if (clear < MIN_PULL)
 			continue;
+		build->report.pull_clear++;
 		for (f = 0U; f < sizeof(fractions) / sizeof(fractions[0]); f++)
 		{
 			float release[3], velocity[3];
@@ -336,6 +341,7 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 			if (start == SG_RUNE_CX_INDEX_NONE)
 				continue;
 			build->report.traces++;
+			build->report.flights++;
 			if (!SG_RuneFlightTrace(cx, build->law, start, release, velocity, &flight) ||
 				flight.outcome != SG_RUNE_FLIGHT_LANDED ||
 				flight.landing_cell == cell ||

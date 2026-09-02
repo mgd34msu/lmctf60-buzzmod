@@ -652,6 +652,7 @@ RUNE_COMPACT_GENERATOR_OFFLINE_OBJS = \
 	slipgate/sg_rune_cx_build.o \
 	slipgate/sg_rune_movement_build.o \
 	slipgate/sg_rune_mechanisms.o \
+	slipgate/sg_rune_hook.o \
 	slipgate/sg_rune_generate.o \
 	slipgate/sg_rune_game_generate.o
 RUNE_COMPACT_GENERATOR_RUNTIME_OBJS = $(filter-out \
@@ -1896,19 +1897,20 @@ sqlite3.o: sqlite3.c
 
 # The era-4 cell builder on one map: counts and timing.
 CELLSDUMP_BIN = cellsdump.gnu
-$(CELLSDUMP_BIN): tools/cellsdump.c slipgate/sg_configuration_cells.c \
-		slipgate/sg_configuration_semantics.c slipgate/sg_rune_cx.c \
-		slipgate/sg_rune_cx_build.c slipgate/sg_rune_movement.c \
-		slipgate/sg_rune_movement_build.c slipgate/sg_rune_flight.c \
-		slipgate/sg_rune_analytic.c slipgate/sg_rune_artifact.c
+CELLSDUMP_SRCS = slipgate/sg_configuration_cells.c \
+	slipgate/sg_configuration_semantics.c slipgate/sg_rune_cx.c \
+	slipgate/sg_rune_cx_build.c slipgate/sg_rune_movement.c \
+	slipgate/sg_rune_movement_build.c slipgate/sg_rune_flight.c \
+	slipgate/sg_rune_analytic.c slipgate/sg_rune_artifact.c \
+	slipgate/sg_rune_mechanisms.c slipgate/sg_rune_hook.c \
+	slipgate/sg_rune_locate.c slipgate/sg_bsp_entity_semantics.c \
+	slipgate/sg_bsp_entity_semantics_publication.c \
+	slipgate/sg_bsp_entity_semantics_audit_expected.c \
+	slipgate/sg_host_collision.c slipgate/sg_bsp_world.c \
+	slipgate/sg_rune_model.c slipgate/sg_crc32.c
+$(CELLSDUMP_BIN): tools/cellsdump.c $(CELLSDUMP_SRCS)
 	$(CC) -std=c11 -O2 -g -Wall -Wextra -I. tools/cellsdump.c \
-		slipgate/sg_configuration_cells.c slipgate/sg_configuration_semantics.c \
-		slipgate/sg_rune_cx.c slipgate/sg_rune_cx_build.c \
-		slipgate/sg_rune_movement.c slipgate/sg_rune_movement_build.c \
-		slipgate/sg_rune_flight.c slipgate/sg_rune_analytic.c \
-		slipgate/sg_rune_artifact.c slipgate/sg_host_collision.c \
-		slipgate/sg_bsp_world.c slipgate/sg_rune_model.c slipgate/sg_crc32.c \
-		-lm -o $@
+		$(CELLSDUMP_SRCS) -lm -o $@
 .PHONY: cellsdump
 cellsdump: $(CELLSDUMP_BIN)
 

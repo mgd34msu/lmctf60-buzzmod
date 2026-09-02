@@ -436,6 +436,29 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 				destination[2]);
 		return;
 	}
+	/* A rope out or attached: the hook crossing goes on, whatever is under
+	 * the body, until the rope is let go; then the body is on a flight to
+	 * the record's landing. */
+	if (e->client->hookstate != 0 && bot->flight_capability != SG_RUNE_CX_INDEX_NONE)
+	{
+		const sg_rune_move_capability_t *record =
+			&sg_rune_level.artifact.movement.capabilities[bot->flight_capability];
+
+		if (record->kind == SG_RUNE_MOVE_HOOK)
+		{
+			bot->airborne = (uint8_t)!supported;
+			bot->step.kind = SG_RUNE_STEP_CROSS;
+			bot->step.cell = bot->cell;
+			bot->step.portal = SG_RUNE_CX_INDEX_NONE;
+			bot->step.capability = bot->flight_capability;
+			bot->step.move_kind = SG_RUNE_MOVE_HOOK;
+			bot->step.crouching_now = (uint8_t)crouching;
+			VectorCopy(bot->flight_landing, bot->step.target);
+			VectorCopy(record->anchor, bot->step.hook_point);
+			bot->step.hook_point_present = 1U;
+			return;
+		}
+	}
 	bot->airborne = (uint8_t)(!supported && !swimming);
 	if (bot->airborne)
 	{
@@ -516,6 +539,7 @@ flight:
 		(bot->step.move_kind == SG_RUNE_MOVE_JUMP ||
 		 bot->step.move_kind == SG_RUNE_MOVE_DROP ||
 		 bot->step.move_kind == SG_RUNE_MOVE_ROCKET_JUMP ||
+		 bot->step.move_kind == SG_RUNE_MOVE_HOOK ||
 		 bot->step.move_kind == SG_RUNE_MOVE_EXTERNAL_FORCE))
 	{
 		const sg_rune_move_capability_t *record =

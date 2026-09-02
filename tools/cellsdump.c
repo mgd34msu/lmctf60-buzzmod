@@ -14,6 +14,7 @@
 #include "slipgate/sg_rune_cx_build.h"
 #include "slipgate/sg_rune_artifact.h"
 #include "slipgate/sg_rune_mechanisms.h"
+#include "slipgate/sg_rune_hook.h"
 #include "slipgate/sg_rune_movement.h"
 
 static double Now(void)
@@ -187,6 +188,23 @@ int main(int argc, char **argv)
 			{
 				fprintf(stderr, "mechanisms failed\n");
 				return 1;
+			}
+			{
+				sg_rune_hook_report_t hooks;
+				double th = Now();
+
+				if (!SG_RuneHookEmit(world, &authority, geometry, &law4, &movement,
+					&hooks))
+				{
+					fprintf(stderr, "hook reach failed\n");
+					return 1;
+				}
+				printf("hook: %u bites, %u cells with rides, %u records, %u traces "
+					"[%.2fs]; candidates %u bolt clear %u pull clear %u flights %u\n",
+					(unsigned)hooks.bites, (unsigned)hooks.cells,
+					(unsigned)hooks.records, (unsigned)hooks.traces, Now() - th,
+					(unsigned)hooks.candidates, (unsigned)hooks.bolt_clear,
+					(unsigned)hooks.pull_clear, (unsigned)hooks.flights);
 			}
 			printf("mechanisms: %u records, %u gate cells\n",
 				(unsigned)mechanisms.record_count, (unsigned)mechanisms.cell_count);

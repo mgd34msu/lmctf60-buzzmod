@@ -10,6 +10,7 @@
 #include "sg_configuration_space.h"
 #include "sg_host_collision.h"
 #include "sg_rune_cx_build.h"
+#include "sg_rune_hook.h"
 #include "sg_rune_mechanisms.h"
 #include "sg_rune_movement.h"
 
@@ -68,6 +69,7 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 	sg_rune_move_store_t movement;
 	sg_rune_move_law_t movement_law;
 	sg_rune_mech_store_t mechanisms;
+	sg_rune_hook_report_t hooks;
 	sg_rune_artifact_t source;
 	sg_rune_artifact_status_t status;
 	double started = Now();
@@ -143,6 +145,13 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 		Fail(&report, "mechanism emission failed");
 		goto done;
 	}
+	Begin(&link, "hook", &report);
+	if (!SG_RuneHookEmit(world, authority, complex, law, &movement, &hooks))
+	{
+		Fail(&report, "hook emission failed");
+		goto done;
+	}
+	report.hooks = hooks.records;
 	SG_RuneMoveStoreView(&movement, &source.movement);
 	SG_RuneMechStoreView(&mechanisms, &source.mechanisms);
 	report.capabilities = source.movement.capability_count;
