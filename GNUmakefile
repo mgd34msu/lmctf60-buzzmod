@@ -663,6 +663,11 @@ RUNE_COMPACT_GENERATOR_RUNTIME_OBJS = $(filter-out \
 RUNE_COMPACT_GENERATOR_OBJS = $(RUNE_COMPACT_GENERATOR_RUNTIME_OBJS) \
 	$(RUNE_COMPACT_GENERATOR_OFFLINE_OBJS)
 
+# A slipgate header change rebuilds every slipgate object: the record
+# layouts in these headers are shared by the runtime and the generator, and
+# an object built against an old layout reads garbage silently.
+$(filter slipgate/%.o,$(OBJS) $(RUNE_COMPACT_GENERATOR_OFFLINE_OBJS)): $(wildcard slipgate/*.h)
+
 ifneq ($(filter Windows Cygwin,$(PLATFORM)),)
 .PHONY: rune-compact-generator
 

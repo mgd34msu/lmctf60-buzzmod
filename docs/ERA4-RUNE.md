@@ -66,9 +66,9 @@ replacement runs on a real map.
    most of the flag's approaches (the second where the first leaves gaps),
    facing the approaches they cover.  bctf01: 3,365 representatives, 1.56M
    pairs, 698k records, 7 s, 5.3 MB.
-8. **Wire** (era 4, done). `sg_rune_artifact` v3: one image, a header with
+8. **Wire** (era 4, done). `sg_rune_artifact` v4: one image, a header with
    identity and law, seventeen sections of fixed-layout records behind a
-   CRC, every reference validated on load with the failing record named,
+   CRC (no facet vertices: each portal carries its foot; bctf01 108 MB), every reference validated on load with the failing record named,
    arrays borrowed from the image. bctf01: 110 MB, 0.9 s to load. Too big:
    portal and facet provenance and the vertex arrays dominate; stripping
    them and merging cells is the size work, after the first walking bot.

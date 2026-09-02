@@ -627,7 +627,26 @@ static qboolean ShotLands(edict_t *self, const sg_weapon_profile_t *profile,
 		if (VectorLength(delta) < profile->splash_radius * 0.8f)
 			return true;
 	}
-	return false;
+	/* A near miss still fires when the ray gets as far as the target and
+	 * passes within the body plus what the weapon's own spread covers at
+	 * that range: waiting for the tremor to line up exactly is not how a
+	 * fight is fought. */
+	{
+		vec3_t to_target, along;
+		float distance, ahead, miss, allowed;
+
+		VectorSubtract(target->s.origin, eye, to_target);
+		distance = VectorLength(to_target);
+		ahead = DotProduct(to_target, forward);
+		if (ahead <= 0.0f || tr.fraction * reach < distance - 40.0f)
+			return false;
+		VectorScale(forward, ahead, along);
+		VectorSubtract(to_target, along, delta);
+		miss = VectorLength(delta);
+		allowed = 20.0f + distance * (profile && profile->horizontal_spread > 0.0f ?
+			profile->horizontal_spread / 8192.0f : 0.01f);
+		return miss <= allowed;
+	}
 }
 
 /* ---- the frame ------------------------------------------------------------------- */
