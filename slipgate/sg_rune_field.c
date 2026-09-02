@@ -694,11 +694,18 @@ static void Fill(const sg_rune_router_t *router, uint32_t capability,
 			sizeof(step_out->run_up));
 		step_out->run_up[2] += 24.0f;
 		step_out->run_up_present = 1U;
-		if (record->kind != SG_RUNE_MOVE_HOOK)
+		/* A launch is a velocity; a record with none (a jump made at the
+		 * portal from a stand) offers no line to run. */
+		if (record->kind != SG_RUNE_MOVE_HOOK &&
+			(record->launch_velocity[0] * record->launch_velocity[0] +
+			 record->launch_velocity[1] * record->launch_velocity[1] +
+			 record->launch_velocity[2] * record->launch_velocity[2]) > 1.0f)
 		{
 			memcpy(step_out->launch, record->launch_velocity, sizeof(step_out->launch));
 			step_out->launch_present = 1U;
 		}
+		else
+			step_out->run_up_present = 0U;
 	}
 	if (step_out->portal == SG_RUNE_CX_INDEX_NONE)
 	{
