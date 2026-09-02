@@ -454,8 +454,16 @@ int SG_RuneStepSelect(const sg_rune_router_t *router,
 	step_out->portal = router->artifact->movement.capabilities[capability].portal;
 	step_out->move_kind = router->artifact->movement.capabilities[capability].kind;
 	step_out->crouching_next = field->next_crouching[state];
-	memcpy(step_out->target, &router->portal_center[step_out->portal * 3U],
-		sizeof(step_out->target));
+	if (step_out->portal == SG_RUNE_CX_INDEX_NONE)
+	{
+		/* A mechanism crossing: the target is the destination's floor. */
+		memcpy(step_out->target, &router->cell_center[
+			router->destination[capability] * 3U], sizeof(step_out->target));
+		step_out->target[2] += 24.0f;
+	}
+	else
+		memcpy(step_out->target, &router->portal_center[step_out->portal * 3U],
+			sizeof(step_out->target));
 	return 1;
 }
 

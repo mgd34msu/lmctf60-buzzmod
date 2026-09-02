@@ -28,6 +28,9 @@ typedef enum sg_rune_move_kind_e
 	SG_RUNE_MOVE_MOVER,
 	SG_RUNE_MOVE_EXTERNAL_FORCE,
 	SG_RUNE_MOVE_CONTROLLER_ACTION,
+	SG_RUNE_MOVE_TELEPORT,
+	SG_RUNE_MOVE_PLATFORM,
+	SG_RUNE_MOVE_TRAIN,
 	SG_RUNE_MOVE_KIND_COUNT
 } sg_rune_move_kind_t;
 
@@ -64,6 +67,8 @@ typedef struct sg_rune_move_capability_s
 	uint8_t destination_stances;
 	uint8_t reserved;
 	uint32_t profile;
+	uint32_t mechanism;       /* the door, lift, teleporter, push, or train
+	                             this crossing goes through; INDEX_NONE */
 	float launch_velocity[3];
 	float seconds;
 } sg_rune_move_capability_t;
@@ -137,6 +142,17 @@ int SG_RuneMoveAppendFlight(sg_rune_move_store_t *store, uint32_t cell,
 	uint32_t portal, sg_rune_move_kind_t kind, uint8_t source_stances,
 	uint8_t destination_stances, uint32_t destination,
 	const float launch_velocity[3], float seconds);
+
+/* A crossing a mechanism makes: a lift ride, a teleport, a push, a train
+ * leg.  destination is where the body ends up; seconds is how long. */
+int SG_RuneMoveAppendMechanism(sg_rune_move_store_t *store, uint32_t cell,
+	uint32_t destination, sg_rune_move_kind_t kind, uint8_t stances,
+	uint32_t mechanism, const float velocity[3], float seconds);
+
+/* Marks every record whose destination is one of the cells as going
+ * through the mechanism (a door's gate cells). */
+void SG_RuneMoveGate(sg_rune_move_store_t *store, const uint32_t *cells,
+	uint32_t cell_count, uint32_t mechanism);
 
 /* Launch speeds the flights are traced with. */
 float SG_RuneMoveJumpVelocity(const sg_rune_move_store_t *store);

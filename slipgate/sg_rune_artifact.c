@@ -345,7 +345,10 @@ int SG_RuneArtifactValid(const sg_rune_artifact_t *artifact,
 		const sg_rune_cx_portal_t *portal;
 
 		if (capability->cell >= cx->cell_count ||
-			capability->portal >= cx->portal_count ||
+			(capability->portal >= cx->portal_count &&
+				capability->portal != SG_RUNE_CX_INDEX_NONE) ||
+			(capability->portal == SG_RUNE_CX_INDEX_NONE &&
+				capability->mechanism == SG_RUNE_CX_INDEX_NONE) ||
 			capability->destination >= cx->cell_count ||
 			capability->destination == capability->cell ||
 			!Finite(capability->launch_velocity[0]) ||
@@ -362,6 +365,8 @@ int SG_RuneArtifactValid(const sg_rune_artifact_t *artifact,
 			(capability->destination_stances &
 				~(SG_RUNE_MOVE_STANDING | SG_RUNE_MOVE_CROUCHING)) != 0U)
 			return Fault(fault_out, "capabilities", index, "field");
+		if (capability->portal == SG_RUNE_CX_INDEX_NONE)
+			continue;
 		portal = &cx->portals[capability->portal];
 		if (cx->incidences[portal->source_incidence].cell != capability->cell &&
 			cx->incidences[portal->destination_incidence].cell != capability->cell)

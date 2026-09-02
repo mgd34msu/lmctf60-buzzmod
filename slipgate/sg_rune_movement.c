@@ -299,6 +299,7 @@ static int Append(sg_rune_move_store_t *store, uint32_t cell,
 	record->cell = cell;
 	record->portal = portal;
 	record->destination = destination;
+	record->mechanism = SG_RUNE_FN_INDEX_NONE;
 	record->kind = (uint8_t)kind;
 	if (launch_velocity)
 		memcpy(record->launch_velocity, launch_velocity,
@@ -428,6 +429,58 @@ int SG_RuneMoveAppendFlight(sg_rune_move_store_t *store, uint32_t cell,
 		destination_stances, profile, launch_velocity, seconds);
 }
 
+int SG_RuneMoveAppendMechanism(sg_rune_move_store_t *store, uint32_t cell,
+	uint32_t destination, sg_rune_move_kind_t kind, uint8_t stances,
+	uint32_t mechanism, const float velocity[3], float seconds)
+{
+	uint32_t profile;
+	static const float still[3] = { 0.0f, 0.0f, 0.0f };
+
+	if (!store || !stances || !isfinite(seconds) || seconds < 0.0f)
+		return 0;
+	switch (kind)
+	{
+	case SG_RUNE_MOVE_TELEPORT:
+	case SG_RUNE_MOVE_PLATFORM:
+	case SG_RUNE_MOVE_TRAIN:
+	case SG_RUNE_MOVE_MOVER:
+		profile = PROFILE_GROUND;
+		break;
+	case SG_RUNE_MOVE_EXTERNAL_FORCE:
+		profile = PROFILE_AIR;
+		break;
+	default:
+		return 0;
+	}
+	if (!Append(store, cell, SG_RUNE_FN_INDEX_NONE, destination, kind, stances,
+		stances, profile, velocity ? velocity : still, seconds))
+		return 0;
+	store->capabilities[store->capability_count - 1U].mechanism = mechanism;
+	return 1;
+}
+
+void SG_RuneMoveGate(sg_rune_move_store_t *store, const uint32_t *cells,
+	uint32_t cell_count, uint32_t mechanism)
+{
+	uint32_t index, slot;
+
+	if (!store || !cells)
+		return;
+	for (index = 0U; index < store->capability_count; index++)
+	{
+		sg_rune_move_capability_t *record = &store->capabilities[index];
+
+		if (record->mechanism != SG_RUNE_FN_INDEX_NONE)
+			continue;
+		for (slot = 0U; slot < cell_count; slot++)
+			if (record->destination == cells[slot])
+			{
+				record->mechanism = mechanism;
+				break;
+			}
+	}
+}
+
 float SG_RuneMoveJumpVelocity(const sg_rune_move_store_t *store)
 {
 	(void)store;
@@ -448,7 +501,8 @@ const char *SG_RuneMoveKindString(sg_rune_move_kind_t kind)
 {
 	static const char *const names[SG_RUNE_MOVE_KIND_COUNT] = {
 		"walk", "crouch", "ramp", "jump", "drop", "swim", "air control",
-		"rocket jump", "hook", "mover", "external force", "controller action"
+		"rocket jump", "hook", "mover", "external force", "controller action",
+		"teleport", "platform", "train"
 	};
 
 	return (uint32_t)kind < (uint32_t)SG_RUNE_MOVE_KIND_COUNT ?
