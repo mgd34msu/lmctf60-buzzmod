@@ -875,13 +875,32 @@ static qboolean FlightSafe(const sg_rune_flight_t *flight)
 static qboolean HangDropSafe(const sg_bot_t *bot, const edict_t *e)
 {
 	static const vec3_t still = { 0.0f, 0.0f, 0.0f };
+	static const float below[] = { 0.0f, 8.0f, 16.0f, 32.0f, 48.0f };
 	sg_rune_flight_t drop;
+	uint32_t k;
 
 	if (bot->cell == SG_RUNE_CX_INDEX_NONE)
 		return true;
-	return SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.complex,
-		&sg_rune_level.artifact.law, bot->cell, e->s.origin, still, 0.0f, 0, &drop) ?
-		true : false;
+	/* A body the rope holds against a ceiling sits at the edge of the
+	 * carved space, where the trace cannot fly: the drop is judged from
+	 * the first point below it that it can fly from. */
+	for (k = 0U; k < sizeof(below) / sizeof(below[0]); k++)
+	{
+		vec3_t from;
+		uint32_t cell;
+		qboolean lands;
+
+		VectorCopy(e->s.origin, from);
+		from[2] -= below[k];
+		cell = k == 0U ? bot->cell : SG_RuneLevelLocate(from, 0, NULL);
+		if (cell == SG_RUNE_CX_INDEX_NONE)
+			continue;
+		lands = SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.complex,
+			&sg_rune_level.artifact.law, cell, from, still, 0.0f, 0, &drop) ? true : false;
+		if (lands || drop.seconds >= 0.05f)
+			return lands;
+	}
+	return false;
 }
 
 /* A body falling into harm fires its rope at the best bite it knows: of
