@@ -311,6 +311,9 @@ static int CapabilityForMovementKind(
 	case SG_RUNE_MOVEMENT_CAPABILITY_EXTERNAL_FORCE:
 		*capability_out = SG_TACTIC_CAPABILITY_PUSH;
 		break;
+	case SG_RUNE_MOVEMENT_CAPABILITY_ROCKET_JUMP:
+		*capability_out = SG_TACTIC_CAPABILITY_ROCKET_JUMP;
+		break;
 	case SG_RUNE_MOVEMENT_CAPABILITY_CONTROLLER_ACTION:
 	case SG_RUNE_MOVEMENT_CAPABILITY_KIND_COUNT:
 	default:
@@ -802,6 +805,11 @@ static void BuildLiveAndGradient(sg_tactic_runtime_transaction_t *transaction)
 		context->support == SG_RUNE_MOVEMENT_SUPPORT_NONE ? 0 : 1);
 	transaction->request.live.waterlevel = localized->water_level;
 	transaction->request.live.hook_phase = context->hook_phase;
+	memcpy(&transaction->request.live.gravity,
+		&input->model->identity.physics.gravity_bits,
+		sizeof(transaction->request.live.gravity));
+	if (input->inventory != NULL)
+		transaction->request.live.inventory = *input->inventory;
 	for (axis = 0U; axis < 3U; axis++)
 	{
 		transaction->request.live.origin[axis] = localized->position[axis];

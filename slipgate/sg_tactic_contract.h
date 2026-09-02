@@ -48,6 +48,7 @@ typedef enum sg_tactic_capability_e
 	SG_TACTIC_CAPABILITY_TELEPORT,
 	SG_TACTIC_CAPABILITY_PUSH,
 	SG_TACTIC_CAPABILITY_MOVER,
+	SG_TACTIC_CAPABILITY_ROCKET_JUMP,
 	SG_TACTIC_CAPABILITY_COUNT
 } sg_tactic_capability_t;
 
@@ -120,6 +121,17 @@ typedef struct sg_tactic_successor_state_s
 	sg_host_hook_phase_t hook_phase;
 } sg_tactic_successor_state_t;
 
+/* What the body carries, for capabilities that spend it.  All zero means it
+ * carries nothing: such a capability is ineligible, never assumed. */
+typedef struct sg_tactic_live_inventory_s
+{
+	int32_t health;
+	int32_t armor_count;
+	float armor_protection;   /* the armor's normal_protection fraction */
+	uint32_t weapon_mask;     /* one bit per sg_weapon_profile_id_t */
+	uint32_t rocket_rounds;
+} sg_tactic_live_inventory_t;
+
 typedef struct sg_tactic_live_state_s
 {
 	uint64_t rune_identity;
@@ -134,6 +146,8 @@ typedef struct sg_tactic_live_state_s
 	sg_host_hook_phase_t hook_phase;
 	float origin[3];
 	float velocity[3];
+	float gravity;            /* the live physics the body moves under */
+	sg_tactic_live_inventory_t inventory;
 } sg_tactic_live_state_t;
 
 typedef struct sg_tactic_gradient_s
@@ -473,6 +487,11 @@ static inline int SG_TacticLiveStateValid(const sg_tactic_live_state_t *live)
 		!SG_TacticPhaseValid(live->phase) || !SG_TacticStanceValid(live->stance) ||
 		live->supported > 1U || live->waterlevel > 3U ||
 		!SG_TacticHookPhaseValid(live->hook_phase))
+		return 0;
+	if (!SG_TacticFloatValid(live->gravity) ||
+		!SG_TacticFloatValid(live->inventory.armor_protection) ||
+		live->inventory.armor_protection < 0.0f ||
+		live->inventory.armor_protection > 1.0f)
 		return 0;
 	for (axis = 0U; axis < 3U; axis++)
 		if (!SG_TacticFloatValid(live->origin[axis]) ||

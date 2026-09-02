@@ -6,7 +6,7 @@
 
 #include "sg_rune_compact_static.h"
 
-#define SG_RUNE_COMPACT_WIRE_VERSION UINT16_C(12)
+#define SG_RUNE_COMPACT_WIRE_VERSION UINT16_C(13)
 #define SG_RUNE_COMPACT_WIRE_MAX_IMAGE_BYTES UINT64_C(4294967296)
 
 typedef enum sg_rune_compact_wire_section_e

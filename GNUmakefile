@@ -1352,8 +1352,17 @@ era4-portal-movement-test: tests/run_era4_portal_movement_test.sh \
 		tests/sg_rune_compact_movement_fields_test.c \
 		slipgate/sg_rune_compact_movement_fields.c \
 		slipgate/sg_rune_compact_movement_fields.h \
-		slipgate/sg_host_engine_pmove.h
+		slipgate/sg_host_engine_pmove.h \
+		slipgate/sg_host_rocket_jump_law.h
 	sh tests/run_era4_portal_movement_test.sh
+
+.PHONY: host-rocket-jump-law-test
+host-rocket-jump-law-test: tests/run_sg_host_rocket_jump_law_test.sh \
+		tests/sg_host_rocket_jump_law_test.c \
+		slipgate/sg_host_rocket_jump_law.h \
+		slipgate/sg_host_engine_pmove.h \
+		slipgate/sg_weapon_host_constants.h
+	sh tests/run_sg_host_rocket_jump_law_test.sh
 
 .PHONY: all dep runtime-module-path host-test host-law-runtime-link-check action-test \
 	compound-test mover-lease-test \
@@ -3311,7 +3320,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(POVLOCK_TEST_BIN) $(POV_SESSION_TEST_BIN) \
 		 $(POV_SUPERVISOR_TEST_BIN) \
 		$(POV_SUPERVISOR_BIN) \
-		era4-portal-movement-test
+		era4-portal-movement-test \
+		host-rocket-jump-law-test
 	./$(HOST_TEST_BIN)
 	./$(ACTION_TEST_BIN)
 	./$(COMPOUND_TEST_BIN)

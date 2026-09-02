@@ -1062,6 +1062,9 @@
     <ClInclude Include="slipgate\sg_host_engine_pmove.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="slipgate\sg_host_rocket_jump_law.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="slipgate\sg_host_engine_runtime.h">
       <Filter>Header Files</Filter>
     </ClInclude>

@@ -70,7 +70,8 @@ declared quantization rather than chasing float equality with the host.
 
 ## A2. Movement capability layer
 
-16 kinds defined. Measured 2026-09-01 after era-4 commits d9fe1873/6678251b.
+17 kinds defined. Measured 2026-09-01 after era-4 commits d9fe1873/6678251b and
+the rocket-jump commit that follows 09d853b8.
 
 | Capability | Producer state | Verdict |
 |---|---|---|
@@ -80,14 +81,18 @@ declared quantization rather than chasing float equality with the host.
 | `AIR_CONTROL` | emitted for any crossing whose source is unsupported | KEEP |
 | `SWIM` | emitted when both sides are water | KEEP |
 | `RAMP` | **not emitted**; a sloped floor needs the support plane, which the region lacks. Ramps traverse as WALK. | BUILD |
-| `ROCKET_JUMP` | **no kind exists**; ruled a capability (anything a player can do), not connectivity | BUILD |
+| `ROCKET_JUMP` | kind added (wire v13). Emitted beside every upward JUMP and alone where the far floor is above the jump rise but within the rocket rise. Launch derived in `sg_host_rocket_jump_law.h` from the host's knockback, splash, and body laws: attack and jump in one command, blast at the floor one frame into the jump, ~47 self-damage, ~218 unit rise at g=800. Tactic gate needs the launcher, a rocket, and health above the post-armor cost. | KEEP |
 | `HOOK_BOLT` `HOOK_BODY` `HOOK_PULL` `HOOK_RELEASE` `HOOK_COAST` `HOOK_RELAUNCH` | all six emitted by `EmitHookField`'s range loop (earlier "never produced" claim was a grep artifact) | KEEP |
 | `MOVER` `EXTERNAL_FORCE` `CONTROLLER_ACTION` | emitted | KEEP |
 
 Profiles: `PROFILE_GROUND`/`WATER` are contact motion (distance over the
 engine speed clamp); `PROFILE_AIR` is exact free flight under map gravity;
-`PROFILE_JUMP` is air plus the engine's 270 launch impulse. Engine pmove terms
-live in `sg_host_engine_pmove.h`; gravity stays a bound per-map value.
+`PROFILE_JUMP` is air plus the engine's 270 launch impulse; `PROFILE_ROCKET_JUMP`
+is air from the blast height with the summed vertical velocity and the lead
+frame added to its clock. The air template carries the half-substep gravity
+term, so it is exact at substep boundaries under gravity-before-move Euler.
+Engine pmove terms live in `sg_host_engine_pmove.h`; gravity stays a bound
+per-map value.
 
 Before d9fe1873, `EmitBoundaryFields` resolved a portal's cells and returned:
 no capability crossed any portal, so a bot could hook, ride a lift and be
@@ -168,19 +173,31 @@ out of the artifact. Nothing should ever remove a connection for being costly.
 
 # Part B — Runtime
 
-| Consumer | State | Verdict |
+Re-measured 2026-09-01 by tracing the shipped module from `G_RunFrame`. The
+earlier rows here were written before commits 0017ab60/d9fe1873 and were wrong
+about what is live.
+
+The legacy rune pointer `sg_rune` is never assigned in the shipped module (its
+only writer is behind `SG_STRIKE_TRANSITION_TEST_API`, which no build defines),
+so `Field_Flood`, `Think_PickLink`, `Think_Move`, and everything in
+`sg_fields.c`/`sg_goal.c`/`sg_descend.c`/`sg_move.c`/`sg_price.c` is compiled
+and unreachable. Era 1 was never the running bot; it is demolition.
+
+| Stage | State | Verdict |
 |---|---|---|
-| `SG_CompactRuntimeLevelInstall` — install a generated model at level start | wired via `sg_rune_compact_production.c:310` | KEEP |
-| Cell/phase localization from live pose | built, not the live path | BUILD |
-| `SG_FieldService` — runtime destination gradients, caching, region hierarchy, incremental moving targets | **appears only in tests** | BUILD |
-| `Field_Flood` reverse Dijkstra over action links | live in `sg_fields.c` (×9) and `sg_goal.c` | CUT (after field service lands) |
-| Tactic execution / dispatch | partly wired (`sg_arach.c:2508–2579`) | KEEP |
-| `Think_PickLink` action-link descent | live (`sg_arach.c:3821`), legacy | CUT (after tactic selection lands) |
-| Typed strategy queue | foundation complete; waiting on live FieldService registration | BUILD |
+| Load: `SG_LevelSetup` → compact production load → `SG_CompactRuntimeLevelInstall` (field service, localization, strategy provider, tactic provider) | live (`sg_arach.c:523-606`) | KEEP |
+| Localization per frame: `SG_BotLocalizationObservePmove` after the bot's host pmove | live (`p_client.c:3056`) | KEEP |
+| Typed strategy queue → `SG_StrategyRuntimePlanResolve` → field target | live (`sg_arach.c:2408-2549`) | KEEP |
+| Field service gradient query | live (`sg_strategy_runtime_bridge.c:1425`) | KEEP |
+| Tactic selector `SG_TacticSelectCapability` via `SG_TacticExecutionOwnerPrepare` | live every STEP frame (`sg_tactic_runtime.c:977`) | KEEP |
+| **Selected capability → usercmd** | **does not exist.** `SealAction`/`ActionCurrent`/`ExecuteAction` in `sg_tactic_execution_owner.c` are `#ifdef` test stubs that fail closed in production; `navigation_permitted` is forced false for every STEP; `CompactTacticEmit` steers only toward a terminal point and never writes `upmove`. A bot with a selected capability stands still. | BUILD: the era-4 executor. Delete the sealed-owner/witness stubs, do not fill them in. |
+| Hook, mechanism, teleport, push, mover execution | no consumer of `execution.mechanism_handoff`; hook phase is legacy bot state | BUILD (inside the executor) |
+| `sg_descend.c` indexing compact cells into legacy seed arrays | latent index-space confusion, harmless only because the legacy pointer is NULL | CUT |
+| v13 pmove-control layer (`sg_rune_compact_pmove_control*`, `sg_tactic_pmove_control_runtime.c`) | no producer, no wire section, no caller; a validator not a controller | CUT |
 | Belief runtime, sparse hypotheses, life identity | built | KEEP |
 | Perception adapters → beliefs | caller migration open | BUILD |
 | Probabilistic aim + exact pre-fire trace | plan marks complete | KEEP |
-| Human hook boundary untouched by bot code | design rule | KEEP |
+| Human hook boundary untouched by bot code | design rule; production hook-fire entry hardcodes phase IDLE so it never reports a refire (`sg_host_law_publication.c:2438`) | KEEP, fix the phase |
 | Learning: costs/priors only, never geometry | boundary rule | KEEP |
 
 ---
@@ -251,11 +268,9 @@ independent gradient query.
 
 ### Dead weight already shipping
 
-`sg_field_service.c` — 3,172 lines — is compiled into the shipped game module
-and has **zero production callers**. The replacement solver ships in the binary
-today and nothing invokes it, while `Field_Flood` does the work. This is not
-unwired code sitting harmlessly outside a module; it is in the artifact you
-load. Wiring it is `destination_field_caller_migration`.
+Corrected 2026-09-01: the compact field service is live (see Part B). The dead
+weight is the other way round: the 54 legacy files are compiled into the
+shipped module and unreachable.
 
 ### The v2 contract problem
 

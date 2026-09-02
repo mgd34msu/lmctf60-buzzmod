@@ -97,11 +97,89 @@ static void Era4CheckCurrentDoesNotRemoveWalking(void)
 	SG_RuneCompactMovementFieldsDestroy(fields);
 }
 
+/* A ledge higher than a jump reaches but lower than a rocket jump's peak
+ * is crossed upward only by ROCKET_JUMP, and downward by DROP.  Rocket jump
+ * is a thing a player can do, so it is a thing the RUNE says exists; whether
+ * a bot has the launcher, a rocket, and the health is the tactic's call. */
+static void Era4CheckRocketJumpLedge(void)
+{
+	movement_fixture_t fixture;
+	sg_rune_compact_movement_fields_t *fields = NULL;
+	sg_rune_compact_movement_fields_view_t view;
+	sg_rune_compact_movement_fields_error_t error;
+
+	InitFixture(&fixture);
+	fixture.cells[1].bounds.mins.value[2] = 100;
+	fixture.cells[1].bounds.maxs.value[2] = 100 + 128;
+	fixture.regions[1].bounds.mins.value[2] = 100.0f;
+	fixture.regions[1].bounds.maxs.value[2] = 100.0f + 128.0f;
+	CHECK(SG_RuneCompactMovementFieldsBuild(&fixture.input, &fields, &error));
+	if (fields != NULL && SG_RuneCompactMovementFieldsRead(fields, &view)) {
+		const sg_rune_movement_capability_t *up = FindFieldForStance(&view,
+			0U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_ROCKET_JUMP,
+			SG_RUNE_STANCE_VALID_STANDING);
+		const sg_rune_movement_capability_t *down = FindFieldForStance(&view,
+			1U, 0U, SG_RUNE_MOVEMENT_CAPABILITY_DROP,
+			SG_RUNE_STANCE_VALID_STANDING);
+
+		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_WALK) == 0U);
+		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_JUMP) == 0U);
+		CHECK(CountFamily(&view,
+			SG_RUNE_MOVEMENT_CAPABILITY_ROCKET_JUMP) == 2U);
+		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_DROP) == 2U);
+		CHECK(up != NULL && up->cell.value == 0U && up->fibers.count != 0U);
+		CHECK(down != NULL && down->cell.value == 1U);
+	}
+	SG_RuneCompactMovementFieldsDestroy(fields);
+}
+
+/* Where a plain jump reaches, the rocket jump is offered beside it: two ways
+ * to make the same crossing, ranked at runtime by cost and by what the body
+ * carries.  A ledge beyond the rocket jump's peak is not crossed upward. */
+static void Era4CheckRocketJumpOffersOverJump(void)
+{
+	movement_fixture_t fixture;
+	sg_rune_compact_movement_fields_t *fields = NULL;
+	sg_rune_compact_movement_fields_view_t view;
+	sg_rune_compact_movement_fields_error_t error;
+
+	InitFixture(&fixture);
+	fixture.cells[1].bounds.mins.value[2] = 40;
+	fixture.cells[1].bounds.maxs.value[2] = 40 + 128;
+	fixture.regions[1].bounds.mins.value[2] = 40.0f;
+	fixture.regions[1].bounds.maxs.value[2] = 40.0f + 128.0f;
+	CHECK(SG_RuneCompactMovementFieldsBuild(&fixture.input, &fields, &error));
+	if (fields != NULL && SG_RuneCompactMovementFieldsRead(fields, &view)) {
+		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_JUMP) == 2U);
+		CHECK(CountFamily(&view,
+			SG_RUNE_MOVEMENT_CAPABILITY_ROCKET_JUMP) == 2U);
+		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_DROP) == 2U);
+	}
+	SG_RuneCompactMovementFieldsDestroy(fields);
+	fields = NULL;
+
+	InitFixture(&fixture);
+	fixture.cells[1].bounds.mins.value[2] = 400;
+	fixture.cells[1].bounds.maxs.value[2] = 400 + 128;
+	fixture.regions[1].bounds.mins.value[2] = 400.0f;
+	fixture.regions[1].bounds.maxs.value[2] = 400.0f + 128.0f;
+	CHECK(SG_RuneCompactMovementFieldsBuild(&fixture.input, &fields, &error));
+	if (fields != NULL && SG_RuneCompactMovementFieldsRead(fields, &view)) {
+		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_JUMP) == 0U);
+		CHECK(CountFamily(&view,
+			SG_RUNE_MOVEMENT_CAPABILITY_ROCKET_JUMP) == 0U);
+		CHECK(CountFamily(&view, SG_RUNE_MOVEMENT_CAPABILITY_DROP) == 2U);
+	}
+	SG_RuneCompactMovementFieldsDestroy(fields);
+}
+
 int main(void)
 {
 	Era4CheckLevelCrossing();
 	Era4CheckCrouchOnlyPassage();
 	Era4CheckCurrentDoesNotRemoveWalking();
+	Era4CheckRocketJumpLedge();
+	Era4CheckRocketJumpOffersOverJump();
 	if (failures != 0)
 		return 1;
 	puts("sg_era4_portal_movement_test: ok");

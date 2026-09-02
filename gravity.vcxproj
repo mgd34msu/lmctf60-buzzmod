@@ -633,6 +633,7 @@
     <ClInclude Include="slipgate\sg_bsp_world.h" />
     <ClInclude Include="slipgate\sg_host_collision.h" />
     <ClInclude Include="slipgate\sg_host_engine_pmove.h" />
+    <ClInclude Include="slipgate\sg_host_rocket_jump_law.h" />
     <ClInclude Include="slipgate\sg_host_engine_runtime.h" />
     <ClInclude Include="slipgate\sg_host_engine_parity.h" />
     <ClInclude Include="slipgate\sg_host_hook_law.h" />

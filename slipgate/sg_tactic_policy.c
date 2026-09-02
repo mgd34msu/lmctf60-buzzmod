@@ -1,4 +1,6 @@
 #include "sg_tactic_policy.h"
+#include "sg_host_rocket_jump_law.h"
+#include "sg_weapon_effect_profile.h"
 
 #include <string.h>
 
@@ -86,6 +88,24 @@ static int TacticTemporaryBlockMatchesTransition(
 			request->mechanism->exit_cell.value;
 }
 
+/* A rocket jump spends a rocket and health.  The RUNE says the crossing
+ * exists; whether this body can pay for it is decided here, from what it
+ * carries, under the live gravity. */
+static int TacticRocketJumpAffordable(const sg_tactic_live_state_t *live)
+{
+	sg_host_rocket_jump_launch_t launch;
+
+	if ((live->inventory.weapon_mask &
+		(UINT32_C(1) << SG_WEAPON_PROFILE_ROCKET_LAUNCHER)) == 0U ||
+		live->inventory.rocket_rounds == 0U ||
+		!SG_HostRocketJumpLaunch(live->gravity, SG_HOST_ENGINE_FRAME_MS,
+			SG_HOST_ENGINE_PMOVE_SUBSTEP_MS, 0, &launch))
+		return 0;
+	return live->inventory.health > SG_HostRocketJumpHealthCost(
+		launch.self_damage, live->inventory.armor_protection,
+		live->inventory.armor_count);
+}
+
 static int TacticDescriptorEligible(const sg_tactic_request_t *request,
 	const sg_tactic_capability_descriptor_t *descriptor)
 {
@@ -107,6 +127,9 @@ static int TacticDescriptorEligible(const sg_tactic_request_t *request,
 		return 0;
 	if ((descriptor->flags & SG_TACTIC_CAPABILITY_MECHANISM_BOUNDARY) != 0U &&
 		!TacticMechanismMatchesTransition(request))
+		return 0;
+	if (descriptor->capability == SG_TACTIC_CAPABILITY_ROCKET_JUMP &&
+		!TacticRocketJumpAffordable(&request->live))
 		return 0;
 	return 1;
 }

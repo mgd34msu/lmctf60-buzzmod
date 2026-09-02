@@ -1,4 +1,5 @@
 #include "sg_rune_compact_movement_fields.h"
+#include "sg_host_rocket_jump_law.h"
 
 #include "sg_rune_compact_builder_owner.h"
 
@@ -29,7 +30,8 @@ static uint64_t sg_portal_merge_steps;
 #define PROFILE_HOOK_COAST_GROUNDED 9U
 #define PROFILE_ANGULAR 10U
 #define PROFILE_JUMP 11U
-#define PROFILE_BASE_COUNT 12U
+#define PROFILE_ROCKET_JUMP 12U
+#define PROFILE_BASE_COUNT 13U
 #define HOOK_STANCE_COUNT 2U
 #define HOOK_VISIBILITY_CLASS_COUNT 3U
 /* CTF_HookPullVelocity groups [0,1) and [1,11), then uses the stock integer
@@ -4649,20 +4651,25 @@ static int BuildHookCoastProfile(analytic_workspace_t *workspace,
 }
 
 /* Free flight under the host's per-substep Euler gravity is exactly quadratic
- * at substep boundaries, so the air profile is derived, not fitted:
- *   position(t) = world + velocity*t - (gravity/2)*t^2   (z only for gravity)
- *   velocity(t) = velocity - gravity*t                   (z only)
+ * at substep boundaries, so the air profile is derived, not fitted.  Gravity
+ * is applied before each substep's move, so the boundary position carries a
+ * half-substep term:
+ *   position(t) = world + offset + (velocity + impulse - gravity*dt/2)*t
+ *                 - (gravity/2)*t^2                        (z only for gravity)
+ *   velocity(t) = velocity + impulse - gravity*t           (z only)
  * The profile is a template over runtime inputs; the fiber's source state
  * supplies world and velocity, so one profile serves every airborne family:
  * jump, drop, air control, hook release and relaunch, and rocket jump.  Cost
  * and travel time are the time spent in the air (MOV-7). */
 static int AddAirMotion(analytic_workspace_t *workspace, profile_t *profile,
-	float gravity, float vertical_impulse)
+	float gravity, float substep_seconds, float vertical_impulse,
+	float vertical_offset)
 {
 	uint32_t axis;
 
 	if (workspace == NULL || profile == NULL || !NonnegativeFinite(gravity) ||
-		!ScalarValid(vertical_impulse))
+		!NonnegativeFinite(substep_seconds) || !ScalarValid(vertical_impulse) ||
+		!ScalarValid(vertical_offset))
 		return 0;
 	for (axis = 0U; axis < 3U; axis++) {
 		sg_rune_analytic_input_dimension_t position_dimensions[3];
@@ -4686,14 +4693,24 @@ static int AddAirMotion(analytic_workspace_t *workspace, profile_t *profile,
 		exponents[2] = 1U;
 		if (!SetPolynomialTerm(position_coefficients, 3U, 2U, exponents, 1.0f))
 			return 0;
-		/* Vertical axis: an optional launch impulse (jump) enters as a linear
-		 * time term, and gravity as -(gravity/2) * time^2. */
+		/* Vertical axis: the launch impulse and the half-substep gravity term
+		 * enter as one linear time term, a launch height as a constant, and
+		 * gravity as -(gravity/2) * time^2. */
 		if (axis == 2U) {
-			if (vertical_impulse != 0.0f) {
+			const float linear = vertical_impulse -
+				0.5f * gravity * substep_seconds;
+
+			if (linear != 0.0f) {
 				memset(exponents, 0, sizeof(exponents));
 				exponents[2] = 1U;
 				if (!SetPolynomialTerm(position_coefficients, 3U, 2U,
-					exponents, vertical_impulse))
+					exponents, linear))
+					return 0;
+			}
+			if (vertical_offset != 0.0f) {
+				memset(exponents, 0, sizeof(exponents));
+				if (!SetPolynomialTerm(position_coefficients, 3U, 2U,
+					exponents, vertical_offset))
 					return 0;
 			}
 			memset(exponents, 0, sizeof(exponents));
@@ -4735,7 +4752,7 @@ static int BuildAirProfile(analytic_workspace_t *workspace, profile_t *profile,
 	physics = &host->static_identity.physics;
 	return AddCostAndTime(workspace, profile, dimensions, 1U, unit_slope,
 		unit_slope, 0.0f, 0.0f) && AddAirMotion(workspace, profile,
-		physics->gravity, 0.0f) && AddReachability(workspace, profile, 1.0f);
+		physics->gravity, (float)physics->substep_ms / 1000.0f, 0.0f, 0.0f) && AddReachability(workspace, profile, 1.0f);
 }
 
 /* Jump is the air profile with the engine's launch impulse applied to the
@@ -4752,7 +4769,44 @@ static int BuildJumpProfile(analytic_workspace_t *workspace, profile_t *profile,
 		return 0;
 	return AddCostAndTime(workspace, profile, dimensions, 1U, unit_slope,
 		unit_slope, 0.0f, 0.0f) && AddAirMotion(workspace, profile,
-		host->static_identity.physics.gravity, SG_HOST_ENGINE_JUMP_VELOCITY) &&
+		host->static_identity.physics.gravity,
+		(float)host->static_identity.physics.substep_ms / 1000.0f,
+		SG_HOST_ENGINE_JUMP_VELOCITY, 0.0f) &&
+		AddReachability(workspace, profile, 1.0f);
+}
+
+/* Rocket jump is the air profile launched from the blast: the body is
+ * already a frame into its jump when the splash adds the self-knockback, so
+ * the profile starts at that height with the summed vertical velocity, and
+ * its clock starts after the lead frames.  Every number is the host's law
+ * (sg_host_rocket_jump_law.h); nothing is fitted.  When the law cannot
+ * produce a launch under this map's gravity, the profile is published as
+ * unreachable and nothing attaches to it. */
+static int BuildRocketJumpProfile(analytic_workspace_t *workspace,
+	profile_t *profile, const sg_host_law_view_t *host)
+{
+	static const sg_rune_analytic_input_dimension_t dimensions[] = {
+		SG_RUNE_ANALYTIC_INPUT_TIME_SECONDS
+	};
+	static const float unit_slope[] = { 1.0f };
+	const sg_rune_physics_parameters_t *physics;
+	sg_host_rocket_jump_launch_t launch;
+	float lead_seconds;
+
+	if (workspace == NULL || profile == NULL || host == NULL)
+		return 0;
+	physics = &host->static_identity.physics;
+	if (!SG_HostRocketJumpLaunch(physics->gravity, physics->frame_ms,
+		physics->substep_ms, 0, &launch)) {
+		return AddCostAndTime(workspace, profile, dimensions, 1U, unit_slope,
+			unit_slope, 0.0f, 0.0f) && AddReachability(workspace, profile, -1.0f);
+	}
+	lead_seconds = (float)launch.lead_frames * (float)physics->frame_ms /
+		1000.0f;
+	return AddCostAndTime(workspace, profile, dimensions, 1U, unit_slope,
+		unit_slope, lead_seconds, lead_seconds) && AddAirMotion(workspace,
+		profile, physics->gravity, (float)physics->substep_ms / 1000.0f,
+		launch.vertical_velocity, launch.pre_blast_rise) &&
 		AddReachability(workspace, profile, 1.0f);
 }
 
@@ -4987,6 +5041,8 @@ static int BuildProfiles(const sg_rune_compact_movement_fields_input_t *input,
 	}
 	if (!BuildAirProfile(workspace, &profiles[PROFILE_AIR], host) ||
 		!BuildJumpProfile(workspace, &profiles[PROFILE_JUMP], host) ||
+		!BuildRocketJumpProfile(workspace, &profiles[PROFILE_ROCKET_JUMP],
+			host) ||
 		!BuildContactProfile(workspace, &profiles[PROFILE_GROUND],
 			SG_HOST_ENGINE_MAX_SPEED) ||
 		!BuildContactProfile(workspace, &profiles[PROFILE_WATER],
@@ -5405,7 +5461,8 @@ static sg_rune_movement_state_variables_t CapabilityStateVariables(
 		kind == SG_RUNE_MOVEMENT_CAPABILITY_RAMP ||
 		kind == SG_RUNE_MOVEMENT_CAPABILITY_JUMP ||
 		kind == SG_RUNE_MOVEMENT_CAPABILITY_DROP ||
-		kind == SG_RUNE_MOVEMENT_CAPABILITY_AIR_CONTROL)
+		kind == SG_RUNE_MOVEMENT_CAPABILITY_AIR_CONTROL ||
+		kind == SG_RUNE_MOVEMENT_CAPABILITY_ROCKET_JUMP)
 		variables |= SG_RUNE_MOVEMENT_STATE_SUPPORT;
 	if (kind == SG_RUNE_MOVEMENT_CAPABILITY_SWIM)
 		variables |= SG_RUNE_MOVEMENT_STATE_WATER |
@@ -6110,6 +6167,22 @@ static sg_rune_stance_validity_t ExactOrOtherStance(
 	return 0U;
 }
 
+/* The rocket jump's peak above the floor under this map's gravity, or zero
+ * when the host law yields no launch. */
+static float RocketJumpRise(const sg_host_law_view_t *host)
+{
+	const sg_rune_physics_parameters_t *physics;
+	sg_host_rocket_jump_launch_t launch;
+
+	if (host == NULL)
+		return 0.0f;
+	physics = &host->static_identity.physics;
+	if (!SG_HostRocketJumpLaunch(physics->gravity, physics->frame_ms,
+		physics->substep_ms, 0, &launch))
+		return 0.0f;
+	return launch.rise;
+}
+
 /* Every portal crossing that the ordinary player can make becomes a
  * capability here, one per exact source stance.  The RUNE says the crossing
  * exists; these capabilities say how it may be executed and at what cost, so
@@ -6142,6 +6215,7 @@ static int EmitBoundaryFields(emit_state_t *state, uint32_t cell,
 	float floor_delta;
 	float gravity;
 	float jump_rise;
+	float rocket_rise;
 	uint32_t stance;
 
 	if (!GetPortalCells(input, portal, &negative, &positive))
@@ -6170,17 +6244,22 @@ static int EmitBoundaryFields(emit_state_t *state, uint32_t cell,
 	jump_rise = PositiveFinite(gravity) ?
 		(SG_HOST_ENGINE_JUMP_VELOCITY * SG_HOST_ENGINE_JUMP_VELOCITY) /
 			(2.0f * gravity) : 0.0f;
+	rocket_rise = RocketJumpRise(input->host_law);
 	for (stance = 0U; stance < HOOK_STANCE_COUNT; stance++) {
 		const sg_rune_stance_validity_t source_stance = HookStance(stance);
 		sg_rune_stance_validity_t target_stance;
 		sg_rune_movement_capability_kind_t kind;
 		uint32_t profile;
+		int rocket;
 
 		if ((source_stances & source_stance) == 0U)
 			continue;
 		target_stance = ExactOrOtherStance(source_stance, target_stances);
 		if (target_stance == 0U)
 			continue;
+		kind = SG_RUNE_MOVEMENT_CAPABILITY_KIND_COUNT;
+		profile = 0U;
+		rocket = 0;
 		if (source_water && target_water) {
 			kind = SG_RUNE_MOVEMENT_CAPABILITY_SWIM;
 			profile = PROFILE_WATER;
@@ -6193,11 +6272,12 @@ static int EmitBoundaryFields(emit_state_t *state, uint32_t cell,
 			} else if (floor_delta < 0.0f) {
 				kind = SG_RUNE_MOVEMENT_CAPABILITY_DROP;
 				profile = PROFILE_AIR;
-			} else if (floor_delta <= jump_rise) {
-				kind = SG_RUNE_MOVEMENT_CAPABILITY_JUMP;
-				profile = PROFILE_JUMP;
 			} else {
-				continue;
+				if (floor_delta <= jump_rise) {
+					kind = SG_RUNE_MOVEMENT_CAPABILITY_JUMP;
+					profile = PROFILE_JUMP;
+				}
+				rocket = floor_delta <= rocket_rise;
 			}
 		} else if (source_supported && !target_supported) {
 			/* Off an edge through a partition, or up into the air column
@@ -6205,17 +6285,25 @@ static int EmitBoundaryFields(emit_state_t *state, uint32_t cell,
 			kind = vertical_facet ? SG_RUNE_MOVEMENT_CAPABILITY_DROP :
 				SG_RUNE_MOVEMENT_CAPABILITY_JUMP;
 			profile = vertical_facet ? PROFILE_AIR : PROFILE_JUMP;
+			rocket = !vertical_facet && rocket_rise > 0.0f;
 		} else if (!source_supported) {
 			/* Airborne into anything: control the arc.  Landing on a
 			 * supported cell and crossing between air cells are the same
 			 * capability with different destination states. */
 			kind = SG_RUNE_MOVEMENT_CAPABILITY_AIR_CONTROL;
 			profile = PROFILE_AIR;
-		} else {
-			continue;
 		}
-		if (!AddFieldIndexed(state, cell, portal, kind, source_stance,
-			target_stance, profile, NULL))
+		if (kind != SG_RUNE_MOVEMENT_CAPABILITY_KIND_COUNT &&
+			!AddFieldIndexed(state, cell, portal, kind, source_stance,
+				target_stance, profile, NULL))
+			return 0;
+		/* A rocket jump is a jump with the launcher's kick added.  It is
+		 * offered wherever a jump leaves the ground upward, and where a jump
+		 * alone cannot reach.  It spends health and a rocket; weighing that
+		 * against what the body carries is the tactic's, not the RUNE's. */
+		if (rocket && !AddFieldIndexed(state, cell, portal,
+			SG_RUNE_MOVEMENT_CAPABILITY_ROCKET_JUMP, source_stance,
+			target_stance, PROFILE_ROCKET_JUMP, NULL))
 			return 0;
 	}
 	return 1;

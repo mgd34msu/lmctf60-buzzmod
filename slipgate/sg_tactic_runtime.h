@@ -32,6 +32,8 @@ typedef struct sg_tactic_runtime_step_input_s
 	const sg_compact_localized_state_t *localized;
 	const sg_rune_compact_field_local_context_t *local_context;
 	const sg_rune_compact_field_result_t *field_result;
+	/* Optional: what the body carries.  NULL means nothing. */
+	const sg_tactic_live_inventory_t *inventory;
 } sg_tactic_runtime_step_input_t;
 
 /* Install/clear are called only by the accepted compact level owner. */

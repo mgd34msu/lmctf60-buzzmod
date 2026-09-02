@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "slipgate/sg_tactic_policy.h"
+#include "slipgate/sg_weapon_effect_profile.h"
 
 static int failures;
 
@@ -466,6 +467,57 @@ static void TestEveryEligibleDescriptorIsProbed(void)
 	CHECK(probes[2].calls == 0U);
 }
 
+/* A rocket jump is offered by the RUNE, and taken only by a body that has
+ * the launcher, a rocket, and more health than the blast takes after armor.
+ * With nothing carried it is never probed; with everything it wins on cost. */
+static void TestRocketJumpNeedsLauncherRoundsAndHealth(void)
+{
+	sg_tactic_frame_capability_t frame = Frame();
+	sg_tactic_request_t request = Request(&frame);
+	probe_context_t probes[2] = {
+		{ Candidate(&request, SG_TACTIC_CAPABILITY_WALK,
+			SG_TACTIC_PHASE_GROUND, 300U), 0U, 1, 1 },
+		{ Candidate(&request, SG_TACTIC_CAPABILITY_ROCKET_JUMP,
+			SG_TACTIC_PHASE_JUMP, 100U), 0U, 1, 1 }
+	};
+	sg_tactic_capability_descriptor_t descriptors[2] = {
+		Descriptor(SG_TACTIC_CAPABILITY_WALK, 0U, 1U, &probes[0]),
+		Descriptor(SG_TACTIC_CAPABILITY_ROCKET_JUMP, 0U, 1U, &probes[1])
+	};
+	sg_tactic_result_t result;
+
+	request.live.gravity = 800.0f;
+	CHECK(SG_TacticSelectCapability(&request, descriptors, 2U, &result));
+	CHECK(result.capability == SG_TACTIC_CAPABILITY_WALK);
+	CHECK(probes[1].calls == 0U);
+
+	/* Launcher and rocket, but the blast takes 47 and 47 is all there is. */
+	request.live.inventory.weapon_mask =
+		UINT32_C(1) << SG_WEAPON_PROFILE_ROCKET_LAUNCHER;
+	request.live.inventory.rocket_rounds = 1U;
+	request.live.inventory.health = 47;
+	CHECK(SG_TacticSelectCapability(&request, descriptors, 2U, &result));
+	CHECK(result.capability == SG_TACTIC_CAPABILITY_WALK);
+	CHECK(probes[1].calls == 0U);
+
+	request.live.inventory.health = 48;
+	CHECK(SG_TacticSelectCapability(&request, descriptors, 2U, &result));
+	CHECK(result.capability == SG_TACTIC_CAPABILITY_ROCKET_JUMP);
+	CHECK(probes[1].calls == 1U);
+
+	/* Body armor makes it affordable at low health. */
+	request.live.inventory.health = 10;
+	request.live.inventory.armor_count = 100;
+	request.live.inventory.armor_protection = 0.80f;
+	CHECK(SG_TacticSelectCapability(&request, descriptors, 2U, &result));
+	CHECK(result.capability == SG_TACTIC_CAPABILITY_ROCKET_JUMP);
+
+	/* No rocket, no rocket jump. */
+	request.live.inventory.rocket_rounds = 0U;
+	CHECK(SG_TacticSelectCapability(&request, descriptors, 2U, &result));
+	CHECK(result.capability == SG_TACTIC_CAPABILITY_WALK);
+}
+
 static void TestMechanismMetadataAndWait(void)
 {
 	sg_tactic_frame_capability_t frame = Frame();
@@ -619,6 +671,7 @@ int main(void)
 	TestExactSuccessorContinuation();
 	TestFrameAndProbeAuthentication();
 	TestEveryEligibleDescriptorIsProbed();
+	TestRocketJumpNeedsLauncherRoundsAndHealth();
 	TestMechanismMetadataAndWait();
 	TestModifiersRankOnlyAndPublishNominalCost();
 	TestModifierSaturationDoesNotRejectCandidate();

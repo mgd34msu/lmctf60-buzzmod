@@ -1584,62 +1584,6 @@ static void CheckDirectionalFields(movement_fixture_t *fixture)
 	fixture->cells[1].contents = saved_contents;
 }
 
-static void ConfigureReplayPortalFixture(movement_fixture_t *fixture)
-{
-	uint32_t index;
-
-	fixture->facets[0].plane.distance_bits = Bits(16.0f);
-	fixture->source_surfaces[0].plane = fixture->facets[0].plane;
-	fixture->response_patches[0].plane = fixture->facets[0].plane;
-	fixture->hook_surfaces[0].distance = 16.0f;
-	fixture->hook_surfaces[0].bounds.mins.value[0] = 16.0f;
-	fixture->hook_surfaces[0].bounds.maxs.value[0] = 17.0f;
-	fixture->hook_surfaces[0].bounds.mins.value[1] = 2.0f;
-	fixture->hook_surfaces[0].bounds.maxs.value[1] = 14.0f;
-	fixture->hook_surfaces[0].bounds.mins.value[2] = 2.0f;
-	fixture->hook_surfaces[0].bounds.maxs.value[2] = 14.0f;
-	fixture->geometry_vertices[0].value[0] = 128;
-	fixture->geometry_vertices[0].value[1] = 16;
-	fixture->geometry_vertices[0].value[2] = 16;
-	fixture->geometry_vertices[1].value[0] = 128;
-	fixture->geometry_vertices[1].value[1] = 112;
-	fixture->geometry_vertices[1].value[2] = 16;
-	fixture->geometry_vertices[2].value[0] = 128;
-	fixture->geometry_vertices[2].value[1] = 16;
-	fixture->geometry_vertices[2].value[2] = 112;
-	for (index = 0U; index < CELL_COUNT; index++) {
-		fixture->regions[index].bounds.mins.value[0] = (float)(index * 16U);
-		fixture->regions[index].bounds.mins.value[1] = 0.0f;
-		fixture->regions[index].bounds.mins.value[2] = 0.0f;
-		fixture->regions[index].bounds.maxs.value[0] =
-			(float)((index + 1U) * 16U);
-		fixture->regions[index].bounds.maxs.value[1] = 16.0f;
-		fixture->regions[index].bounds.maxs.value[2] = 16.0f;
-		SetFloatVector(fixture->regions[index].interior_witness.value,
-			(float)(index * 16U) + 4.0f, 4.0f, 4.0f);
-	}
-	fixture->cells[0].valid_stances = SG_RUNE_STANCE_VALID_STANDING;
-	fixture->cells[1].valid_stances = SG_RUNE_STANCE_VALID_STANDING;
-	fixture->portals[0].valid_stances = SG_RUNE_STANCE_VALID_STANDING;
-	fixture->response_fragments[0].valid_stances =
-		SG_RUNE_STANCE_VALID_STANDING;
-	fixture->response_patches[0].valid_stances =
-		SG_RUNE_STANCE_VALID_STANDING;
-	fixture->response_pairs[0].source_valid_stances =
-		SG_RUNE_STANCE_VALID_STANDING;
-	fixture->response_pairs[0].target_valid_stances =
-		SG_RUNE_STANCE_VALID_STANDING;
-	fixture->annotations[0].hookable_stances =
-		SG_RUNE_STANCE_VALID_STANDING;
-	fixture->builder_owner.replay_enabled = 1;
-	SetFloatVector(fixture->builder_owner.replay_origin, 20.0f, 4.0f, 6.0f);
-	SetFloatVector(fixture->builder_owner.replay_velocity, 120.0f, 0.0f, 0.0f);
-	fixture->builder_owner.replay_support_normal_z = 1.0f;
-	fixture->builder_owner.replay_grounded = 1;
-	fixture->builder_owner.replay_water_level = 0;
-	fixture->builder_owner.replay_water_type = 0;
-}
-
 static void CheckHookLadder(movement_fixture_t *fixture)
 {
 	static const float lengths[] = { 0.0f, 0.5f, 1.0f, 10.0f, 10.99f,
