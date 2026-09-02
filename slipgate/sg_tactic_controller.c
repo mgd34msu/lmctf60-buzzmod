@@ -61,6 +61,7 @@ static float FlightReach(const sg_tactic_body_t *body, float vertical_velocity)
  * along it; otherwise it goes to the run-up point first.  launch_out is
  * the launch's horizontal unit direction when there is one. */
 #define RUN_UP_EASE 64.0f
+#define ARRIVE_STAND 8.0f         /* arrived within this: stand still */
 #define JUMP_PRESS_SLACK 6.0f     /* jump this much before the frame reaches the portal */
 #define JUMP_PRESS_SPEED 0.8f     /* and only at this fraction of run speed */
 #define RUN_UP_CLOSE 16.0f
@@ -170,7 +171,8 @@ static int AimAngles(const float from[3], const float to[3], float *yaw_out,
  * the rope is let go once the ride has carried the body up to the landing's
  * height or over it, or when the bite is about to be reached. */
 #define HOOK_STAND_CLOSE 24.0f
-#define HOOK_FIRE_STILL 120.0f    /* the rope is fired only under this speed */
+#define HOOK_FIRE_STILL 120.0f    /* over this speed the body's way must be the bite's way */
+#define HOOK_FIRE_ALIGNED 0.8f    /* cosine of the way to the bite */
 #define HOOK_RELEASE_BELOW 8.0f
 #define HOOK_RELEASE_FLAT 40.0f
 #define HOOK_RELEASE_AT_BITE 60.0f
@@ -184,12 +186,22 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 
 	(void)distance;
 	/* The body pushes toward the landing once the rope has it or once it
-	 * is off the floor; with the bolt still flying it stands where it
-	 * fired, or it runs off the edge before the rope bites. */
-	if (have_direction && !(live == SG_TACTIC_HOOK_IN_FLIGHT && body->supported))
-		Toward(command, direction, 1.0f);
+	 * is off the floor.  With the bolt still flying it keeps running at
+	 * the bite while the floor goes on that way, so the pull takes it at
+	 * speed; at an edge it stands, or it runs off before the rope bites. */
 	if (live == SG_TACTIC_HOOK_IN_FLIGHT && body->supported)
+	{
+		if (body->floor_toward_hook && step->hook_point_present)
+		{
+			float bite[3], flat, rise;
+
+			if (Steer(body, step->hook_point, bite, &flat, &rise))
+				Toward(command, bite, 1.0f);
+		}
 		command->status = SG_TACTIC_COMMAND_MOVE;
+	}
+	else if (have_direction)
+		Toward(command, direction, 1.0f);
 	if (live == SG_TACTIC_HOOK_IDLE || live == SG_TACTIC_HOOK_COAST)
 	{
 		if (step->hook_point_present == 0U || body->hook_ready == 0U)
@@ -213,10 +225,21 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 				ToRunUp(step, body, command);
 				return;
 			}
-			if (speed > HOOK_FIRE_STILL)
+			/* At speed the body's way must be the bite's way: momentum and
+			 * pull then agree, and the rope is fired without a stop. */
+			if (speed > HOOK_FIRE_STILL && step->hook_point_present)
 			{
-				command->status = SG_TACTIC_COMMAND_MOVE;   /* stand: friction does the rest */
-				return;
+				float bx = step->hook_point[0] - body->origin[0];
+				float by = step->hook_point[1] - body->origin[1];
+				float flat = sqrtf(bx * bx + by * by);
+
+				if (flat > 1.0f &&
+					(body->velocity[0] * bx + body->velocity[1] * by) / (flat * speed) <
+						HOOK_FIRE_ALIGNED)
+				{
+					command->status = SG_TACTIC_COMMAND_MOVE;   /* stand: friction does the rest */
+					return;
+				}
 			}
 		}
 		memcpy(eye, body->origin, sizeof(eye));
@@ -300,7 +323,9 @@ int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 	/* Arrived: close on the point, easing in over the last body length. */
 	if (step->kind == SG_RUNE_STEP_ARRIVED)
 	{
-		if (have_direction)
+		/* Within a few units the body is there: it stands, rather than
+		 * hunting the point by a unit a frame and turning with every hunt. */
+		if (have_direction && distance >= ARRIVE_STAND)
 			Toward(&command, direction, distance < 32.0f ? distance / 32.0f :
 				1.0f);
 		*command_out = command;

@@ -26,6 +26,7 @@ qboolean	SG_RemoveBotNamed(const char *who);
 qboolean	SG_KickWorst(void);
 void		SG_RosterStorageReset(void);
 void		Botfill_Reset(void);
+void		SG_HumanTrace(edict_t *ent, const usercmd_t *ucmd);
 void		Botfill_Frame(void);
 
 /* the frame and the level (sg_bot_frame.c) */

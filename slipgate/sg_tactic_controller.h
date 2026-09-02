@@ -40,6 +40,7 @@ typedef struct sg_tactic_body_s
 	sg_tactic_hook_phase_t hook_phase;
 	uint8_t launcher_ready;   /* rocket launcher in hand, ready, loaded */
 	uint8_t hook_ready;       /* the offhand hook may be fired now */
+	uint8_t floor_toward_hook; /* floor continues 40 units toward the step's bite */
 	float gravity;
 	uint32_t frame_ms;
 	uint32_t substep_ms;

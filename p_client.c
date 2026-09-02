@@ -2965,6 +2965,7 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 
 		// perform a pmove
 		gi.Pmove (&pm);
+		SG_HumanTrace (ent, ucmd);
 
 		// save results of pmove
 		client->ps.pmove = pm.s;

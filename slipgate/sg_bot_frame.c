@@ -1610,6 +1610,10 @@ static void ApplyMechanism(sg_bot_t *bot, edict_t *e)
 #define GIVE_WAY_REACH 56.0f
 
 #define GIVE_WAY_LOOK 40.0f       /* the step aside is checked this far ahead for floor */
+#define VIEW_FOLLOWS_SPEED 0.3f   /* the view turns with the run only above this command speed */
+#define HOP_SPEED 250.0f          /* a bunny hop needs this much run */
+#define HOP_ROUTE_LEFT 1.5f       /* and this much route left, in seconds */
+#define HOP_MAX_SECONDS 0.9f      /* and must land within this */
 #define YIELD_REACH 72.0f         /* a standing body this near a teammate carrier steps away */
 
 static void GiveWay(const edict_t *e, float direction[3])
@@ -1709,6 +1713,22 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	body.hook_phase = HookPhase(bot, e);
 	body.launcher_ready = SG_BotLauncherReady(e) ? 1U : 0U;
 	body.hook_ready = SG_BotHookReady(e) ? 1U : 0U;
+	if (bot->step.hook_point_present)
+	{
+		vec3_t way, ahead;
+		float flat;
+
+		VectorSubtract(bot->step.hook_point, e->s.origin, way);
+		way[2] = 0.0f;
+		flat = VectorLength(way);
+		if (flat > 1.0f)
+		{
+			VectorScale(way, GIVE_WAY_LOOK / flat, way);
+			VectorAdd(e->s.origin, way, ahead);
+			body.floor_toward_hook = SG_BotStandingCellNear(ahead) != SG_RUNE_CX_INDEX_NONE ?
+				1U : 0U;
+		}
+	}
 	body.gravity = sv_gravity->value;
 	body.frame_ms = sg_rune_level.artifact.law.frame_ms;
 	body.substep_ms = sg_rune_level.artifact.law.substep_ms;
@@ -1754,13 +1774,22 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	}
 	if (moving)
 		GiveWay(e, command.direction);
-	if (moving)
+	/* The view follows the way the body goes only at a real pace: a nudge
+	 * of a unit toward a point is no reason to turn. */
+	if (moving && command.speed >= VIEW_FOLLOWS_SPEED)
 	{
 		float yaw = atan2f(command.direction[1], command.direction[0]) *
 			180.0f / (float)M_PI;
 
 		cmd.angles[YAW] = (short)(ANGLE2SHORT(yaw) -
 			e->client->ps.pmove.delta_angles[YAW]);
+	}
+	else if (moving)
+	{
+		cmd.angles[YAW] = (short)(ANGLE2SHORT(e->client->v_angle[YAW]) -
+			e->client->ps.pmove.delta_angles[YAW]);
+		cmd.angles[PITCH] = (short)(ANGLE2SHORT(e->client->v_angle[PITCH]) -
+			e->client->ps.pmove.delta_angles[PITCH]);
 	}
 	if (command.aim_owned)
 	{
@@ -1804,6 +1833,31 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 		cmd.sidemove = Move(400.0f * command.speed *
 			(command.direction[0] * sinf(radians) -
 			 command.direction[1] * cosf(radians)));
+	}
+	/* Bunny hopping: on a plain walk at speed with no launch ahead, hop
+	 * whenever the exact tracer says the hop lands cleanly on floor within
+	 * a second.  Air control keeps the run, and the ground's friction is
+	 * skipped for the flight's length. */
+	if (command.up == 0.0f && moving && body.supported && e->client->hookstate == 0 &&
+		bot->step.kind == SG_RUNE_STEP_CROSS && !bot->step.ease &&
+		(bot->step.move_kind == SG_RUNE_MOVE_WALK || bot->step.move_kind == SG_RUNE_MOVE_RAMP) &&
+		bot->step.cost_to_go > HOP_ROUTE_LEFT && bot->cell != SG_RUNE_CX_INDEX_NONE)
+	{
+		float speed = sqrtf(e->velocity[0] * e->velocity[0] + e->velocity[1] * e->velocity[1]);
+
+		if (speed >= HOP_SPEED)
+		{
+			vec3_t launch;
+			sg_rune_flight_t hop;
+
+			launch[0] = e->velocity[0];
+			launch[1] = e->velocity[1];
+			launch[2] = sg_rune_level.artifact.law.jump_velocity;
+			if (SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.complex,
+				&sg_rune_level.artifact.law, bot->cell, e->s.origin, launch,
+				RELEASE_LIVE_TOLERANCE, 1, &hop) && hop.seconds < HOP_MAX_SECONDS)
+				command.up = 1.0f;
+		}
 	}
 	cmd.upmove = Move(400.0f * command.up);
 	if (command.attack)
@@ -1969,6 +2023,27 @@ void SG_BotThink(sg_bot_t *bot)
 		gi.dprintf("\n");
 	}
 	Emit(bot, e);
+}
+
+/* What a human does, every frame, in the same terms as the bots' lines:
+ * where, how fast, on the ground or not, the rope, the crouch, the jump.
+ * The owner's own movement is the standard the bots are measured against. */
+void SG_HumanTrace(edict_t *ent, const usercmd_t *ucmd)
+{
+	if (!sg_cv.debug || !sg_cv.debug->value || !ent || !ent->client || (ent->flags & FL_BOT) ||
+		ent->movetype == MOVETYPE_NOCLIP || ent->deadflag || !ucmd)
+		return;
+	gi.dprintf("SGHUMAN %s at=(%.0f %.0f %.0f) v=(%.0f %.0f %.0f) speed=%.0f ground=%d "
+		"hook=%d duck=%d jump=%d fwd=%d side=%d yaw=%.0f pitch=%.0f cell=%u\n",
+		ent->client->pers.netname, ent->s.origin[0], ent->s.origin[1], ent->s.origin[2],
+		ent->velocity[0], ent->velocity[1], ent->velocity[2],
+		sqrtf(ent->velocity[0] * ent->velocity[0] + ent->velocity[1] * ent->velocity[1]),
+		ent->groundentity != NULL, ent->client->hookstate,
+		(ent->client->ps.pmove.pm_flags & PMF_DUCKED) != 0, ucmd->upmove > 0,
+		ucmd->forwardmove, ucmd->sidemove, ent->client->v_angle[YAW],
+		ent->client->v_angle[PITCH],
+		(unsigned int)SG_RuneLevelLocate(ent->s.origin,
+			(ent->client->ps.pmove.pm_flags & PMF_DUCKED) != 0, NULL));
 }
 
 void SG_RunFrame(void)
