@@ -163,8 +163,10 @@ execution, learning, sidecars) with their tests. The game module does not
 build until the era-4 level owner and bot driver replace the call sites in
 `slipgate/sg_arach.c`, `sg_combat.c`, `sg_caco.c`, `sg_fields.c`,
 `sg_client.c`, `sg_bot.h`, `p_client.c`, `g_main.c`, `g_save.c`.
-`sg_rune_source_authority` stays: it is host binding (entity spawn records
-for the host identity), not RUNE content.
+The host-facing units that survived that pass (BSP reader, collision,
+host laws, identity, source authority, hooks bridge, net bridge, weapon
+profiles, personas, cvars, helpers) were rewritten or removed on
+2026-09-02; see ERA4-REVIEW.md.
 
 Gone from the artifact: the response projection (fragments, halfspaces,
 patches, splits, facts, candidate and endpoint groups, occluders, seal),
