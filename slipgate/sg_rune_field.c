@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "sg_host_engine_pmove.h"
+#include "sg_rune_locate.h"
 
 #define STANCE_CHANGE_COST 0.05f
 
@@ -468,4 +469,66 @@ const char *SG_RuneStepKindString(sg_rune_step_kind_t kind)
 	case SG_RUNE_STEP_UNREACHABLE: return "unreachable";
 	default: return "unknown";
 	}
+}
+
+uint32_t SG_RuneFieldNearestReachable(const sg_rune_router_t *router,
+	const sg_rune_locator_t *locator, const sg_rune_field_t *field,
+	const float origin[3], float radius, float point_out[3])
+{
+	uint32_t best = SG_RUNE_CX_INDEX_NONE;
+	float best_distance = radius;
+	int32_t low[3], high[3], x, y, z;
+	uint32_t axis;
+
+	if (!router || !locator || !field || !field->cost || !origin ||
+		router->artifact != locator->artifact)
+		return SG_RUNE_CX_INDEX_NONE;
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		float reach = axis == 2U ? 64.0f : radius;
+		int32_t lo = (int32_t)((origin[axis] - reach) * (float)SG_RUNE_CX_Q8_ONE);
+		int32_t hi = (int32_t)((origin[axis] + reach) * (float)SG_RUNE_CX_Q8_ONE);
+
+		low[axis] = (lo - locator->origin_q8[axis]) / locator->bucket_q8;
+		high[axis] = (hi - locator->origin_q8[axis]) / locator->bucket_q8;
+		if (low[axis] < 0)
+			low[axis] = 0;
+		if (high[axis] >= (int32_t)locator->dims[axis])
+			high[axis] = (int32_t)locator->dims[axis] - 1;
+		if (low[axis] > high[axis])
+			return SG_RUNE_CX_INDEX_NONE;
+	}
+	for (z = low[2]; z <= high[2]; z++)
+		for (y = low[1]; y <= high[1]; y++)
+			for (x = low[0]; x <= high[0]; x++)
+			{
+				uint32_t bucket = ((uint32_t)z * locator->dims[1] + (uint32_t)y) *
+					locator->dims[0] + (uint32_t)x;
+				uint32_t slot;
+
+				for (slot = locator->first[bucket]; slot < locator->first[bucket + 1U];
+					slot++)
+				{
+					uint32_t cell = locator->entries[slot];
+					const float *center = &router->cell_center[cell * 3U];
+					float dx = center[0] - origin[0], dy = center[1] - origin[1];
+					float dz = center[2] - origin[2];
+					float distance = sqrtf(dx * dx + dy * dy);
+
+					if (!(router->artifact->complex.cells[cell].semantics &
+							SG_RUNE_CX_CELL_SUPPORTED) ||
+						fabsf(dz) > 64.0f || distance >= best_distance ||
+						!(field->cost[SG_RUNE_FIELD_STATE(cell, 0)] < INFINITY))
+						continue;
+					best_distance = distance;
+					best = cell;
+				}
+			}
+	if (best != SG_RUNE_CX_INDEX_NONE && point_out)
+	{
+		point_out[0] = router->cell_center[best * 3U];
+		point_out[1] = router->cell_center[best * 3U + 1U];
+		point_out[2] = router->cell_center[best * 3U + 2U] + 24.0f;
+	}
+	return best;
 }

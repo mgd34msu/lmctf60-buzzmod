@@ -489,6 +489,27 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 	(void)SG_RuneStepSelect(&sg_rune_level.router, field, bot->cell, crouching,
 		destination, &bot->step);
 flight:
+	/* Standing where the complex knows no floor (an entity's top, a brush
+	 * model): walk to the nearest floor the field reaches from. */
+	if (bot->step.kind == SG_RUNE_STEP_UNREACHABLE && supported)
+	{
+		vec3_t point;
+		const sg_rune_field_t *route = SG_RuneLevelField(bot->destination_cell);
+
+		if (route && SG_RuneFieldNearestReachable(&sg_rune_level.router,
+			&sg_rune_level.locator, route, e->s.origin, 256.0f, point) !=
+			SG_RUNE_CX_INDEX_NONE)
+		{
+			memset(&bot->step, 0, sizeof(bot->step));
+			bot->step.kind = SG_RUNE_STEP_CROSS;
+			bot->step.cell = bot->cell;
+			bot->step.portal = SG_RUNE_CX_INDEX_NONE;
+			bot->step.capability = SG_RUNE_CX_INDEX_NONE;
+			bot->step.move_kind = SG_RUNE_MOVE_WALK;
+			bot->step.crouching_now = (uint8_t)crouching;
+			VectorCopy(point, bot->step.target);
+		}
+	}
 	if (bot->step.kind == SG_RUNE_STEP_CROSS &&
 		(bot->step.move_kind == SG_RUNE_MOVE_JUMP ||
 		 bot->step.move_kind == SG_RUNE_MOVE_DROP ||

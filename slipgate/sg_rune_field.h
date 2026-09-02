@@ -79,4 +79,12 @@ int SG_RuneStepSelect(const sg_rune_router_t *router,
 
 const char *SG_RuneStepKindString(sg_rune_step_kind_t kind);
 
+struct sg_rune_locator_s;
+/* The nearest cell within radius (horizontal) that the field reaches from,
+ * for a body standing somewhere the complex does not know as floor (an
+ * entity's top, a brush model).  Returns the cell and its floor point. */
+uint32_t SG_RuneFieldNearestReachable(const sg_rune_router_t *router,
+	const struct sg_rune_locator_s *locator, const sg_rune_field_t *field,
+	const float origin[3], float radius, float point_out[3]);
+
 #endif /* SG_RUNE_FIELD_H */
