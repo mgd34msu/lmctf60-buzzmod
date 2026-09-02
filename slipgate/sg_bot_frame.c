@@ -1720,6 +1720,7 @@ static void ApplyMechanism(sg_bot_t *bot, edict_t *e)
 #define GIVE_WAY_REACH 56.0f
 
 #define GIVE_WAY_LOOK 40.0f       /* the step aside is checked this far ahead for floor */
+#define HOOK_RUN_LOOK 96.0f       /* a body running under its bolt needs this much floor ahead: room to stop */
 #define VIEW_FOLLOWS_SPEED 0.3f   /* the view turns with the run only above this command speed */
 #define HOOK_BITE_SLACK 12.0f     /* the bolt may stop this short of the bite (the bite is two units off its face) */
 #define HOP_SPEED 250.0f          /* a bunny hop needs this much run */
@@ -1835,7 +1836,7 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 		flat = VectorLength(way);
 		if (flat > 1.0f)
 		{
-			VectorScale(way, GIVE_WAY_LOOK / flat, way);
+			VectorScale(way, HOOK_RUN_LOOK / flat, way);
 			VectorAdd(e->s.origin, way, ahead);
 			/* Floor there means a supported cell that is no hazard at the
 			 * body's own height: the loose probe that finds a stand for a
