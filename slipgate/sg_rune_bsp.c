@@ -166,16 +166,14 @@ int SG_RuneBspLoadImage(const uint8_t *image, size_t size, sg_rune_bsp_t *bsp,
 			;
 		entity_bytes = n;
 	}
-	need = Align((size_t)plane_count * sizeof(*out_planes)) +
-		Align((size_t)node_count * sizeof(*out_nodes)) +
-		Align((size_t)leaf_count * sizeof(*out_leaves)) +
-		Align((size_t)leaf_brush_count * sizeof(*out_leaf_brushes) + 4U) +
-		Align((size_t)model_count * sizeof(*out_models)) +
-		Align((size_t)brush_count * sizeof(*out_brushes) + 4U) +
-		Align((size_t)side_count * sizeof(*out_sides) + 4U) +
-		Align((size_t)texinfo_count * sizeof(*out_texinfos) + 4U) +
-		Align((size_t)cluster_count * sizeof(uint32_t) + 4U) +
-		Align((size_t)vis_bytes + 4U) + Align((size_t)entity_bytes + 1U);
+#define PIECE(count, type) Align((size_t)(count) * sizeof(type) + 4U)
+	need = PIECE(plane_count, sg_rune_bsp_plane_t) + PIECE(node_count, sg_rune_bsp_node_t) +
+		PIECE(leaf_count, sg_rune_bsp_leaf_t) + PIECE(leaf_brush_count, uint32_t) +
+		PIECE(model_count, sg_rune_bsp_model_t) + PIECE(brush_count, sg_rune_bsp_brush_t) +
+		PIECE(side_count, sg_rune_bsp_side_t) + PIECE(texinfo_count, sg_rune_bsp_texinfo_t) +
+		PIECE(cluster_count, uint32_t) + PIECE(vis_bytes, uint8_t) +
+		PIECE(entity_bytes + 1U, char);
+#undef PIECE
 	arena = calloc(1U, need);
 	if (!arena)
 		return Fault(fault, "memory", -1, 0U);
