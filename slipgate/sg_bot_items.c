@@ -41,7 +41,14 @@ static float Worth(const edict_t *self, const edict_t *item)
 			!strcmp(it->pickup_name, "Grappling Hook"))
 			return 0.0f;
 		if (owned)
-			return it->ammo ? 6.0f : 0.0f;   /* the ammo it comes with */
+		{
+			/* Held already: worth the ammo it comes with, and only while
+			 * that ammo is short. */
+			const gitem_t *ammo = it->ammo ? FindItem(it->ammo) : NULL;
+			int have = ammo ? client->pers.inventory[ITEM_INDEX(ammo)] : 30;
+
+			return have < 30 ? 6.0f * (1.0f - (float)have / 30.0f) : 0.0f;
+		}
 		if (!strcmp(it->pickup_name, "Railgun") ||
 			!strcmp(it->pickup_name, "Rocket Launcher"))
 			return 60.0f;
@@ -90,9 +97,10 @@ static float Worth(const edict_t *self, const edict_t *item)
 	{
 		/* Quad, invulnerability and the techs change a fight; the rest of
 		 * the powerup class (silencer, breather, suit) is not worth a step. */
+		if (it->classname && (strstr(it->classname, "rune") || strstr(it->classname, "tech")))
+			return client->rune ? 0.0f : 80.0f;   /* one tech at a time */
 		if (it->classname && (!strcmp(it->classname, "item_quad") ||
-			!strcmp(it->classname, "item_invulnerability") ||
-			strstr(it->classname, "rune") || strstr(it->classname, "tech")))
+			!strcmp(it->classname, "item_invulnerability")))
 			return 80.0f;
 		return 0.0f;
 	}
