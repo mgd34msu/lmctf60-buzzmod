@@ -176,6 +176,7 @@ static int AimAngles(const float from[3], const float to[3], float *yaw_out,
 #define HOOK_RELEASE_BELOW 8.0f
 #define HOOK_RELEASE_FLAT 40.0f
 #define HOOK_RELEASE_AT_BITE 60.0f
+#define HOOK_RELEASE_FAST 200.0f  /* ask to let go from here in: the live arc decides */
 
 static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 	int have_direction, const float direction[3], float distance,
@@ -283,7 +284,12 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 		 * far from the bite), or over the landing and nearly at its height.
 		 * Height alone is no reason: a ride across a gap starts at the
 		 * landing's height and would be let go of the moment it bit. */
-		if (!have_direction || to_bite <= let_go ||
+		/* A ride is a burst: from the moment the eye is within the pull's
+		 * full-speed band of the bite the body asks to let go, and the
+		 * driver lets it the first frame the live arc lands well.  Ridden
+		 * to the record's point the pull has already slowed, and past the
+		 * bite the body sails on. */
+		if (!have_direction || to_bite <= let_go || to_bite <= HOOK_RELEASE_FAST ||
 			(flat < HOOK_RELEASE_FLAT &&
 			 body->origin[2] >= step->target[2] - 6.0f * HOOK_RELEASE_BELOW))
 		{
