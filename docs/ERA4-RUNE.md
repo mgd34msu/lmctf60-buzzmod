@@ -40,11 +40,16 @@ replacement runs on a real map.
    and above the eye, facing it: each survives an exact bolt trace from
    the eye, then the pull is traced with the crouch hull toward the bite,
    and letting go at half, three quarters and the whole of the clear pull
-   is traced as a flight to a landing.  Each distinct landing is one HOOK
-   record: fire at this bite from this cell, ride, let go, land there. The
-   runtime keeps the hook step while the rope is out and lets go once the
-   body is at the landing's height, over it, or about to meet the bite.
-   bctf01: 6,575 bites, 165k records from 23.6k floor cells, 5.6 s.
+   is traced as a flight to a landing, with the velocity the host's pull
+   gives at that distance from the bite (full speed beyond 120 units, then
+   slower by bands, gravity off within fifty).  Each distinct landing is
+   one HOOK record: fire at this bite from this cell, ride, let go when the
+   eye is the record's distance from the bite, land there. The runtime
+   keeps the hook step while the rope is out, lets go at that distance (or
+   at the landing's height, or over it), and a rope that pulls the body
+   nowhere for a second and a half is let go and that ride avoided for
+   thirty seconds.  bctf01: 6,575 bites, 182k records from 23.7k floor
+   cells, 4.2 s.
 6. **Mechanisms** (era 4, done). `sg_rune_mechanisms`: doors, lifts,
    buttons, teleporters, pushes, trains read from the host's entity
    semantics into records {kind, activation, bmodel, entity, activator,
