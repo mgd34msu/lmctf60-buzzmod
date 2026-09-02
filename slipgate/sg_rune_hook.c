@@ -14,6 +14,7 @@
 #include "sg_rune_vis.h"
 
 #define ROPE_RANGE 1000.0f
+#define BITE_BEYOND_BAND 48.0f    /* a bite at least this far past the slow band */
 #define BITE_ABOVE_EYE 4.0f       /* level bites too: the players' pulls are mostly forward */
 #define MOMENTUM_SPEED 400.0f     /* a release at this much forward speed carries into the next edge */
 #define MOMENTUM_CREDIT 0.7f
@@ -199,7 +200,7 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 	if (cluster < 0)
 		cluster = SG_RuneVisClusterAt(build->bsp, stand);
 	SG_RuneVisSelect(&build->vis, cluster);
-	/* The nearest bites in view, above the eye, facing it. */
+	/* The farthest bites in view, above the eye, facing it. */
 	for (c = 0U; c < build->cluster_count; c++)
 	{
 		uint32_t b;
@@ -214,13 +215,17 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 			float distance = sqrtf(dx * dx + dy * dy + dz * dz);
 			uint32_t slot;
 
-			if (dz < BITE_ABOVE_EYE || distance > ROPE_RANGE || distance < 48.0f)
+			/* A bite inside the pull's slow band never carries the body at
+			 * speed; the best players fire far and ride long. */
+			if (dz < BITE_ABOVE_EYE || distance > ROPE_RANGE ||
+				distance < build->law->hook_near_bite + BITE_BEYOND_BAND)
 				continue;
 			if (bite->normal[0] * dx + bite->normal[1] * dy + bite->normal[2] * dz > 0.0f)
 				continue;   /* the surface faces away */
-			/* Insert by distance, keeping the nearest few. */
+			/* Insert by distance, keeping the farthest few: a long pull at
+			 * full speed is what the rope is for. */
 			for (slot = candidate_count; slot > 0U &&
-				candidate_distance[slot - 1U] > distance; slot--)
+				candidate_distance[slot - 1U] < distance; slot--)
 			{
 				if (slot < CANDIDATES_PER_CELL)
 				{
