@@ -110,6 +110,10 @@ int SG_BotItemDetour(sg_bot_t *bot, const sg_rune_field_t *goal_field,
 
 		if (!Available(item))
 			continue;
+		/* A carrier goes only for health, and only when it is hurt. */
+		if (bot->role == SG_ROLE_CARRY && !(item->item && item->item->classname &&
+			!strncmp(item->item->classname, "item_health", 11)))
+			continue;
 		distance = SG_DistXY(self->s.origin, item->s.origin);
 		if (distance > DETOUR_RADIUS)
 			continue;

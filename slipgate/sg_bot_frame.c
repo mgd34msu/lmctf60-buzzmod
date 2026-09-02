@@ -132,6 +132,7 @@ static team_pass_t sg_team_pass;
 static uint32_t StandingCellNear(const vec3_t point);
 
 #define ESCORT_GAP_SECONDS 1.0f   /* an escort holds this far behind the carrier */
+#define CARRIER_DETOUR_HEALTH 40  /* under this a carrier will go for health */
 
 uint32_t SG_BotStandingCellNear(const vec3_t point)
 {
@@ -624,8 +625,9 @@ grounded:
 	if (!field)
 		return;
 	/* An item worth the detour becomes the destination for now; the goal's
-	 * own field prices the detour.  A carrier never detours. */
-	if (bot->role != SG_ROLE_CARRY)
+	 * own field prices the detour.  A carrier never detours unless it is
+	 * about to die, and then only for health. */
+	if (bot->role != SG_ROLE_CARRY || e->health < CARRIER_DETOUR_HEALTH)
 	{
 		vec3_t item_point;
 
