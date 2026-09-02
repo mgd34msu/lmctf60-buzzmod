@@ -177,6 +177,8 @@ static int AimAngles(const float from[3], const float to[3], float *yaw_out,
 #define HOOK_RELEASE_FLAT 40.0f
 #define HOOK_RELEASE_AT_BITE 60.0f
 #define HOOK_RELEASE_FAST 200.0f  /* ask to let go from here in: the live arc decides */
+#define HOOK_RELEASE_CARRIED 480.0f  /* speed along the pull the body has before it lets go (0.6 of the pull) */
+#define HOOK_RELEASE_SLOW_BAND 120.0f /* inside this the pull itself slows: let go whatever the speed */
 
 static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 	int have_direction, const float direction[3], float distance,
@@ -289,6 +291,25 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 		 * driver lets it the first frame the live arc lands well.  Ridden
 		 * to the record's point the pull has already slowed, and past the
 		 * bite the body sails on. */
+		/* The ride must carry the body first: the pull sets the body's
+		 * speed at the end of the frame the rope bites, and a release
+		 * before that leaves the body with its running speed alone.  Only
+		 * inside the band where the pull itself slows does the body let go
+		 * whatever its speed. */
+		if (step->hook_point_present && to_bite > HOOK_RELEASE_SLOW_BAND)
+		{
+			float bx = step->hook_point[0] - body->origin[0];
+			float by = step->hook_point[1] - body->origin[1];
+			float bz = step->hook_point[2] - (body->origin[2] + body->view_height);
+			float along = (body->velocity[0] * bx + body->velocity[1] * by +
+				body->velocity[2] * bz) / to_bite;
+
+			if (along < HOOK_RELEASE_CARRIED)
+			{
+				command->status = SG_TACTIC_COMMAND_MOVE;
+				return;
+			}
+		}
 		if (!have_direction || to_bite <= let_go || to_bite <= HOOK_RELEASE_FAST ||
 			(flat < HOOK_RELEASE_FLAT &&
 			 body->origin[2] >= step->target[2] - 6.0f * HOOK_RELEASE_BELOW))

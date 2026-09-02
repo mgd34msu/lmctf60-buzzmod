@@ -126,8 +126,14 @@ int main(void)
 	CHECK(command.pitch < 0.0f);
 	body.hook_phase = SG_TACTIC_HOOK_ATTACHED;
 	body.origin[0] = 290.0f;
+	/* Not carried yet: the body still has its running speed alone. */
+	CHECK(SG_TacticControl(&step, &body, &command));
+	CHECK(command.hook_release == 0U);
+	/* Carried by the pull: released. */
+	body.velocity[2] = 800.0f;
 	CHECK(SG_TacticControl(&step, &body, &command));
 	CHECK(command.hook_release == 1U);
+	body.velocity[2] = 0.0f;
 	body.hook_phase = SG_TACTIC_HOOK_IDLE;
 	body.origin[0] = 0.0f;
 
