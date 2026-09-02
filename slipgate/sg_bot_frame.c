@@ -889,10 +889,11 @@ static qboolean RescueAnchor(const sg_bot_t *bot, const edict_t *e, vec3_t ancho
 
 	if (from == SG_RUNE_CX_INDEX_NONE || from >= sg_rune_level.artifact.complex.cell_count)
 		return false;
+	/* A fall straight down has no way ahead: any high bite will do. */
 	VectorCopy(e->velocity, ahead);
 	ahead[2] = 0.0f;
 	if (VectorNormalize(ahead) < 1.0f)
-		return false;
+		VectorClear(ahead);
 	for (slot = router->departure_first[from]; slot < router->departure_first[from + 1U];
 		slot++)
 	{
@@ -1836,8 +1837,17 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 		{
 			VectorScale(way, GIVE_WAY_LOOK / flat, way);
 			VectorAdd(e->s.origin, way, ahead);
-			body.floor_toward_hook = SG_BotStandingCellNear(ahead) != SG_RUNE_CX_INDEX_NONE ?
-				1U : 0U;
+			/* Floor there means a supported cell that is no hazard at the
+			 * body's own height: the loose probe that finds a stand for a
+			 * flag would call the far side of a lava pit floor. */
+			{
+				uint32_t cell = SG_RuneLevelLocate(ahead, 0, NULL);
+
+				body.floor_toward_hook = cell != SG_RUNE_CX_INDEX_NONE &&
+					(sg_rune_level.artifact.complex.cells[cell].semantics &
+						(SG_RUNE_CX_CELL_SUPPORTED | SG_RUNE_CX_CELL_HAZARD)) ==
+						SG_RUNE_CX_CELL_SUPPORTED ? 1U : 0U;
+			}
 		}
 	}
 	body.gravity = sv_gravity->value;
