@@ -28,6 +28,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "sg_rune_bsp.h"
 #include "sg_rune_trace.h"
@@ -729,6 +730,8 @@ static float HullOffset(const sg_cfg_hull_t *hull,
 }
 
 #define SIDE_ORDER_MAX 64U
+#define CLEAR_EPSILON 0.03125f   /* a vertex this far inside a side still counts as on it */
+#define SAME_PLANE_DISTANCE 0.0625f /* two expansions of one side this close apart are one plane */
 
 /* The order a brush's sides are cut in: walls first, then ceilings, floors
  * last.  A piece outside a side is taken as soon as that side is cut, so
@@ -768,6 +771,54 @@ static uint32_t OrderSides(const sg_rune_bsp_t *world,
 /* Subtracts one hull-expanded brush from every polytope in the list.  Pieces
  * outside any side are free and go to the output; what is inside every side
  * is solid and is dropped. */
+/* Whether a piece lies wholly outside one side of the expanded brush: the
+ * brush then touches none of it, and its planes must not cut it.  A slab's
+ * wall plane otherwise splits the free space above the slab into a sliver
+ * and a cell that never pair as a portal. */
+static int PieceClearOfBrush(const cell_build_t *build,
+	const gathered_brush_t *entry, const sg_cfg_hull_t *hull,
+	const polytope_t *piece)
+{
+	const sg_rune_bsp_t *world = build->world;
+	const sg_rune_bsp_brush_t *brush = &world->brushes[entry->brush];
+	uint32_t k;
+
+	for (k = 0U; k < brush->side_count; k++)
+	{
+		const uint32_t side_index = brush->first_side + k;
+		const sg_rune_bsp_side_t *record;
+		const sg_rune_bsp_plane_t *source;
+		float normal[3], distance, lowest = INFINITY;
+		uint32_t face, vertex, axis;
+
+		if (side_index >= world->side_count)
+			return 0;
+		record = &world->sides[side_index];
+		if (record->plane >= world->plane_count)
+			return 0;
+		source = &world->planes[record->plane];
+		for (axis = 0U; axis < 3U; axis++)
+			normal[axis] = source->normal[axis];
+		distance = source->distance - HullOffset(hull, normal) +
+			normal[0] * entry->origin[0] + normal[1] * entry->origin[1] +
+			normal[2] * entry->origin[2];
+		for (face = 0U; face < piece->count; face++)
+			for (vertex = 0U; vertex < piece->faces[face].count; vertex++)
+			{
+				const float *p = piece->faces[face].points[vertex];
+				float d = normal[0] * p[0] + normal[1] * p[1] + normal[2] * p[2] - distance;
+
+				if (d < lowest)
+					lowest = d;
+			}
+		/* Every vertex on or beyond this side: nothing of the piece is
+		 * inside the brush. */
+		if (lowest >= -CLEAR_EPSILON)
+			return 1;
+	}
+	return 0;
+}
+
 static int SubtractBrush(cell_build_t *build, const gathered_brush_t *entry,
 	const sg_cfg_hull_t *hull, polytope_list_t *pieces,
 	polytope_list_t *out)
@@ -790,6 +841,17 @@ static int SubtractBrush(cell_build_t *build, const gathered_brush_t *entry,
 		uint32_t rank;
 
 		memset(&pieces->items[piece], 0, sizeof(pieces->items[piece]));
+		if (PieceClearOfBrush(build, entry, hull, &current))
+		{
+			if (!ListTake(out, &current))
+			{
+				PolytopeFree(&current);
+				SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY,
+					brush_index);
+				return 0;
+			}
+			continue;
+		}
 		for (rank = 0U; rank < ordered && current.count; rank++)
 		{
 			const uint32_t side_index = brush->first_side + order[rank];
@@ -1638,8 +1700,12 @@ typedef struct face_ref_s
 static uint64_t FaceKey(const sg_configuration_plane_t *plane,
 	sg_cfg_stance_t stance)
 {
+	/* The variant (the hull the plane was expanded for) is left out: a
+	 * wall expanded for the crouch hull and for the standing hull is the
+	 * same plane, and the faces on it must meet.  SameKey tells them
+	 * apart where the expansions differ. */
 	uint64_t key = ((uint64_t)plane->source_kind << 56) ^
-		((uint64_t)plane->source_variant << 40) ^ (uint64_t)plane->source_index;
+		(uint64_t)plane->source_index;
 
 	(void)stance;
 
@@ -1654,7 +1720,8 @@ static int SameKey(const sg_configuration_plane_t *a,
 {
 	return a->source_kind == b->source_kind &&
 		a->source_index == b->source_index &&
-		a->source_variant == b->source_variant;
+		(a->source_variant == b->source_variant ||
+		 fabsf(fabsf(a->distance) - fabsf(b->distance)) < SAME_PLANE_DISTANCE);
 }
 
 /* Clips polygon a by the edges of coplanar polygon b (b's winding is
@@ -1904,6 +1971,28 @@ static int EmitPortals(cell_build_t *build)
 
 			slot = (uint32_t)FaceKey(&record->plane, owner->stance) &
 				(capacity - 1U);
+			{
+				const char *watch = getenv("SG_CFG_WATCH_D");
+
+				if (watch && fabsf(fabsf(record->plane.distance) - (float)atof(watch)) < 0.01f)
+				{
+					float lo[3] = { INFINITY, INFINITY, INFINITY }, hi[3] = { -INFINITY, -INFINITY, -INFINITY };
+					uint32_t v, ax;
+
+					for (v = 0U; v < record->vertex_count; v++)
+						for (ax = 0U; ax < 3U; ax++)
+						{
+							float c = space->vertices[record->first_vertex + v].value[ax];
+
+							if (c < lo[ax]) lo[ax] = c;
+							if (c > hi[ax]) hi[ax] = c;
+						}
+					fprintf(stderr, "insert: cell %u stance %u normal (%.2f %.2f %.2f) d %.3f kind %u index %u variant %u slot %u: y %.1f..%.1f z %.1f..%.1f\n",
+						cell, (unsigned)owner->stance, record->plane.normal[0], record->plane.normal[1], record->plane.normal[2],
+						record->plane.distance, (unsigned)record->plane.source_kind, (unsigned)record->plane.source_index,
+						(unsigned)record->plane.source_variant, slot, lo[1], hi[1], lo[2], hi[2]);
+				}
+			}
 			while (hash[slot] != UINT32_MAX)
 			{
 				const face_ref_t *other = &refs[hash[slot]];
@@ -1919,9 +2008,31 @@ static int EmitPortals(cell_build_t *build)
 					poly_face_t overlap;
 					int result = OverlapPolygon(space, record, other_face,
 						&overlap);
+					const char *watch = getenv("SG_CFG_WATCH_D");
+					int watched = watch && fabsf(fabsf(record->plane.distance) - (float)atof(watch)) < 0.01f;
 
 					if (result < 0)
 						goto out_of_memory;
+					if (watched)
+					{
+						float lo[2][3] = { { INFINITY, INFINITY, INFINITY }, { INFINITY, INFINITY, INFINITY } };
+						float hi[2][3] = { { -INFINITY, -INFINITY, -INFINITY }, { -INFINITY, -INFINITY, -INFINITY } };
+						const sg_configuration_face_t *faces[2] = { record, other_face };
+						uint32_t which, v, ax;
+
+						for (which = 0U; which < 2U; which++)
+							for (v = 0U; v < faces[which]->vertex_count; v++)
+								for (ax = 0U; ax < 3U; ax++)
+								{
+									float c = space->vertices[faces[which]->first_vertex + v].value[ax];
+
+									if (c < lo[which][ax]) lo[which][ax] = c;
+									if (c > hi[which][ax]) hi[which][ax] = c;
+								}
+						fprintf(stderr, "portal pass: cells %u/%u d %.3f overlap %d: a y %.1f..%.1f z %.1f..%.1f | b y %.1f..%.1f z %.1f..%.1f\n",
+							cell, other->cell, record->plane.distance, result,
+							lo[0][1], hi[0][1], lo[0][2], hi[0][2], lo[1][1], hi[1][1], lo[1][2], hi[1][2]);
+					}
 					if (result)
 					{
 						float here[3], there[3];
@@ -1937,6 +2048,10 @@ static int EmitPortals(cell_build_t *build)
 						for (vertex = overlap.count; vertex-- > 0U; )
 							if (!FacePush(&reverse, overlap.points[vertex]))
 								ok = 0;
+						if (watched)
+							fprintf(stderr, "  witness here %d there %d\n",
+								SideWitness(build, cell, &overlap, here),
+								SideWitness(build, other->cell, &reverse, there));
 						if (ok && SideWitness(build, cell, &overlap, here) &&
 							SideWitness(build, other->cell, &reverse, there))
 						{

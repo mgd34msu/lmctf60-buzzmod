@@ -256,10 +256,17 @@ int main(int argc, char **argv)
 				{
 					nx = -nx; ny = -ny; nz = -nz; d = -d;
 				}
-				printf("  facet %u out (%.2f %.2f %.2f) d %.1f %s source %u\n", inc->facet,
+				printf("  facet %u out (%.2f %.2f %.2f) d %.1f %s source %u", inc->facet,
 					nx, ny, nz, d, facet->incidences.count == 1U ? "closed" :
 					(facet->portal != SG_RUNE_CX_INDEX_NONE ? "portal" : "shared"),
 					facet->source.kind);
+				if (facet->source.kind == SG_RUNE_CX_SOURCE_EXPANDED_BRUSH_SIDE)
+					printf(" side %u brush %u", facet->source.brush_side.brush_side,
+						facet->source.brush_side.brush);
+				else if (facet->source.kind == SG_RUNE_CX_SOURCE_BSP_PLANE)
+					printf(" plane %u leaf %u", facet->source.bsp_plane.plane,
+						facet->source.bsp_plane.leaf);
+				printf("\n");
 			}
 		}
 		for (slot = router.departure_first[cell_index];
