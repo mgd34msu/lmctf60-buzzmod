@@ -14,7 +14,9 @@
 #include "sg_rune_vis.h"
 
 #define ROPE_RANGE 1000.0f
-#define BITE_ABOVE_EYE 24.0f
+#define BITE_ABOVE_EYE 4.0f       /* level bites too: the players' pulls are mostly forward */
+#define MOMENTUM_SPEED 400.0f     /* a release at this much forward speed carries into the next edge */
+#define MOMENTUM_CREDIT 0.7f
 #define CANDIDATES_PER_CELL 24U
 #define RECORDS_PER_CELL 8U
 #define EYE_HEIGHT 22.0f
@@ -331,6 +333,11 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 			 * walk never sees them. */
 			seconds = 0.5f * bolt_seconds + clear * fractions[f] /
 				build->law->hook_pull_speed + flight.seconds;
+			/* A release at forward speed is worth more than its own time:
+			 * the body carries it into the next crossing (the game drops
+			 * the vertical part at release, not the forward part). */
+			if (sqrtf(velocity[0] * velocity[0] + velocity[1] * velocity[1]) >= MOMENTUM_SPEED)
+				seconds *= MOMENTUM_CREDIT;
 			/* One record per landing cell: the cheapest ride there. */
 			slot = NULL;
 			for (k = 0U; k < *landing_count; k++)

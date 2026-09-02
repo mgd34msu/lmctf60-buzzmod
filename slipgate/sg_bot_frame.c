@@ -220,7 +220,10 @@ static qboolean FlagHome(int team, vec3_t out)
 
 	if (!flag)
 		return false;
-	if (VectorLength(flag->homeposition) > 0.0f)
+	/* At home the flag entity itself marks the stand (it dropped to the
+	 * floor on spawn); away, the spawn point does. */
+	if (VectorLength(flag->homeposition) > 0.0f &&
+		!ctf_flagatposition(flag->homeposition, flag->s.origin))
 		VectorCopy(flag->homeposition, out);
 	else
 		VectorCopy(flag->s.origin, out);
@@ -753,6 +756,28 @@ static uint32_t StandingCellNear(const vec3_t point)
 			return cell;
 		if (first == SG_RUNE_CX_INDEX_NONE)
 			first = cell;
+	}
+	/* Nothing to stand on at the point: the floor under it, as an item
+	 * dropped there would find it. */
+	{
+		vec3_t down;
+		trace_t tr;
+
+		VectorCopy(point, down);
+		down[2] -= 1024.0f;
+		tr = gi.trace(point, NULL, NULL, down, NULL, MASK_SOLID);
+		if (tr.fraction < 1.0f && tr.plane.normal[2] >= 0.7f)
+		{
+			vec3_t on;
+			uint32_t cell;
+
+			VectorCopy(tr.endpos, on);
+			on[2] += 24.5f;
+			cell = SG_RuneLevelLocate(on, 0, NULL);
+			if (cell != SG_RUNE_CX_INDEX_NONE &&
+				(sg_rune_level.artifact.complex.cells[cell].semantics & SG_RUNE_CX_CELL_SUPPORTED))
+				return cell;
+		}
 	}
 	return first;
 }
