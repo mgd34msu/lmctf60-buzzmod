@@ -1830,9 +1830,16 @@ static void SG_BotHookTouch(edict_t *self, edict_t *other,
 {
 	vec3_t dest;
 	int damage;
+	vec3_t normal;
 
 	if (!other)
 		return;
+	/* A rope hanging on something is touched through the trigger path,
+	 * which carries no plane. */
+	if (plane)
+		VectorCopy(plane->normal, normal);
+	else
+		VectorClear(normal);
 
 	if (other == self->owner)
 		return; //we hit ourselves, ignore us
@@ -1879,7 +1886,7 @@ static void SG_BotHookTouch(edict_t *self, edict_t *other,
 		{
 			if (other->client)
 				gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/gkilling.wav"), 1, ATTN_NORM, 0);
-			T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, damage, damage, DAMAGE_ENERGY, MOD_CTF_GRAPPLE);
+			T_Damage (other, self, self->owner, self->velocity, self->s.origin, normal, damage, damage, DAMAGE_ENERGY, MOD_CTF_GRAPPLE);
 			self->hook_lastframe = level.framenum;
 		}
 		else
@@ -1888,7 +1895,7 @@ static void SG_BotHookTouch(edict_t *self, edict_t *other,
 				gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/ghit.wav"), 1, ATTN_NORM, 0);
 			else
 				gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/ghitwall.wav"), 0.8f, ATTN_NORM, 0);
-			T_Damage (other, self, self->owner, self->velocity, self->s.origin, plane->normal, damage, damage, DAMAGE_ENERGY, MOD_CTF_GRAPPLE);
+			T_Damage (other, self, self->owner, self->velocity, self->s.origin, normal, damage, damage, DAMAGE_ENERGY, MOD_CTF_GRAPPLE);
 		}
 	}
 	else if (self->hook_target != other && !other->client)
