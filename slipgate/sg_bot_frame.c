@@ -978,6 +978,24 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 	bot->cell = SG_RuneLevelLocate(e->s.origin, crouching, &violation);
 	if (bot->cell == SG_RUNE_CX_INDEX_NONE)
 		return;
+	/* The rope log: when it bites and when it comes back, in the terms the
+	 * owner's own trace uses. */
+	if (sg_cv.debug && sg_cv.debug->value && e->client->hookstate != bot->rope_state_logged)
+	{
+		if (e->client->hookstate == 2)
+		{
+			bot->rope_bit_at = level.time;
+			gi.dprintf("SGROPE %s bit after=%.1f speed=%.0f\n", e->client->pers.netname,
+				bot->rope_fired_at > 0.0f ? level.time - bot->rope_fired_at : 0.0f,
+				VectorLength(e->velocity));
+		}
+		else if (e->client->hookstate == 0 && bot->rope_state_logged != 0)
+			gi.dprintf("SGROPE %s off %s attached=%.1f speed=%.0f ground=%d\n",
+				e->client->pers.netname, bot->rope_state_logged == 2 ? "released" : "missed",
+				bot->rope_bit_at > 0.0f ? level.time - bot->rope_bit_at : 0.0f,
+				VectorLength(e->velocity), e->groundentity != NULL);
+		bot->rope_state_logged = (uint8_t)e->client->hookstate;
+	}
 	/* A rope that came back without ever carrying the body missed, or bit
 	 * something that shook it off: the ride it was fired for is not tried
 	 * again for a while, or the body fires at the same bite from the same
@@ -1974,6 +1992,11 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	}
 	if (command.hook_fire && SG_BotHookReady(e))
 	{
+		if (sg_cv.debug && sg_cv.debug->value)
+			gi.dprintf("SGROPE %s fired speed=%.0f ground=%d %s\n", e->client->pers.netname,
+				VectorLength(e->velocity), e->groundentity != NULL, bot->rescue ? "rescue" : "ride");
+		bot->rope_fired_at = level.time;
+		bot->rope_bit_at = 0.0f;
 		Cmd_Hook_f(e);
 		bot->hook_phase = 2;
 		bot->hook_entity = e->client->hook;

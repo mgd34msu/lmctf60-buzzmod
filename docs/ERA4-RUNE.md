@@ -135,6 +135,31 @@ replacement runs on a real map.
    A ride that ends hanging at the bite without its drop reaching the
    record's landing is avoided; the avoid list holds 16 for 60 seconds.
    A rescue rope is one per fall and its hang is three seconds at most.
+   **Powerup objective (2026-09-02).** The quad and the techs are objectives:
+   a powerup a teammate sees standing on floor (in the PVS, a clear line
+   from the eye, within 1500) becomes known to the team for 45 seconds and
+   is called out; the situation changes, and the nearest free bot that can
+   use it (no tech in hand for a tech) takes the powerup role until it is
+   gone. **Defender patrol.** A posted defender with nothing in sight goes
+   for the best pickup within 640 of the flag for up to eight seconds and
+   returns to the post; the role stays defend. **Idle view.** With nothing
+   in sight and nowhere to go the view holds; posted defenders face their
+   approaches. **Out of the lava.** A body in lava or slime fires its rope
+   at the best bite it knows, from the floor it left or from any ride
+   recorded within 256.
+   **Moving like the owner (2026-09-02).** Measured from four minutes of
+   the owner's play (`SGHUMAN` trace): above run speed 69% of the time,
+   airborne 53%, strafing 73%, the rope a burst fired mostly from the air
+   at ~290, attached ~0.6 s, let go in the air at ~500; air acceleration is
+   off on this server, so all speed above 300 is rope momentum kept alive
+   in the air. The bots now: fire the rope on the move when their velocity
+   points at the bite, keep running at the bite while the bolt flies over
+   floor, hop on every safe walk (the exact tracer says the hop lands
+   cleanly and the run after it stays on floor), follow the route from the
+   landing cell while airborne and fire rides from the air, and fire only
+   at a bite the eye can see (a bite behind a wall avoids its ride). After
+   the first of these the bots measured mean 254, median 268, top tenth
+   360, above 300 for 39% of the time.
 3. **Movement capabilities** (era 4, done). One record per crossing per
    admissible kind: cell, portal, destination cell, kind, source and
    destination stances, profile, launch velocity, seconds. Contact

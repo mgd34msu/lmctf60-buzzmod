@@ -56,6 +56,9 @@ typedef struct sg_bot_s
 	float ride_since;           /* level.time the rope attached */
 	float ride_nearest;         /* the closest the body has come to the bite this ride */
 	float hang_since;           /* level.time the rope first held the body at the bite */
+	float rope_fired_at;        /* level.time the rope was fired, for the rope log */
+	float rope_bit_at;
+	uint8_t rope_state_logged;  /* the hookstate the rope log last saw */
 	uint32_t fired_capability;  /* the ride the rope was last fired for */
 	uint8_t fired_bit;          /* that rope bit */
 	uint32_t flight_from;       /* the floor cell the current flight left */
