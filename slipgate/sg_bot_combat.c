@@ -115,6 +115,8 @@ typedef struct combat_state_s
 	int choice;               /* weapon slot chosen last frame, -1 none */
 	float choice_at;
 	uint32_t random;
+	vec3_t shoot_point;
+	float shoot_until;        /* level.time the request lasts to */
 } combat_state_t;
 
 static combat_state_t sg_combat[MAX_CLIENTS];
@@ -562,6 +564,8 @@ static qboolean ShotLands(edict_t *self, const sg_weapon_profile_t *profile,
 	VectorMA(eye, reach, forward, end);
 	tr = sg_host.trace(eye, NULL, NULL, end, self, MASK_SHOT);
 	VectorCopy(tr.endpos, impact_out);
+	if (!target)
+		return tr.fraction < 1.0f;
 	if (tr.ent == target)
 		return true;
 	if (profile && profile->splash_radius > 0.0f)
@@ -593,6 +597,31 @@ void SG_BotCombatFrame(edict_t *self, usercmd_t *cmd, qboolean *engaged_out)
 	if (!state)
 		return;
 	target = Look(self, state);
+	if (!target && level.time < state->shoot_until)
+	{
+		/* Something to shoot and nothing to fight: aim at the point with
+		 * whatever is in hand and fire when the shot reaches it. */
+		vec3_t impact, delta;
+		int held = SlotOfItem(self->client->pers.weapon);
+
+		Eye(self, eye);
+		AnglesFor(eye, state->shoot_point, &want_yaw, &want_pitch);
+		Slew(state, want_yaw, want_pitch, 0.5f, &yaw, &pitch);
+		cmd->angles[YAW] = (short)(ANGLE2SHORT(yaw) -
+			self->client->ps.pmove.delta_angles[YAW]);
+		cmd->angles[PITCH] = (short)(ANGLE2SHORT(pitch) -
+			self->client->ps.pmove.delta_angles[PITCH]);
+		if (engaged_out)
+			*engaged_out = true;
+		if (held >= 0 && self->client->weaponstate == WEAPON_READY &&
+			ShotLands(self, sg_weapon_profiles[held], NULL, yaw, pitch, impact))
+		{
+			VectorSubtract(impact, state->shoot_point, delta);
+			if (VectorLength(delta) < 48.0f)
+				cmd->buttons |= BUTTON_ATTACK;
+		}
+		return;
+	}
 	if (!target)
 	{
 		/* Nothing to fight: the view follows the walk; keep the best
@@ -633,6 +662,16 @@ void SG_BotCombatFrame(edict_t *self, usercmd_t *cmd, qboolean *engaged_out)
 	if (!SplashSafe(self, profile, impact))
 		return;
 	cmd->buttons |= BUTTON_ATTACK;
+}
+
+void SG_BotCombatShootAt(edict_t *self, const vec3_t point)
+{
+	combat_state_t *state = self && self->client ? StateOf(self) : NULL;
+
+	if (!state || !point)
+		return;
+	VectorCopy(point, state->shoot_point);
+	state->shoot_until = level.time + 0.2f;
 }
 
 /* ---- the executor's questions ------------------------------------------------------ */

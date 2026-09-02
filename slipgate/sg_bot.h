@@ -33,6 +33,11 @@ typedef struct sg_bot_s
 	float flight_landing[3];
 	float stuck_since;
 	float stuck_origin[3];
+	uint32_t task_mechanism;    /* the mechanism being worked, or INDEX_NONE */
+	float task_since;
+	float shoot_point[3];       /* something to shoot (a door, a button) */
+	uint8_t shoot_point_present;
+	uint8_t reserved2[3];
 
 	/* Role. */
 	int role;

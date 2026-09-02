@@ -384,7 +384,10 @@ static void RecordFrom(const mover_t *mover, sg_rune_mech_kind_t kind,
 		(int32_t)mover->entity->bsp_model : -1;
 	record->entity = mover->index;
 	record->activator = SG_RUNE_CX_INDEX_NONE;
-	memcpy(record->origin, mover->entity->origin.value, sizeof(record->origin));
+	if (mover->entity->flags & SG_BSP_ENTITY_HAS_BRUSH_MODEL)
+		memcpy(record->origin, mover->center, sizeof(record->origin));
+	else
+		memcpy(record->origin, mover->entity->origin.value, sizeof(record->origin));
 	memcpy(record->mins, mover->mins, sizeof(record->mins));
 	memcpy(record->maxs, mover->maxs, sizeof(record->maxs));
 	record->speed = mover->entity->speed;

@@ -182,6 +182,22 @@ int SG_RuneRouterBuild(sg_rune_router_t *router,
 			router->cell_center[record->cell * 3U + 2U];
 		router->edge_cost[capability] = EdgeCost(artifact, capability,
 			horizontal, dz);
+		if (record->mechanism != SG_RUNE_CX_INDEX_NONE &&
+			record->mechanism < artifact->mechanisms.record_count)
+		{
+			const sg_rune_mech_t *mechanism =
+				&artifact->mechanisms.records[record->mechanism];
+
+			if (mechanism->kind == SG_RUNE_MECH_DOOR)
+			{
+				if (mechanism->activation == SG_RUNE_MECH_ACTIVATE_NONE)
+					router->edge_cost[capability] = INFINITY;
+				else if (mechanism->activation != SG_RUNE_MECH_ACTIVATE_TOUCH)
+					router->edge_cost[capability] += 3.0f;
+				else
+					router->edge_cost[capability] += 0.5f;
+			}
+		}
 	}
 	for (cell = 0U; cell < cx->cell_count; cell++)
 		router->arrival_first[cell + 1U] += router->arrival_first[cell];

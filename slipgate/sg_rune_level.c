@@ -2,6 +2,7 @@
 #undef world
 #include "sg_rune_level.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "sg_host_law_owner.h"
@@ -57,6 +58,7 @@ void SG_RuneLevelClear(void)
 	SG_RuneRouterFree(&sg_rune_level.router);
 	SG_RuneLocatorFree(&sg_rune_level.locator);
 	SG_RuneArtifactRelease(&sg_rune_level.artifact);
+	free(sg_rune_level.mechanism_edict);
 	memset(&sg_rune_level, 0, sizeof(sg_rune_level));
 	for (index = 0U; index < SG_RUNE_LEVEL_FIELDS; index++)
 		sg_rune_level.fields[index].destination_cell = SG_RUNE_CX_INDEX_NONE;
@@ -204,4 +206,77 @@ uint32_t SG_RuneLevelLocate(const float origin[3], int crouching,
 	return SG_RuneLocate(&sg_rune_level.locator, origin,
 		crouching ? SG_RUNE_MOVE_CROUCHING : SG_RUNE_MOVE_STANDING, 8.0f,
 		violation_out);
+}
+
+static edict_t *FindBrushModel(int bmodel)
+{
+	char name[16];
+	int i;
+
+	snprintf(name, sizeof(name), "*%d", bmodel);
+	for (i = 1; i < globals.num_edicts; i++)
+	{
+		edict_t *e = &g_edicts[i];
+
+		if (e->inuse && e->model && !strcmp(e->model, name))
+			return e;
+	}
+	return NULL;
+}
+
+static edict_t *FindPointEntity(const float origin[3], const char *classname)
+{
+	int i;
+	edict_t *best = NULL;
+	float best_distance = 64.0f;
+
+	for (i = 1; i < globals.num_edicts; i++)
+	{
+		edict_t *e = &g_edicts[i];
+		vec3_t delta;
+		float distance;
+
+		if (!e->inuse || !e->classname || strcmp(e->classname, classname))
+			continue;
+		VectorSubtract(e->s.origin, origin, delta);
+		distance = VectorLength(delta);
+		if (distance < best_distance)
+		{
+			best_distance = distance;
+			best = e;
+		}
+	}
+	return best;
+}
+
+edict_t *SG_RuneLevelMechanismEdict(uint32_t mechanism)
+{
+	const sg_rune_mech_t *record;
+	edict_t *e = NULL;
+
+	if (!sg_rune_level.current ||
+		mechanism >= sg_rune_level.artifact.mechanisms.record_count)
+		return NULL;
+	if (!sg_rune_level.mechanism_edict)
+	{
+		sg_rune_level.mechanism_edict = calloc(
+			(size_t)sg_rune_level.artifact.mechanisms.record_count, sizeof(int));
+		if (!sg_rune_level.mechanism_edict)
+			return NULL;
+	}
+	if (sg_rune_level.mechanism_edict[mechanism] > 0)
+	{
+		e = &g_edicts[sg_rune_level.mechanism_edict[mechanism]];
+		if (e->inuse)
+			return e;
+		sg_rune_level.mechanism_edict[mechanism] = 0;
+	}
+	record = &sg_rune_level.artifact.mechanisms.records[mechanism];
+	if (record->bmodel >= 0)
+		e = FindBrushModel(record->bmodel);
+	else if (record->kind == SG_RUNE_MECH_TELEPORTER)
+		e = FindPointEntity(record->origin, "misc_teleporter");
+	if (e)
+		sg_rune_level.mechanism_edict[mechanism] = (int)(e - g_edicts);
+	return e;
 }

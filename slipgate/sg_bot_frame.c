@@ -26,6 +26,7 @@
 #include "sg_net.h"
 #include "sg_rune_flight.h"
 #include "sg_rune_level.h"
+#include "sg_rune_mechanisms.h"
 #include "sg_rune_source_authority_owner.h"
 #include "sg_tactic_controller.h"
 #include "sg_util.h"
@@ -89,6 +90,7 @@ void SG_BotSlotInit(sg_bot_t *bot)
 	bot->cell = SG_RUNE_CX_INDEX_NONE;
 	bot->destination_cell = SG_RUNE_CX_INDEX_NONE;
 	bot->flight_capability = SG_RUNE_CX_INDEX_NONE;
+	bot->task_mechanism = SG_RUNE_CX_INDEX_NONE;
 	bot->step.kind = SG_RUNE_STEP_HOLD;
 	bot->role = SG_ROLE_ATTACK;
 	bot->last_role = SG_ROLE_ATTACK;
@@ -513,7 +515,8 @@ flight:
 	if (bot->step.kind == SG_RUNE_STEP_CROSS &&
 		(bot->step.move_kind == SG_RUNE_MOVE_JUMP ||
 		 bot->step.move_kind == SG_RUNE_MOVE_DROP ||
-		 bot->step.move_kind == SG_RUNE_MOVE_ROCKET_JUMP))
+		 bot->step.move_kind == SG_RUNE_MOVE_ROCKET_JUMP ||
+		 bot->step.move_kind == SG_RUNE_MOVE_EXTERNAL_FORCE))
 	{
 		const sg_rune_move_capability_t *record =
 			&sg_rune_level.artifact.movement.capabilities[bot->step.capability];
@@ -528,6 +531,160 @@ flight:
 			bot->flight_capability = bot->step.capability;
 			VectorCopy(landing, bot->flight_landing);
 		}
+	}
+}
+
+#define MOVER_STATE_TOP 0
+#define MOVER_STATE_UP 2
+
+/* The step goes through a mechanism: what the body does about it now,
+ * from the mechanism's live state. */
+static void ApplyMechanism(sg_bot_t *bot, edict_t *e)
+{
+	const sg_rune_move_capability_t *capability;
+	const sg_rune_mech_t *record;
+	edict_t *mover;
+	vec3_t point;
+
+	if (bot->step.kind != SG_RUNE_STEP_CROSS ||
+		bot->step.capability == SG_RUNE_CX_INDEX_NONE)
+	{
+		bot->task_mechanism = SG_RUNE_CX_INDEX_NONE;
+		return;
+	}
+	capability = &sg_rune_level.artifact.movement.capabilities[bot->step.capability];
+	if (capability->mechanism == SG_RUNE_CX_INDEX_NONE)
+	{
+		bot->task_mechanism = SG_RUNE_CX_INDEX_NONE;
+		return;
+	}
+	record = &sg_rune_level.artifact.mechanisms.records[capability->mechanism];
+	mover = SG_RuneLevelMechanismEdict(capability->mechanism);
+	switch (record->kind)
+	{
+	case SG_RUNE_MECH_PUSH:
+		/* Walk into the pad; the launch is the map's. */
+		VectorCopy(record->origin, point);
+		point[2] = record->mins[2] + 24.0f;
+		VectorCopy(point, bot->step.target);
+		bot->step.move_kind = SG_RUNE_MOVE_WALK;
+		break;
+	case SG_RUNE_MECH_TELEPORTER:
+		VectorCopy(record->origin, bot->step.target);
+		bot->step.target[2] += 24.0f;
+		bot->step.move_kind = SG_RUNE_MOVE_WALK;
+		break;
+	case SG_RUNE_MECH_PLATFORM:
+		if (!mover)
+			break;
+		if (e->groundentity == mover)
+		{
+			/* Riding: wait for the top, then walk off toward the field's
+			 * destination floor. */
+			if (mover->moveinfo.state != MOVER_STATE_TOP)
+			{
+				bot->step.kind = SG_RUNE_STEP_HOLD;
+				break;
+			}
+			bot->step.move_kind = SG_RUNE_MOVE_WALK;
+			break;
+		}
+		/* Get on: the middle of its top where it is now. */
+		bot->step.target[0] = record->origin[0];
+		bot->step.target[1] = record->origin[1];
+		bot->step.target[2] = mover->absmax[2] + 24.0f;
+		bot->step.move_kind = SG_RUNE_MOVE_WALK;
+		break;
+	case SG_RUNE_MECH_TRAIN:
+		if (!mover)
+			break;
+		if (e->groundentity == mover)
+		{
+			vec3_t delta;
+
+			VectorSubtract(bot->step.target, mover->s.origin, delta);
+			delta[2] = 0.0f;
+			if (VectorLength(delta) > 96.0f)
+			{
+				bot->step.kind = SG_RUNE_STEP_HOLD;   /* ride */
+				break;
+			}
+			bot->step.move_kind = SG_RUNE_MOVE_WALK;   /* step off */
+			break;
+		}
+		{
+			vec3_t delta;
+
+			VectorSubtract(mover->s.origin, e->s.origin, delta);
+			delta[2] = 0.0f;
+			if (VectorLength(delta) > 160.0f)
+			{
+				/* Not here yet: wait where the field says to board. */
+				const float *center =
+					&sg_rune_level.router.cell_center[bot->step.cell * 3U];
+
+				VectorCopy(center, bot->step.target);
+				bot->step.target[2] += 24.0f;
+				bot->step.kind = SG_RUNE_STEP_ARRIVED;
+				break;
+			}
+			bot->step.target[0] = (mover->absmin[0] + mover->absmax[0]) * 0.5f;
+			bot->step.target[1] = (mover->absmin[1] + mover->absmax[1]) * 0.5f;
+			bot->step.target[2] = mover->absmax[2] + 24.0f;
+			bot->step.move_kind = SG_RUNE_MOVE_WALK;
+		}
+		break;
+	case SG_RUNE_MECH_DOOR:
+	{
+		int open = !mover || mover->moveinfo.state == MOVER_STATE_TOP ||
+			mover->moveinfo.state == MOVER_STATE_UP;
+
+		if (open || record->activation == SG_RUNE_MECH_ACTIVATE_TOUCH)
+		{
+			bot->task_mechanism = SG_RUNE_CX_INDEX_NONE;
+			break;
+		}
+		if (record->activation == SG_RUNE_MECH_ACTIVATE_SHOT)
+		{
+			SG_BotCombatShootAt(e, record->origin);
+			bot->step.kind = SG_RUNE_STEP_HOLD;
+			break;
+		}
+		if (record->activation == SG_RUNE_MECH_ACTIVATE_TARGETED &&
+			record->activator != SG_RUNE_CX_INDEX_NONE)
+		{
+			const sg_rune_mech_t *worker =
+				&sg_rune_level.artifact.mechanisms.records[record->activator];
+
+			if (bot->task_mechanism != capability->mechanism)
+			{
+				bot->task_mechanism = capability->mechanism;
+				bot->task_since = level.time;
+			}
+			if (level.time - bot->task_since > 12.0f)
+			{
+				/* It did not open for us: try the door itself. */
+				bot->task_mechanism = SG_RUNE_CX_INDEX_NONE;
+				break;
+			}
+			if (worker->activation == SG_RUNE_MECH_ACTIVATE_SHOT)
+			{
+				SG_BotCombatShootAt(e, worker->origin);
+				bot->step.kind = SG_RUNE_STEP_HOLD;
+				break;
+			}
+			VectorCopy(worker->origin, bot->step.target);
+			bot->step.target[2] = worker->mins[2] + 24.0f;
+			if (bot->step.target[2] < worker->origin[2] - 32.0f)
+				bot->step.target[2] = worker->origin[2];
+			bot->step.move_kind = SG_RUNE_MOVE_WALK;
+			break;
+		}
+		bot->step.kind = SG_RUNE_STEP_HOLD;
+		break;
+	}
+	default:
+		break;
 	}
 }
 
@@ -671,6 +828,7 @@ void SG_BotThink(sg_bot_t *bot)
 		return;
 	}
 	SelectStep(bot, e, destination);
+	ApplyMechanism(bot, e);
 	if (Stuck(bot, e) && e->groundentity)
 		bot->step.move_kind = SG_RUNE_MOVE_JUMP;
 	if (sg_cv.debug && sg_cv.debug->value && level.framenum % 50 == 0)

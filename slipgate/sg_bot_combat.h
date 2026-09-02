@@ -16,6 +16,10 @@
  * angles and the attack button on cmd, and says whether it is engaged. */
 void SG_BotCombatFrame(edict_t *self, usercmd_t *cmd, qboolean *engaged_out);
 
+/* Ask the fight to put a shot on a point this frame (a shootable door or
+ * button) when no enemy has the view. */
+void SG_BotCombatShootAt(edict_t *self, const vec3_t point);
+
 /* The executor's questions. */
 qboolean SG_BotLauncherReady(edict_t *self);   /* in hand, ready, loaded */
 void SG_BotRequestLauncher(edict_t *self);

@@ -28,6 +28,7 @@ typedef struct sg_rune_level_s
 	sg_rune_router_t router;
 	sg_rune_level_field_t fields[SG_RUNE_LEVEL_FIELDS];
 	uint64_t frame;
+	int *mechanism_edict;       /* per mechanism record: edict index or 0 */
 } sg_rune_level_t;
 
 extern sg_rune_level_t sg_rune_level;
@@ -42,6 +43,11 @@ int SG_RuneLevelCurrent(void);
 /* The field toward a destination cell, built on first use and kept while
  * it is used.  NULL when nothing is loaded or the cell is out of range. */
 const sg_rune_field_t *SG_RuneLevelField(uint32_t destination_cell);
+
+/* The live entity a mechanism record describes (a door, a lift, a pad,
+ * a train), bound on first use by its brush model or its position; NULL
+ * when it is not in the world. */
+struct edict_s *SG_RuneLevelMechanismEdict(uint32_t mechanism);
 
 /* Point to cell under the level's locator. */
 uint32_t SG_RuneLevelLocate(const float origin[3], int crouching,
