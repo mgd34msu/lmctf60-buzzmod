@@ -98,6 +98,8 @@ sg_rune_artifact_status_t SG_RuneArtifactEncode(const sg_rune_artifact_t *source
 	unsigned char *image;
 	uint32_t crc;
 	uint32_t index;
+	sg_rune_artifact_t wire;
+	sg_rune_cx_facet_t *facets;
 
 	if (image_out)
 		*image_out = NULL;
@@ -105,7 +107,27 @@ sg_rune_artifact_status_t SG_RuneArtifactEncode(const sg_rune_artifact_t *source
 		*image_size_out = 0U;
 	if (!source || !image_out || !image_size_out)
 		return SG_RUNE_ARTIFACT_INVALID_ARGUMENT;
-	Layouts(source, layouts);
+	/* The wire carries no facet vertices: the runtime reads planes and
+	 * portal feet only.  Facets go out with their vertex spans cleared. */
+	wire = *source;
+	wire.complex.vertices = NULL;
+	wire.complex.vertex_count = 0U;
+	facets = NULL;
+	if (source->complex.facet_count)
+	{
+		facets = malloc((size_t)source->complex.facet_count * sizeof(*facets));
+		if (!facets)
+			return SG_RUNE_ARTIFACT_OUT_OF_MEMORY;
+		memcpy(facets, source->complex.facets,
+			(size_t)source->complex.facet_count * sizeof(*facets));
+		for (index = 0U; index < source->complex.facet_count; index++)
+		{
+			facets[index].vertices.first = 0U;
+			facets[index].vertices.count = 0U;
+		}
+		wire.complex.facets = facets;
+	}
+	Layouts(&wire, layouts);
 	offset = AlignUp(sizeof(header) + sizeof(sections));
 	memset(sections, 0, sizeof(sections));
 	for (index = 0U; index < SG_RUNE_SECTION_COUNT; index++)
@@ -113,7 +135,10 @@ sg_rune_artifact_status_t SG_RuneArtifactEncode(const sg_rune_artifact_t *source
 		size_t bytes = (size_t)layouts[index].count * layouts[index].element_size;
 
 		if (layouts[index].count && !layouts[index].data)
+		{
+			free(facets);
 			return SG_RUNE_ARTIFACT_INVALID_ARGUMENT;
+		}
 		sections[index].kind = index;
 		sections[index].element_size = (uint32_t)layouts[index].element_size;
 		sections[index].count = layouts[index].count;
@@ -124,12 +149,17 @@ sg_rune_artifact_status_t SG_RuneArtifactEncode(const sg_rune_artifact_t *source
 	total = offset;
 	image = calloc(1U, total ? total : 1U);
 	if (!image)
+	{
+		free(facets);
 		return SG_RUNE_ARTIFACT_OUT_OF_MEMORY;
+	}
 	for (index = 0U; index < SG_RUNE_SECTION_COUNT; index++)
 		if (sections[index].bytes)
 			memcpy(image + sections[index].offset, layouts[index].data,
 				(size_t)sections[index].bytes);
 	memcpy(image + sizeof(header), sections, sizeof(sections));
+	free(facets);
+	facets = NULL;
 	if (!SG_CRC32Buffer(image + sizeof(header), total - sizeof(header), &crc))
 	{
 		free(image);

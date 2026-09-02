@@ -20,6 +20,8 @@ typedef struct sg_rune_router_s
 	float *portal_center;     /* portal_count * 3 */
 	uint32_t *arrival_first;  /* cell_count + 1, into arrivals */
 	uint32_t *arrivals;       /* capability indices by destination cell */
+	uint32_t *departure_first; /* cell_count + 1, into departures */
+	uint32_t *departures;     /* capability indices by source cell */
 	float *edge_cost;         /* per capability; INFINITY when unusable */
 	uint32_t *destination;    /* per capability: destination cell */
 } sg_rune_router_t;
@@ -76,6 +78,14 @@ typedef struct sg_rune_step_s
 int SG_RuneStepSelect(const sg_rune_router_t *router,
 	const sg_rune_field_t *field, uint32_t cell, int crouching,
 	const float point[3], sg_rune_step_t *step_out);
+
+/* As SG_RuneStepSelect, but never through a capability listed in avoid:
+ * the cheapest other departure from the cell, by its edge cost plus the
+ * field beyond it.  UNREACHABLE when nothing else leads anywhere. */
+int SG_RuneStepSelectAvoiding(const sg_rune_router_t *router,
+	const sg_rune_field_t *field, uint32_t cell, int crouching,
+	const float point[3], const uint32_t *avoid, uint32_t avoid_count,
+	sg_rune_step_t *step_out);
 
 const char *SG_RuneStepKindString(sg_rune_step_kind_t kind);
 

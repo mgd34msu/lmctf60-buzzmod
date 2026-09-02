@@ -195,7 +195,8 @@ typedef struct sg_rune_cx_incidence_s
  * its own portal. */
 typedef struct sg_rune_cx_portal_s
 {
-	sg_rune_cx_source_t source;
+	sg_rune_cx_vec3_t foot;         /* the middle of its lowest edge, one unit up */
+	uint32_t foot_reserved;
 	uint32_t facet;
 	uint32_t source_incidence;
 	uint32_t destination_incidence;

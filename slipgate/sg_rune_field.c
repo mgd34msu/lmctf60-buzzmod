@@ -105,13 +105,18 @@ int SG_RuneRouterBuild(sg_rune_router_t *router,
 		sizeof(*router->arrival_first));
 	router->arrivals = malloc((size_t)(move->capability_count ?
 		move->capability_count : 1U) * sizeof(*router->arrivals));
+	router->departure_first = calloc((size_t)cx->cell_count + 1U,
+		sizeof(*router->departure_first));
+	router->departures = malloc((size_t)(move->capability_count ?
+		move->capability_count : 1U) * sizeof(*router->departures));
 	router->edge_cost = malloc((size_t)(move->capability_count ?
 		move->capability_count : 1U) * sizeof(float));
 	router->destination = malloc((size_t)(move->capability_count ?
 		move->capability_count : 1U) * sizeof(uint32_t));
 	fill = malloc((size_t)cx->cell_count * sizeof(*fill) + 1U);
 	if (!router->cell_center || !router->portal_center ||
-		!router->arrival_first || !router->arrivals || !router->edge_cost ||
+		!router->arrival_first || !router->arrivals || !router->departure_first ||
+		!router->departures || !router->edge_cost ||
 		!router->destination || !fill)
 	{
 		free(fill);
@@ -135,37 +140,7 @@ int SG_RuneRouterBuild(sg_rune_router_t *router,
 	 * unit up.  A wall opening is crossed at the floor; a floor opening is
 	 * flat anyway. */
 	for (portal = 0U; portal < cx->portal_count; portal++)
-	{
-		const sg_rune_cx_facet_t *facet = &cx->facets[cx->portals[portal].facet];
-		float sum[3] = { 0.0f, 0.0f, 0.0f }, lowest = INFINITY;
-		uint32_t index, count = 0U;
-
-		for (index = 0U; index < facet->vertices.count; index++)
-		{
-			float z = (float)cx->vertices[facet->vertices.first + index].value[2] /
-				(float)SG_RUNE_CX_Q8_ONE;
-
-			if (z < lowest)
-				lowest = z;
-		}
-		for (index = 0U; index < facet->vertices.count; index++)
-		{
-			float vertex[3];
-
-			Q8ToFloat(&cx->vertices[facet->vertices.first + index], vertex);
-			if (vertex[2] > lowest + 8.0f)
-				continue;
-			sum[0] += vertex[0];
-			sum[1] += vertex[1];
-			sum[2] += vertex[2];
-			count++;
-		}
-		for (axis = 0U; axis < 3U; axis++)
-			router->portal_center[portal * 3U + axis] = count ?
-				sum[axis] / (float)count : 0.0f;
-		if (count)
-			router->portal_center[portal * 3U + 2U] += 1.0f;
-	}
+		Q8ToFloat(&cx->portals[portal].foot, &router->portal_center[portal * 3U]);
 	/* Count arrivals per destination cell, prefix-sum, fill. */
 	for (capability = 0U; capability < move->capability_count; capability++)
 	{
@@ -210,6 +185,14 @@ int SG_RuneRouterBuild(sg_rune_router_t *router,
 	memcpy(fill, router->arrival_first, (size_t)cx->cell_count * sizeof(*fill));
 	for (capability = 0U; capability < move->capability_count; capability++)
 		router->arrivals[fill[router->destination[capability]]++] = capability;
+	/* And by source cell. */
+	for (capability = 0U; capability < move->capability_count; capability++)
+		router->departure_first[move->capabilities[capability].cell + 1U]++;
+	for (cell = 0U; cell < cx->cell_count; cell++)
+		router->departure_first[cell + 1U] += router->departure_first[cell];
+	memcpy(fill, router->departure_first, (size_t)cx->cell_count * sizeof(*fill));
+	for (capability = 0U; capability < move->capability_count; capability++)
+		router->departures[fill[move->capabilities[capability].cell]++] = capability;
 	free(fill);
 	return 1;
 }
@@ -222,6 +205,8 @@ void SG_RuneRouterFree(sg_rune_router_t *router)
 	free(router->portal_center);
 	free(router->arrival_first);
 	free(router->arrivals);
+	free(router->departure_first);
+	free(router->departures);
 	free(router->edge_cost);
 	free(router->destination);
 	memset(router, 0, sizeof(*router));
@@ -414,6 +399,9 @@ void SG_RuneFieldFree(sg_rune_field_t *field)
 	memset(field, 0, sizeof(*field));
 }
 
+static void Fill(const sg_rune_router_t *router, uint32_t capability,
+	uint8_t crouching_next, sg_rune_step_t *step_out);
+
 int SG_RuneStepSelect(const sg_rune_router_t *router,
 	const sg_rune_field_t *field, uint32_t cell, int crouching,
 	const float point[3], sg_rune_step_t *step_out)
@@ -471,11 +459,20 @@ int SG_RuneStepSelect(const sg_rune_router_t *router,
 		step_out->kind = SG_RUNE_STEP_UNREACHABLE;
 		return 1;
 	}
+	Fill(router, capability, field->next_crouching[state], step_out);
+	return 1;
+}
+
+/* The step through one capability: its portal's foot pushed into the cell
+ * beyond, or a mechanism's or hook's landing. */
+static void Fill(const sg_rune_router_t *router, uint32_t capability,
+	uint8_t crouching_next, sg_rune_step_t *step_out)
+{
 	step_out->kind = SG_RUNE_STEP_CROSS;
 	step_out->capability = capability;
 	step_out->portal = router->artifact->movement.capabilities[capability].portal;
 	step_out->move_kind = router->artifact->movement.capabilities[capability].kind;
-	step_out->crouching_next = field->next_crouching[state];
+	step_out->crouching_next = crouching_next;
 	if (step_out->portal == SG_RUNE_CX_INDEX_NONE)
 	{
 		/* A mechanism or hook crossing: the target is the destination's
@@ -509,7 +506,7 @@ int SG_RuneStepSelect(const sg_rune_router_t *router,
 			step_out->target[1] += dy / flat * push;
 		}
 	}
-	return 1;
+
 }
 
 const char *SG_RuneStepKindString(sg_rune_step_kind_t kind)
@@ -584,4 +581,71 @@ uint32_t SG_RuneFieldNearestReachable(const sg_rune_router_t *router,
 		point_out[2] = router->cell_center[best * 3U + 2U] + 24.0f;
 	}
 	return best;
+}
+
+static int Avoided(uint32_t capability, const uint32_t *avoid, uint32_t avoid_count)
+{
+	uint32_t i;
+
+	for (i = 0U; i < avoid_count; i++)
+		if (avoid[i] == capability)
+			return 1;
+	return 0;
+}
+
+int SG_RuneStepSelectAvoiding(const sg_rune_router_t *router,
+	const sg_rune_field_t *field, uint32_t cell, int crouching,
+	const float point[3], const uint32_t *avoid, uint32_t avoid_count,
+	sg_rune_step_t *step_out)
+{
+	const sg_rune_move_table_t *move;
+	uint8_t here;
+	uint32_t slot, best = SG_RUNE_CX_INDEX_NONE;
+	uint8_t best_crouching = 0U;
+	float best_cost = INFINITY;
+
+	if (!SG_RuneStepSelect(router, field, cell, crouching, point, step_out))
+		return 0;
+	if (step_out->kind != SG_RUNE_STEP_CROSS || avoid_count == 0U ||
+		!Avoided(step_out->capability, avoid, avoid_count))
+		return 1;
+	move = &router->artifact->movement;
+	here = crouching ? SG_RUNE_MOVE_CROUCHING : SG_RUNE_MOVE_STANDING;
+	for (slot = router->departure_first[cell]; slot < router->departure_first[cell + 1U];
+		slot++)
+	{
+		uint32_t capability = router->departures[slot];
+		const sg_rune_move_capability_t *record = &move->capabilities[capability];
+		float edge = router->edge_cost[capability];
+		int arrive;
+
+		if (Avoided(capability, avoid, avoid_count) || !(record->source_stances & here) ||
+			!isfinite(edge))
+			continue;
+		for (arrive = 0; arrive < 2; arrive++)
+		{
+			uint8_t stance = arrive ? SG_RUNE_MOVE_CROUCHING : SG_RUNE_MOVE_STANDING;
+			float cost;
+
+			if (!(record->destination_stances & stance))
+				continue;
+			cost = edge + field->cost[SG_RUNE_FIELD_STATE(record->destination, arrive)];
+			if (cost < best_cost)
+			{
+				best_cost = cost;
+				best = capability;
+				best_crouching = (uint8_t)arrive;
+			}
+		}
+	}
+	if (best == SG_RUNE_CX_INDEX_NONE)
+	{
+		step_out->kind = SG_RUNE_STEP_UNREACHABLE;
+		step_out->capability = SG_RUNE_CX_INDEX_NONE;
+		step_out->portal = SG_RUNE_CX_INDEX_NONE;
+		return 1;
+	}
+	Fill(router, best, best_crouching, step_out);
+	step_out->cost_to_go = best_cost;
+	return 1;
 }

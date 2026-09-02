@@ -472,9 +472,13 @@ static int Choose(edict_t *self, combat_state_t *state, float range,
 	}
 	if (best < 0)
 		return held;
+	/* A switch in progress finishes before another is asked for; a held
+	 * weapon nearly as good stays; a change holds for two seconds. */
+	if (held >= 0 && self->client->weaponstate != WEAPON_READY)
+		return held;
 	if (held >= 0 && held_value > 0.0f && best_value < held_value * 1.25f)
 		return held;
-	if (state->choice == best || level.time - state->choice_at > 0.5f)
+	if (state->choice == best || level.time - state->choice_at > 2.0f)
 	{
 		state->choice = best;
 		state->choice_at = level.time;

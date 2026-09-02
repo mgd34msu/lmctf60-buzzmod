@@ -13,6 +13,8 @@
 
 #define SG_MAXBOTS 16
 
+#define SG_BOT_AVOID 4
+
 typedef struct sg_bot_s
 {
 	edict_t *ent;
@@ -46,6 +48,13 @@ typedef struct sg_bot_s
 	qboolean def_stand;
 	qboolean death_taught;
 	float carry_start;
+
+	/* Crossings that failed on this body lately: not taken again for a
+	 * while, the route goes around them. */
+	uint32_t avoid[SG_BOT_AVOID];
+	float avoid_until[SG_BOT_AVOID];
+	float ride_since;           /* level.time the rope attached */
+	float ride_origin[3];       /* where the body was then */
 
 	/* A defender's post: where to look from it when nothing is in sight. */
 	float post_facing[3];

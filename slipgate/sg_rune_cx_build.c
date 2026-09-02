@@ -146,6 +146,47 @@ static sg_rune_cx_plane_t PlaneBits(const float normal[3],
 }
 
 /* A facet's provenance from the face's construction key. */
+/* A portal's foot: the middle of its lowest edge (the vertices within eight
+ * units of the lowest), one unit up.  A wall opening is crossed at the
+ * floor; a floor opening is flat anyway.  The runtime aims at it. */
+static void PortalFeet(sg_rune_cx_t *geometry)
+{
+	uint32_t portal;
+
+	for (portal = 0U; portal < geometry->portal_count; portal++)
+	{
+		sg_rune_cx_portal_t *record = &geometry->portals[portal];
+		const sg_rune_cx_facet_t *facet = &geometry->facets[record->facet];
+		int32_t lowest = INT32_MAX;
+		int64_t sum[3] = { 0, 0, 0 };
+		uint32_t index, count = 0U, axis;
+
+		for (index = 0U; index < facet->vertices.count; index++)
+		{
+			int32_t z = geometry->vertices[facet->vertices.first + index].value[2];
+
+			if (z < lowest)
+				lowest = z;
+		}
+		for (index = 0U; index < facet->vertices.count; index++)
+		{
+			const sg_rune_cx_vec3_t *vertex =
+				&geometry->vertices[facet->vertices.first + index];
+
+			if (vertex->value[2] > lowest + 8 * SG_RUNE_CX_Q8_ONE)
+				continue;
+			for (axis = 0U; axis < 3U; axis++)
+				sum[axis] += vertex->value[axis];
+			count++;
+		}
+		for (axis = 0U; axis < 3U; axis++)
+			record->foot.value[axis] = count ? (int32_t)(sum[axis] / (int64_t)count) : 0;
+		if (count)
+			record->foot.value[2] += SG_RUNE_CX_Q8_ONE;
+		record->foot_reserved = 0U;
+	}
+}
+
 static sg_rune_cx_source_t FacetSource(const geometry_build_t *build,
 	const sg_configuration_plane_t *plane, uint32_t leaf)
 {
@@ -648,7 +689,6 @@ static int EmitFacets(geometry_build_t *build)
 					negative = shared->incidences.first;
 					positive = shared->incidences.first + 1U;
 					portal_facet[at] = facet;
-					geometry->portals[at].source = shared->source;
 					geometry->portals[at].facet = facet;
 					geometry->portals[at].source_incidence = positive;
 					geometry->portals[at].destination_incidence = negative;
@@ -666,7 +706,6 @@ static int EmitFacets(geometry_build_t *build)
 					}
 					portal_facet[at] = facet;
 					geometry->facets[facet].portal = at;
-					geometry->portals[at].source = geometry->facets[facet].source;
 					geometry->portals[at].facet = facet;
 					geometry->portals[at].source_incidence = negative;
 					geometry->portals[at].destination_incidence = positive;
@@ -757,6 +796,7 @@ static int EmitFacets(geometry_build_t *build)
 			PieceListFree(&next_pieces);
 		}
 	}
+	PortalFeet(geometry);
 	ok = 1;
 	goto done;
 

@@ -68,7 +68,9 @@ int SG_RuneCxViewValid(const sg_rune_cx_view_t *view,
 
 		if (facet->source.kind >= SG_RUNE_CX_SOURCE_KIND_COUNT)
 			return Fault(fault_out, "facets", index, "source kind");
-		if (!SpanInside(&facet->vertices, view->vertex_count))
+		if (view->vertex_count == 0U ? (facet->vertices.first != 0U ||
+			facet->vertices.count != 0U) :
+			!SpanInside(&facet->vertices, view->vertex_count))
 			return Fault(fault_out, "facets", index, "vertex span");
 		if (!SpanInside(&facet->incidences, view->incidence_count))
 			return Fault(fault_out, "facets", index, "incidence span");
@@ -76,7 +78,7 @@ int SG_RuneCxViewValid(const sg_rune_cx_view_t *view,
 			return Fault(fault_out, "facets", index, "portal index");
 		if (facet->kind >= SG_RUNE_CX_FACET_KIND_COUNT)
 			return Fault(fault_out, "facets", index, "kind");
-		if (facet->kind == SG_RUNE_CX_FACET_POLYGON &&
+		if (facet->kind == SG_RUNE_CX_FACET_POLYGON && view->vertex_count != 0U &&
 			facet->vertices.count < 3U)
 			return Fault(fault_out, "facets", index, "polygon vertices");
 		if (facet->portal != SG_RUNE_CX_INDEX_NONE &&

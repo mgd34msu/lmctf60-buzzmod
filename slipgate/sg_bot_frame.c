@@ -445,6 +445,42 @@ static uint32_t StandingCellNear(const vec3_t point)
 	return SG_RUNE_CX_INDEX_NONE;
 }
 
+/* A crossing that failed on this body is avoided for a while. */
+#define AVOID_SECONDS 30.0f
+#define RIDE_STALL_SECONDS 1.5f
+#define RIDE_STALL_DISTANCE 24.0f
+
+static void Avoid(sg_bot_t *bot, uint32_t capability)
+{
+	int i, oldest = 0;
+
+	if (capability == SG_RUNE_CX_INDEX_NONE)
+		return;
+	for (i = 0; i < SG_BOT_AVOID; i++)
+	{
+		if (bot->avoid[i] == capability)
+		{
+			bot->avoid_until[i] = level.time + AVOID_SECONDS;
+			return;
+		}
+		if (bot->avoid_until[i] < bot->avoid_until[oldest])
+			oldest = i;
+	}
+	bot->avoid[oldest] = capability;
+	bot->avoid_until[oldest] = level.time + AVOID_SECONDS;
+}
+
+static uint32_t Avoided(const sg_bot_t *bot, uint32_t list[SG_BOT_AVOID])
+{
+	uint32_t count = 0U;
+	int i;
+
+	for (i = 0; i < SG_BOT_AVOID; i++)
+		if (bot->avoid_until[i] > level.time)
+			list[count++] = bot->avoid[i];
+	return count;
+}
+
 /* The step for this frame: on a floor, the field's step; in the air, the
  * flight the body is on (or a fresh trace of where it is falling), steered
  * toward its landing. */
@@ -490,6 +526,39 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 
 		if (record->kind == SG_RUNE_MOVE_HOOK)
 		{
+			/* A rope that pulls the body nowhere is let go, and that ride
+			 * is not tried again for a while. */
+			if (e->client->hookstate == 2)
+			{
+				vec3_t moved;
+
+				if (bot->ride_since <= 0.0f)
+				{
+					bot->ride_since = level.time;
+					VectorCopy(e->s.origin, bot->ride_origin);
+				}
+				VectorSubtract(e->s.origin, bot->ride_origin, moved);
+				if (VectorLength(moved) >= RIDE_STALL_DISTANCE)
+				{
+					bot->ride_since = level.time;
+					VectorCopy(e->s.origin, bot->ride_origin);
+				}
+				else if (level.time - bot->ride_since > RIDE_STALL_SECONDS)
+				{
+					ctf_hook_abort(e);
+					bot->hook_phase = 3;
+					bot->hook_entity = NULL;
+					Avoid(bot, bot->flight_capability);
+					bot->flight_capability = SG_RUNE_CX_INDEX_NONE;
+					bot->ride_since = 0.0f;
+					if (sg_cv.debug && sg_cv.debug->value)
+						gi.dprintf("SGBOT %s rope stalled: ride avoided\n",
+							e->client->pers.netname);
+					goto grounded;
+				}
+			}
+			else
+				bot->ride_since = 0.0f;
 			bot->airborne = (uint8_t)!supported;
 			bot->step.kind = SG_RUNE_STEP_CROSS;
 			bot->step.cell = bot->cell;
@@ -503,6 +572,8 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 			return;
 		}
 	}
+grounded:
+	bot->ride_since = 0.0f;
 	bot->airborne = (uint8_t)(!supported && !swimming);
 	if (bot->airborne)
 	{
@@ -549,14 +620,22 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 
 			if (item_field)
 			{
-				(void)SG_RuneStepSelect(&sg_rune_level.router, item_field,
-					bot->cell, crouching, item_point, &bot->step);
+				uint32_t avoid[SG_BOT_AVOID];
+				uint32_t avoid_count = Avoided(bot, avoid);
+
+				(void)SG_RuneStepSelectAvoiding(&sg_rune_level.router, item_field,
+					bot->cell, crouching, item_point, avoid, avoid_count, &bot->step);
 				goto flight;
 			}
 		}
 	}
-	(void)SG_RuneStepSelect(&sg_rune_level.router, field, bot->cell, crouching,
-		destination, &bot->step);
+	{
+		uint32_t avoid[SG_BOT_AVOID];
+		uint32_t avoid_count = Avoided(bot, avoid);
+
+		(void)SG_RuneStepSelectAvoiding(&sg_rune_level.router, field, bot->cell,
+			crouching, destination, avoid, avoid_count, &bot->step);
+	}
 	/* An escort keeps a second behind the carrier rather than on top of
 	 * it: close enough to fight what reaches the carrier, out of its way. */
 	if (bot->role == SG_ROLE_ESCORT && bot->step.kind == SG_RUNE_STEP_CROSS &&
@@ -576,7 +655,7 @@ flight:
 		const sg_rune_field_t *route = SG_RuneLevelField(bot->destination_cell);
 
 		if (route && SG_RuneFieldNearestReachable(&sg_rune_level.router,
-			&sg_rune_level.locator, route, e->s.origin, 256.0f, point) !=
+			&sg_rune_level.locator, route, e->s.origin, 640.0f, point) !=
 			SG_RUNE_CX_INDEX_NONE)
 		{
 			memset(&bot->step, 0, sizeof(bot->step));

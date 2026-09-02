@@ -62,6 +62,24 @@ int main(int argc, char **argv)
 					printf("  %-14s %u\n", SG_RuneMoveKindString(
 						(sg_rune_move_kind_t)k), kinds[k]);
 		}
+		{
+			const sg_rune_cx_view_t *cx = &artifact.complex;
+			const sg_rune_move_table_t *mv = &artifact.movement;
+#define SECTION(name, count, type) printf("  %-18s %9u x %3zu = %6.1f MB\n", name, \
+	(unsigned)(count), sizeof(type), (double)(count) * sizeof(type) / 1048576.0)
+			SECTION("cells", cx->cell_count, sg_rune_cx_cell_t);
+			SECTION("facets", cx->facet_count, sg_rune_cx_facet_t);
+			SECTION("incidences", cx->incidence_count, sg_rune_cx_incidence_t);
+			SECTION("cell incidences", cx->cell_incidence_count, uint32_t);
+			SECTION("vertices", cx->vertex_count, sg_rune_cx_vec3_t);
+			SECTION("portals", cx->portal_count, sg_rune_cx_portal_t);
+			SECTION("surfaces", cx->surface_count, sg_rune_cx_surface_t);
+			SECTION("surface vertices", cx->surface_vertex_count, sg_rune_cx_vec3_t);
+			SECTION("capabilities", mv->capability_count, sg_rune_move_capability_t);
+			SECTION("fire cells", artifact.fires.cell_count, sg_rune_fire_cell_t);
+			SECTION("fires", artifact.fires.record_count, sg_rune_fire_t);
+#undef SECTION
+		}
 		printf("rune ok: cells %u portals %u capabilities %u bytes %lu\n",
 			(unsigned)artifact.complex.cell_count,
 			(unsigned)artifact.complex.portal_count,
