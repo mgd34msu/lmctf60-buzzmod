@@ -84,9 +84,9 @@ struct sg_rune_law_s;
  * emission: appends the records and the crossings the mechanisms make, and
  * gates the crossings into doors.  Both read the map's entities from the
  * world. */
-int SG_RuneMechMarkCells(const struct sg_bsp_world_s *world,
+int SG_RuneMechMarkCells(const struct sg_bsp_world_s *bsp,
 	struct sg_rune_cx_s *cx);
-int SG_RuneMechEmit(const struct sg_bsp_world_s *world,
+int SG_RuneMechEmit(const struct sg_bsp_world_s *bsp,
 	const struct sg_rune_cx_s *cx, const struct sg_rune_law_s *law,
 	sg_rune_move_store_t *movement, sg_rune_mech_store_t *store);
 
