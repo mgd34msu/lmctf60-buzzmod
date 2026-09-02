@@ -1158,7 +1158,7 @@ static int GridBuild(cell_grid_t *grid, const sg_configuration_space_t *space,
 }
 
 /* Rebuilds a cell's polytope from its stored faces. */
-static int CellPolytope(const sg_configuration_space_t *space,
+static int CellPolytopeFrom(const sg_configuration_space_t *space,
 	const sg_configuration_cell_t *cell, polytope_t *poly)
 {
 	uint32_t face;
@@ -1182,27 +1182,50 @@ static int CellPolytope(const sg_configuration_space_t *space,
 	return 1;
 }
 
-static int EmitStandingCells(cell_build_t *build)
+/* Every crouching cell becomes disjoint convex pieces, each one either
+ * standing-valid (both stances) or crouch-only.  The standing box fits at p
+ * exactly when the crouch box fits at p and at p + (0, 0, 28), so a piece
+ * inside some crouching cell translated down by 28 is standing-valid; what
+ * is outside all of them is crouch-only.  The pieces replace the cell, so
+ * the complex stays a partition and each cell has one stance validity. */
+static int EmitStancePieces(cell_build_t *build)
 {
 	sg_configuration_space_t *space = build->space;
 	const uint32_t crouch_count = space->cell_count;
 	cell_grid_t grid;
-	uint32_t *seen;
+	uint32_t *seen = NULL;
+	sg_configuration_cell_t *originals = NULL;
 	uint32_t lower;
+	int ok = 0;
 
+	if (!GridBuild(&grid, space, crouch_count))
+		goto out_of_memory;
 	seen = calloc(crouch_count ? crouch_count : 1U, sizeof(*seen));
-	if (!seen || !GridBuild(&grid, space, crouch_count))
-	{
-		free(seen);
-		GridFree(&grid);
-		SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, 0U);
-		return 0;
-	}
+	originals = malloc((size_t)(crouch_count ? crouch_count : 1U) *
+		sizeof(*originals));
+	if (!seen || !originals)
+		goto out_of_memory;
+	/* The originals are read from a copy; the space's cell array is rebuilt
+	 * from the pieces.  Their faces stay in place; pieces append new faces. */
+	memcpy(originals, space->cells, (size_t)crouch_count * sizeof(*originals));
+	space->cell_count = 0U;
 	for (lower = 0U; lower < crouch_count; lower++)
 	{
-		sg_rune_bounds_t lifted = space->cells[lower].bounds;
-		uint32_t low[3], high[3], x, y, z, axis;
+		const sg_configuration_cell_t *original = &originals[lower];
+		sg_rune_bounds_t lifted = original->bounds;
+		polytope_list_t pending, next, standing;
+		uint32_t low[3], high[3], x, y, z, axis, index;
+		polytope_t *first;
 
+		memset(&pending, 0, sizeof(pending));
+		memset(&next, 0, sizeof(next));
+		memset(&standing, 0, sizeof(standing));
+		first = ListPush(&pending);
+		if (!first || !CellPolytopeFrom(space, original, first))
+		{
+			ListFree(&pending);
+			goto out_of_memory;
+		}
 		lifted.mins.value[2] += CELL_STANDING_RISE;
 		lifted.maxs.value[2] += CELL_STANDING_RISE;
 		for (axis = 0U; axis < 3U; axis++)
@@ -1222,16 +1245,13 @@ static int EmitStandingCells(cell_build_t *build)
 						entry = grid.next[entry])
 					{
 						const uint32_t upper = grid.cell[entry];
-						const sg_configuration_cell_t *above;
-						polytope_t poly;
-						uint32_t face, standing_cell;
+						const sg_configuration_cell_t *above = &originals[upper];
+						uint32_t piece, face;
 						int overlaps = 1;
 
-						/* Buckets repeat a cell; each pair once. */
 						if (seen[upper] == lower + 1U)
 							continue;
 						seen[upper] = lower + 1U;
-						above = &space->cells[upper];
 						for (axis = 0U; axis < 3U && overlaps; axis++)
 							if (above->bounds.mins.value[axis] >=
 								lifted.maxs.value[axis] ||
@@ -1240,83 +1260,100 @@ static int EmitStandingCells(cell_build_t *build)
 								overlaps = 0;
 						if (!overlaps)
 							continue;
-						/* The lower cell cut by the upper cell's faces
-						 * translated down. */
-						if (!CellPolytope(space, &space->cells[lower], &poly))
-							goto out_of_memory;
-						for (face = 0U; face < above->face_count && poly.count;
-							face++)
+						/* Cut every pending piece by the upper cell's faces
+						 * translated down; what is inside all of them is a
+						 * standing piece, the outside parts stay pending. */
+						for (piece = 0U; piece < pending.count; piece++)
 						{
-							sg_configuration_plane_t plane =
-								space->faces[above->first_face + face].plane;
-							polytope_t inside, outside;
+							polytope_t current = pending.items[piece];
 
-							plane.distance -= plane.normal[2] *
-								CELL_STANDING_RISE;
-							plane.source_variant = SG_RUNE_STANCE_STANDING;
-							if (SplitPolytope(&poly, &plane, &inside,
-								&outside) < 0)
+							memset(&pending.items[piece], 0,
+								sizeof(pending.items[piece]));
+							for (face = 0U; face < above->face_count &&
+								current.count; face++)
 							{
-								PolytopeFree(&poly);
+								sg_configuration_plane_t plane =
+									space->faces[above->first_face + face]
+									.plane;
+								polytope_t inside, outside;
+
+								plane.distance -= plane.normal[2] *
+									CELL_STANDING_RISE;
+								plane.source_variant =
+									SG_RUNE_STANCE_STANDING;
+								if (SplitPolytope(&current, &plane, &inside,
+									&outside) < 0)
+								{
+									PolytopeFree(&current);
+									ListFree(&pending);
+									ListFree(&next);
+									ListFree(&standing);
+									goto out_of_memory;
+								}
+								PolytopeFree(&current);
+								if (outside.count && !ListTake(&next, &outside))
+								{
+									PolytopeFree(&outside);
+									PolytopeFree(&inside);
+									ListFree(&pending);
+									ListFree(&next);
+									ListFree(&standing);
+									goto out_of_memory;
+								}
+								current = inside;
+							}
+							if (current.count && !ListTake(&standing, &current))
+							{
+								PolytopeFree(&current);
+								ListFree(&pending);
+								ListFree(&next);
+								ListFree(&standing);
 								goto out_of_memory;
 							}
-							PolytopeFree(&poly);
-							PolytopeFree(&outside);
-							poly = inside;
 						}
-						if (!poly.count)
-							continue;
-						if (!EmitCell(build, &poly, space->cells[lower].bsp_leaf
-							.index, SG_RUNE_STANCE_STANDING, &standing_cell))
+						pending.count = 0U;
 						{
-							PolytopeFree(&poly);
-							free(seen);
-							GridFree(&grid);
-							return 0;
-						}
-						PolytopeFree(&poly);
-						if (standing_cell == space->cell_count)
-							continue;   /* collapsed by snapping */
-						if (!GrowArray((void **)&space->stance_overlaps,
-							&build->overlap_capacity,
-							space->stance_overlap_count + 1U,
-							build->limits.max_stance_overlaps,
-							sizeof(*space->stance_overlaps)))
-						{
-							free(seen);
-							GridFree(&grid);
-							SetError(build, SG_CONFIGURATION_ERROR_OVERFLOW,
-								lower);
-							return 0;
-						}
-						{
-							sg_configuration_stance_overlap_t *overlap =
-								&space->stance_overlaps[
-									space->stance_overlap_count++];
-							const sg_configuration_cell_t *standing =
-								&space->cells[standing_cell];
+							polytope_list_t swap = pending;
 
-							memset(overlap, 0, sizeof(*overlap));
-							overlap->standing_cell = standing_cell;
-							overlap->crouching_cell = lower;
-							overlap->first_face = standing->first_face;
-							overlap->face_count = standing->face_count;
-							overlap->bounds = standing->bounds;
-							overlap->interior_witness =
-								standing->interior_witness;
+							pending = next;
+							next = swap;
 						}
 					}
 				}
+		for (index = 0U; index < standing.count; index++)
+			if (!EmitCell(build, &standing.items[index],
+				original->bsp_leaf.index, SG_RUNE_STANCE_STANDING, NULL))
+			{
+				ListFree(&pending);
+				ListFree(&next);
+				ListFree(&standing);
+				goto failed;
+			}
+		for (index = 0U; index < pending.count; index++)
+			if (!EmitCell(build, &pending.items[index],
+				original->bsp_leaf.index, SG_RUNE_STANCE_CROUCHING, NULL))
+			{
+				ListFree(&pending);
+				ListFree(&next);
+				ListFree(&standing);
+				goto failed;
+			}
+		ListFree(&pending);
+		ListFree(&next);
+		ListFree(&standing);
 	}
-	free(seen);
-	GridFree(&grid);
-	return 1;
+	ok = 1;
+	goto done;
 
 out_of_memory:
+	SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, 0U);
+failed:
+	ok = 0;
+done:
 	free(seen);
+	free(originals);
 	GridFree(&grid);
-	SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, lower);
-	return 0;
+	return ok;
 }
 
 /* ---- portals from shared faces ----------------------------------------- */
@@ -1766,7 +1803,7 @@ int SG_ConfigurationBuildWithProgress(
 	if (!CarveNode(&build, build.world->models[0].headnode, &domain,
 		&authority->identity.crouching_hull))
 		goto done;
-	if (!EmitStandingCells(&build))
+	if (!EmitStancePieces(&build))
 		goto done;
 	if (!EmitPortals(&build))
 		goto done;
