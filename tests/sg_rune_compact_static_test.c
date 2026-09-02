@@ -337,6 +337,7 @@ static void TestPortalLifecycleStates(void)
 		SG_RUNE_COMPACT_MECHANISM_STATE_INACTIVE;
 	fixture.transitions[0].value.portal_state.source_blocked = 0U;
 	fixture.transitions[0].value.portal_state.destination_blocked = 1U;
+	fixture.transitions[0].value.portal_state.recovery_ms = 0U;
 	CheckValid(&fixture);
 
 	/* One-shot movers cannot publish a synthetic return transition. */
