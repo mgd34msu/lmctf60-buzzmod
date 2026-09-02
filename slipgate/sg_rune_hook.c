@@ -240,7 +240,7 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 	{
 		const bite_t *bite = &build->bites[candidates[i]];
 		float direction[3], length, clear, bolt_seconds;
-		static const float fractions[] = { 0.5f, 0.75f, 1.0f };
+		static const float fractions[] = { 0.25f, 0.4f, 0.55f, 0.75f, 1.0f };
 		uint32_t f;
 
 		build->report.candidates++;
@@ -324,8 +324,13 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 				flight.outcome != SG_RUNE_FLIGHT_LANDED ||
 				flight.landing_cell == cell)
 				continue;
-			seconds = bolt_seconds + clear * fractions[f] /
-				build->law->hook_pull_speed + flight.seconds + 0.3f;
+			/* What the ride costs a body that keeps running under the bolt
+			 * (half the bolt's flight is not lost), is pulled, and flies:
+			 * no fixed penalty.  The best players rope twenty to thirty
+			 * times a minute; a route that charges the rope more than the
+			 * walk never sees them. */
+			seconds = 0.5f * bolt_seconds + clear * fractions[f] /
+				build->law->hook_pull_speed + flight.seconds;
 			/* One record per landing cell: the cheapest ride there. */
 			slot = NULL;
 			for (k = 0U; k < *landing_count; k++)

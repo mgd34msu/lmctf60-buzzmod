@@ -990,10 +990,11 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 				VectorLength(e->velocity));
 		}
 		else if (e->client->hookstate == 0 && bot->rope_state_logged != 0)
-			gi.dprintf("SGROPE %s off %s attached=%.1f speed=%.0f ground=%d\n",
+			gi.dprintf("SGROPE %s off %s attached=%.1f speed=%.0f ground=%d at=(%.0f %.0f %.0f)\n",
 				e->client->pers.netname, bot->rope_state_logged == 2 ? "released" : "missed",
 				bot->rope_bit_at > 0.0f ? level.time - bot->rope_bit_at : 0.0f,
-				VectorLength(e->velocity), e->groundentity != NULL);
+				VectorLength(e->velocity), e->groundentity != NULL,
+				e->s.origin[0], e->s.origin[1], e->s.origin[2]);
 		bot->rope_state_logged = (uint8_t)e->client->hookstate;
 	}
 	/* A rope that came back without ever carrying the body missed, or bit
@@ -1993,8 +1994,10 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	if (command.hook_fire && SG_BotHookReady(e))
 	{
 		if (sg_cv.debug && sg_cv.debug->value)
-			gi.dprintf("SGROPE %s fired speed=%.0f ground=%d %s\n", e->client->pers.netname,
-				VectorLength(e->velocity), e->groundentity != NULL, bot->rescue ? "rescue" : "ride");
+			gi.dprintf("SGROPE %s fired speed=%.0f ground=%d %s at=(%.0f %.0f %.0f) bite=(%.0f %.0f %.0f)\n",
+				e->client->pers.netname, VectorLength(e->velocity), e->groundentity != NULL,
+				bot->rescue ? "rescue" : "ride", e->s.origin[0], e->s.origin[1], e->s.origin[2],
+				bot->step.hook_point[0], bot->step.hook_point[1], bot->step.hook_point[2]);
 		bot->rope_fired_at = level.time;
 		bot->rope_bit_at = 0.0f;
 		Cmd_Hook_f(e);

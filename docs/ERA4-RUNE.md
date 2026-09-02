@@ -160,6 +160,18 @@ replacement runs on a real map.
    at a bite the eye can see (a bite behind a wall avoids its ride). After
    the first of these the bots measured mean 254, median 268, top tenth
    360, above 300 for 39% of the time.
+   **The players' standard (2026-09-02, from demos).** `tools/dm2trace.py`
+   reads a Quake II demo: the recorder's state every frame and every other
+   player's position while in view, the rope through the grapple-cable
+   effect. The best LMCTF players in the owner's archive (seedless, Em,
+   Zest, sinsemilla) move at a mean of 350 to 380, median about 320, top
+   tenth 700 to 750, above run speed 61 to 74% of the time, and rope 19 to
+   31 times a minute in bursts of about half a second, fired at 370 to 470
+   and released at 510 to 570. The rope is their locomotion. The builder
+   therefore prices a ride at what it takes a running body: half the bolt's
+   flight, the pull, the release arc, and no fixed penalty; before this a
+   walk out-priced the rope on most edges and bots roped eight times a
+   minute.
 3. **Movement capabilities** (era 4, done). One record per crossing per
    admissible kind: cell, portal, destination cell, kind, source and
    destination stances, profile, launch velocity, seconds. Contact

@@ -216,7 +216,7 @@ def player_summary(mapname, frames, skins, name):
 def summary(mapname, frames):
     import statistics as st
     live = [f for f in frames if f['type'] == 0]
-    if not live: return 'no frames'
+    if len(live) < 20: return '%s: no frames' % mapname
     sp = [(f['velocity'][0] ** 2 + f['velocity'][1] ** 2) ** 0.5 for f in live]
     n = len(sp)
     air = sum(1 for f in live if not (f['flags'] & PMF_ON_GROUND)) / n
