@@ -10,6 +10,7 @@
 #include "sg_rune_cx_build.h"
 #include "sg_rune_flight.h"
 #include "sg_rune_locate.h"
+#include "sg_rune_vis.h"
 #include "sg_weapon_host_constants.h"
 
 #define ROPE_RANGE 1000.0f
@@ -42,8 +43,7 @@ typedef struct hook_build_s
 	uint32_t bite_count;
 	uint32_t *cluster_first;  /* per cluster: first bite, NONE */
 	uint32_t cluster_count;
-	uint8_t *row;             /* decoded visibility row */
-	int32_t row_cluster;
+	sg_rune_vis_t vis;
 	sg_rune_hook_report_t report;
 } hook_build_t;
 
@@ -53,68 +53,6 @@ static float FloatBits(uint32_t bits)
 
 	memcpy(&value, &bits, sizeof(value));
 	return value;
-}
-
-/* ---- the BSP: leaf at a point, visibility ------------------------------------ */
-
-static int32_t ClusterAt(const sg_bsp_world_t *bsp, const float point[3])
-{
-	int32_t node = bsp->models[0].headnode;
-
-	while (node >= 0)
-	{
-		const sg_bsp_node_t *record = &bsp->nodes[node];
-		const sg_bsp_plane_t *plane = &bsp->planes[record->plane];
-		float side = plane->normal.value[0] * point[0] +
-			plane->normal.value[1] * point[1] +
-			plane->normal.value[2] * point[2] - plane->distance;
-
-		node = record->children[side >= 0.0f ? 0 : 1];
-	}
-	return bsp->leaves[-1 - node].cluster;
-}
-
-/* Decodes one cluster's potentially visible set into build->row. */
-static int VisibilityRow(hook_build_t *build, int32_t cluster)
-{
-	const sg_bsp_visibility_t *vis = &build->bsp->visibility;
-	uint32_t row_bytes = (build->cluster_count + 7U) / 8U;
-	uint32_t offset, out = 0U;
-
-	if (cluster == build->row_cluster)
-		return 1;
-	build->row_cluster = cluster;
-	memset(build->row, 0xff, row_bytes);   /* no data: everything visible */
-	if (cluster < 0 || (uint32_t)cluster >= vis->cluster_count || !vis->bytes ||
-		!vis->bit_offsets)
-		return 1;
-	offset = vis->bit_offsets[cluster][0];
-	memset(build->row, 0, row_bytes);
-	while (out < row_bytes && offset < vis->byte_count)
-	{
-		uint8_t byte = vis->bytes[offset++];
-
-		if (byte)
-		{
-			build->row[out++] = byte;
-			continue;
-		}
-		if (offset >= vis->byte_count)
-			break;
-		{
-			uint32_t run = vis->bytes[offset++];
-
-			out += run;
-		}
-	}
-	return 1;
-}
-
-static int ClusterVisible(const hook_build_t *build, int32_t cluster)
-{
-	if (cluster < 0 || (uint32_t)cluster >= build->cluster_count)
-		return 0;
-	return (build->row[(uint32_t)cluster >> 3] & (1U << ((uint32_t)cluster & 7U))) != 0U;
 }
 
 /* ---- bites ---------------------------------------------------------------------- */
@@ -174,7 +112,7 @@ static int CollectBites(hook_build_t *build)
 		bite->point[0] = sum[0] / (float)surface->vertices.count + bite->normal[0] * 2.0f;
 		bite->point[1] = sum[1] / (float)surface->vertices.count + bite->normal[1] * 2.0f;
 		bite->point[2] = sum[2] / (float)surface->vertices.count + bite->normal[2] * 2.0f;
-		bite->cluster = ClusterAt(build->bsp, bite->point);
+		bite->cluster = SG_RuneVisClusterAt(build->bsp, bite->point);
 		if (bite->cluster < 0 || (uint32_t)bite->cluster >= build->cluster_count)
 			continue;
 		bite->next = build->cluster_first[bite->cluster];
@@ -255,14 +193,14 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 	eye[2] += EYE_HEIGHT;
 	cluster = record->source.cluster;
 	if (cluster < 0)
-		cluster = ClusterAt(build->bsp, stand);
-	VisibilityRow(build, cluster);
+		cluster = SG_RuneVisClusterAt(build->bsp, stand);
+	SG_RuneVisSelect(&build->vis, cluster);
 	/* The nearest bites in view, above the eye, facing it. */
 	for (c = 0U; c < build->cluster_count; c++)
 	{
 		uint32_t b;
 
-		if (!ClusterVisible(build, (int32_t)c))
+		if (!SG_RuneVisSees(&build->vis, (int32_t)c))
 			continue;
 		for (b = build->cluster_first[c]; b != SG_RUNE_CX_INDEX_NONE; b = build->bites[b].next)
 		{
@@ -407,12 +345,10 @@ int SG_RuneHookEmit(const sg_bsp_world_t *bsp,
 	build.movement = movement;
 	build.artifact.complex = build.view;
 	build.artifact.law = *law;
-	build.cluster_count = bsp->visibility.cluster_count;
-	if (build.cluster_count == 0U)
-		build.cluster_count = 1U;
-	build.row = malloc((size_t)(build.cluster_count + 7U) / 8U + 1U);
-	build.row_cluster = -2;
-	if (!build.row || !SG_RuneLocatorBuild(&build.locator, &build.artifact) ||
+	if (!SG_RuneVisInit(&build.vis, bsp))
+		return 0;
+	build.cluster_count = build.vis.cluster_count;
+	if (!SG_RuneLocatorBuild(&build.locator, &build.artifact) ||
 		!CollectBites(&build))
 		goto done;
 	for (cell = 0U; cell < build.view.cell_count; cell++)
@@ -447,7 +383,7 @@ done:
 	if (report_out)
 		*report_out = build.report;
 	SG_RuneLocatorFree(&build.locator);
-	free(build.row);
+	SG_RuneVisFree(&build.vis);
 	free(build.bites);
 	free(build.cluster_first);
 	return ok;

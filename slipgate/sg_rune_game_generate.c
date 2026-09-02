@@ -157,12 +157,13 @@ int SG_RuneGameGenerate(const char *mapname)
 		else
 		{
 			gi.dprintf("rune: generation map=%s cells=%u portals=%u "
-				"capabilities=%u surfaces=%u mechanisms=%u hooks=%u "
+				"capabilities=%u surfaces=%u mechanisms=%u hooks=%u fires=%u "
 				"seconds=%.1f\n",
 				mapname, (unsigned int)report.cells, (unsigned int)report.portals,
 				(unsigned int)report.capabilities,
 				(unsigned int)report.surfaces, (unsigned int)report.mechanisms,
-				(unsigned int)report.hooks, report.seconds);
+				(unsigned int)report.hooks, (unsigned int)report.fires,
+				report.seconds);
 			gi.dprintf("rune: generation published map=%s path=%s bytes=%lu "
 				"durable=1\n", mapname, destination,
 				(unsigned long)image_size);

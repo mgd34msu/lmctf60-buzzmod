@@ -1,5 +1,7 @@
 #include "sg_rune_field.h"
 
+#define SG_RUNE_STEP_PUSH 16.0f   /* units past a portal the step aims */
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -490,8 +492,23 @@ int SG_RuneStepSelect(const sg_rune_router_t *router,
 		}
 	}
 	else
-		memcpy(step_out->target, &router->portal_center[step_out->portal * 3U],
-			sizeof(step_out->target));
+	{
+		/* The portal's centre, pushed a little into the cell beyond so the
+		 * body actually crosses instead of stopping on the boundary. */
+		const float *portal = &router->portal_center[step_out->portal * 3U];
+		const float *beyond = &router->cell_center[router->destination[capability] * 3U];
+		float dx = beyond[0] - portal[0], dy = beyond[1] - portal[1];
+		float flat = sqrtf(dx * dx + dy * dy);
+
+		memcpy(step_out->target, portal, sizeof(step_out->target));
+		if (flat > 1e-3f)
+		{
+			float push = flat < SG_RUNE_STEP_PUSH ? flat : SG_RUNE_STEP_PUSH;
+
+			step_out->target[0] += dx / flat * push;
+			step_out->target[1] += dy / flat * push;
+		}
+	}
 	return 1;
 }
 

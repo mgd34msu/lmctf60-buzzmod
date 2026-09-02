@@ -2,10 +2,23 @@
 #undef world
 #include "sg_rune_level.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "sg_host_law_owner.h"
+
+#define POST_SLOTS 2
+#define POST_FLAGS 2
+typedef struct post_set_s
+{
+	uint32_t flag_cell;
+	uint32_t post[POST_SLOTS];
+	float facing[POST_SLOTS][3];
+	int valid;
+} post_set_t;
+
+static post_set_t sg_posts[POST_FLAGS];
 
 sg_rune_level_t sg_rune_level;
 
@@ -60,6 +73,7 @@ void SG_RuneLevelClear(void)
 	SG_RuneArtifactRelease(&sg_rune_level.artifact);
 	free(sg_rune_level.mechanism_edict);
 	memset(&sg_rune_level, 0, sizeof(sg_rune_level));
+	memset(sg_posts, 0, sizeof(sg_posts));
 	for (index = 0U; index < SG_RUNE_LEVEL_FIELDS; index++)
 		sg_rune_level.fields[index].destination_cell = SG_RUNE_CX_INDEX_NONE;
 }
@@ -279,4 +293,174 @@ edict_t *SG_RuneLevelMechanismEdict(uint32_t mechanism)
 	if (e)
 		sg_rune_level.mechanism_edict[mechanism] = (int)(e - g_edicts);
 	return e;
+}
+
+
+uint32_t SG_RuneLevelFire(uint32_t cell, uint32_t target)
+{
+	if (!sg_rune_level.current)
+		return 0U;
+	return SG_RuneFireFlags(&sg_rune_level.artifact.fires, cell, target);
+}
+
+/* ---- defend posts --------------------------------------------------------------- */
+
+#define POST_APPROACH_SECONDS 8.0f    /* how far out an approach is watched */
+#define POST_REACH_SECONDS 3.0f       /* how far from the flag a post may be */
+#define POST_MIN_FROM_FLAG 96.0f
+#define POST_MIN_APART 160.0f
+
+
+static float Flat(const float *a, const float *b)
+{
+	float dx = a[0] - b[0], dy = a[1] - b[1];
+
+	return sqrtf(dx * dx + dy * dy);
+}
+
+/* Coverage of the approach cells still uncovered from a candidate post, and
+ * the weighted centre of what it covers. */
+static float Coverage(uint32_t post, const float *weight, const uint8_t *covered,
+	float centre_out[3])
+{
+	const sg_rune_fire_table_t *fires = &sg_rune_level.artifact.fires;
+	const sg_rune_fire_cell_t *row = &fires->cells[post];
+	float total = 0.0f, sum[3] = { 0.0f, 0.0f, 0.0f };
+	uint32_t k;
+
+	for (k = 0U; k < row->count; k++)
+	{
+		const sg_rune_fire_t *record = &fires->records[row->first + k];
+		const float *centre;
+
+		if (!(record->flags & SG_RUNE_FIRE_LINE) || weight[record->target] <= 0.0f ||
+			covered[record->target])
+			continue;
+		centre = &sg_rune_level.router.cell_center[record->target * 3U];
+		total += weight[record->target];
+		sum[0] += centre[0] * weight[record->target];
+		sum[1] += centre[1] * weight[record->target];
+		sum[2] += centre[2] * weight[record->target];
+	}
+	if (total > 0.0f)
+	{
+		centre_out[0] = sum[0] / total;
+		centre_out[1] = sum[1] / total;
+		centre_out[2] = sum[2] / total;
+	}
+	return total;
+}
+
+static void MarkCovered(uint32_t post, uint8_t *covered)
+{
+	const sg_rune_fire_table_t *fires = &sg_rune_level.artifact.fires;
+	const sg_rune_fire_cell_t *row = &fires->cells[post];
+	uint32_t k;
+
+	for (k = 0U; k < row->count; k++)
+		if (fires->records[row->first + k].flags & SG_RUNE_FIRE_LINE)
+			covered[fires->records[row->first + k].target] = 1U;
+}
+
+static int BuildPosts(post_set_t *set, uint32_t flag_cell)
+{
+	const sg_rune_field_t *field = SG_RuneLevelField(flag_cell);
+	uint32_t cell_count = sg_rune_level.artifact.complex.cell_count;
+	const float *flag_centre = &sg_rune_level.router.cell_center[flag_cell * 3U];
+	float *weight = NULL;
+	uint8_t *covered = NULL;
+	uint32_t cell;
+	int slot, ok = 0;
+
+	memset(set, 0, sizeof(*set));
+	set->flag_cell = flag_cell;
+	if (!field || sg_rune_level.artifact.fires.cell_count != cell_count)
+		return 0;
+	weight = calloc(cell_count, sizeof(*weight));
+	covered = calloc(cell_count, sizeof(*covered));
+	if (!weight || !covered)
+		goto done;
+	/* Approaches: the nearer to the flag, the more it matters to see. */
+	for (cell = 0U; cell < cell_count; cell++)
+	{
+		float cost = field->cost[SG_RUNE_FIELD_STATE(cell, 0)];
+
+		if (cost > 0.0f && cost <= POST_APPROACH_SECONDS)
+			weight[cell] = 1.0f + (POST_APPROACH_SECONDS - cost) / POST_APPROACH_SECONDS;
+	}
+	for (slot = 0; slot < POST_SLOTS; slot++)
+	{
+		uint32_t best = SG_RUNE_CX_INDEX_NONE;
+		float best_score = 0.0f, best_centre[3] = { 0.0f, 0.0f, 0.0f };
+
+		for (cell = 0U; cell < cell_count; cell++)
+		{
+			float cost = field->cost[SG_RUNE_FIELD_STATE(cell, 0)];
+			const float *centre = &sg_rune_level.router.cell_center[cell * 3U];
+			float centre_of_cover[3] = { 0.0f, 0.0f, 0.0f }, score;
+			int other;
+
+			if (!(cost >= 0.0f && cost <= POST_REACH_SECONDS) ||
+				Flat(centre, flag_centre) < POST_MIN_FROM_FLAG)
+				continue;
+			for (other = 0; other < slot; other++)
+				if (Flat(centre, &sg_rune_level.router.cell_center[set->post[other] * 3U]) <
+					POST_MIN_APART)
+					break;
+			if (other < slot)
+				continue;
+			score = Coverage(cell, weight, covered, centre_of_cover);
+			if (score > best_score)
+			{
+				best_score = score;
+				best = cell;
+				memcpy(best_centre, centre_of_cover, sizeof(best_centre));
+			}
+		}
+		if (best == SG_RUNE_CX_INDEX_NONE)
+			break;
+		set->post[slot] = best;
+		memcpy(set->facing[slot], best_centre, sizeof(set->facing[slot]));
+		MarkCovered(best, covered);
+		set->valid = slot + 1;
+	}
+	ok = set->valid > 0;
+done:
+	free(weight);
+	free(covered);
+	return ok;
+}
+
+int SG_RuneLevelDefendPost(uint32_t flag_cell, int slot, float point_out[3],
+	float facing_out[3])
+{
+	post_set_t *set = NULL;
+	int index;
+
+	if (!sg_rune_level.current || slot < 0 || slot >= POST_SLOTS ||
+		flag_cell >= sg_rune_level.artifact.complex.cell_count)
+		return 0;
+	for (index = 0; index < POST_FLAGS; index++)
+		if (sg_posts[index].flag_cell == flag_cell && sg_posts[index].valid)
+			set = &sg_posts[index];
+	if (!set)
+	{
+		/* Build into the slot not holding the other flag. */
+		set = &sg_posts[0];
+		for (index = 0; index < POST_FLAGS; index++)
+			if (!sg_posts[index].valid)
+			{
+				set = &sg_posts[index];
+				break;
+			}
+		if (!BuildPosts(set, flag_cell))
+			return 0;
+	}
+	if (slot >= set->valid)
+		slot = set->valid - 1;
+	memcpy(point_out, &sg_rune_level.router.cell_center[set->post[slot] * 3U],
+		3U * sizeof(float));
+	if (facing_out)
+		memcpy(facing_out, set->facing[slot], 3U * sizeof(float));
+	return 1;
 }

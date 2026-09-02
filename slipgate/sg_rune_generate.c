@@ -10,6 +10,7 @@
 #include "sg_configuration_space.h"
 #include "sg_host_collision.h"
 #include "sg_rune_cx_build.h"
+#include "sg_rune_fire.h"
 #include "sg_rune_hook.h"
 #include "sg_rune_mechanisms.h"
 #include "sg_rune_movement.h"
@@ -26,6 +27,14 @@ static void CellProgress(void *context, uint32_t done, uint32_t total)
 
 	if (link->fn)
 		link->fn(link->context, "cells", done, total);
+}
+
+static void FireProgress(void *context, uint32_t done, uint32_t total)
+{
+	const progress_link_t *link = context;
+
+	if (link->fn)
+		link->fn(link->context, "fire", done, total);
 }
 
 static void Begin(const progress_link_t *link, const char *stage,
@@ -70,6 +79,8 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 	sg_rune_move_law_t movement_law;
 	sg_rune_mech_store_t mechanisms;
 	sg_rune_hook_report_t hooks;
+	sg_rune_fire_store_t fires;
+	sg_rune_fire_report_t fire_report;
 	sg_rune_artifact_t source;
 	sg_rune_artifact_status_t status;
 	double started = Now();
@@ -78,6 +89,7 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 	memset(&report, 0, sizeof(report));
 	memset(&movement, 0, sizeof(movement));
 	SG_RuneMechStoreInit(&mechanisms);
+	SG_RuneFireStoreInit(&fires);
 	if (image_out)
 		*image_out = NULL;
 	if (image_size_out)
@@ -152,6 +164,15 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 		goto done;
 	}
 	report.hooks = hooks.records;
+	Begin(&link, "fire", &report);
+	if (!SG_RuneFireEmit(world, authority, complex, law, &fires, FireProgress, &link,
+		&fire_report))
+	{
+		Fail(&report, "fire relations failed");
+		goto done;
+	}
+	report.fires = fire_report.records;
+	SG_RuneFireStoreView(&fires, &source.fires);
 	SG_RuneMoveStoreView(&movement, &source.movement);
 	SG_RuneMechStoreView(&mechanisms, &source.mechanisms);
 	report.capabilities = source.movement.capability_count;
@@ -169,6 +190,7 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 
 done:
 	report.seconds = Now() - started;
+	SG_RuneFireStoreFree(&fires);
 	SG_RuneMechStoreFree(&mechanisms);
 	SG_RuneMoveStoreFree(&movement);
 	SG_RuneCxDestroy(complex);

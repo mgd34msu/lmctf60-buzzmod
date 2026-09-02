@@ -49,6 +49,18 @@ const sg_rune_field_t *SG_RuneLevelField(uint32_t destination_cell);
  * when it is not in the world. */
 struct edict_s *SG_RuneLevelMechanismEdict(uint32_t mechanism);
 
+/* The fire relation from cell to target (sg_rune_fire_flag_t bits), 0 when
+ * the rune records none. */
+uint32_t SG_RuneLevelFire(uint32_t cell, uint32_t target);
+
+/* A defend post for the flag in flag_cell: slot 0 is the floor cell with a
+ * line of fire over the most of the flag's approaches, slot 1 the one that
+ * best covers what slot 0 leaves.  point_out is the post; facing_out is
+ * where the approaches it covers are, on average.  0 when the rune has no
+ * fire relations or nothing covers anything. */
+int SG_RuneLevelDefendPost(uint32_t flag_cell, int slot, float point_out[3],
+	float facing_out[3]);
+
 /* Point to cell under the level's locator. */
 uint32_t SG_RuneLevelLocate(const float origin[3], int crouching,
 	float *violation_out);

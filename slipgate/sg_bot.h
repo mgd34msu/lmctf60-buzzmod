@@ -47,6 +47,10 @@ typedef struct sg_bot_s
 	qboolean death_taught;
 	float carry_start;
 
+	/* A defender's post: where to look from it when nothing is in sight. */
+	float post_facing[3];
+	qboolean post_facing_valid;
+
 	/* Hook and combat hand-off. */
 	int hook_phase;             /* 0 none, 2 rope out, 3 released */
 	edict_t *hook_entity;

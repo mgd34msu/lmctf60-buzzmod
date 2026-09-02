@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "sg_cvars.h"
+#include "sg_rune_level.h"
 #include "sg_hooks.h"
 #include "sg_persona.h"
 #include "sg_util.h"
@@ -393,6 +394,48 @@ static qboolean SplashSafe(const edict_t *self, const sg_weapon_profile_t *profi
 /* The weapon to hold against this target at this range; the one in hand
  * keeps its place unless another is clearly better, so a target drifting
  * across a range boundary does not cost a switch every frame. */
+/* What the rune says about the pair of cells the fight is in: which effect
+ * families have a way from here to there.  1 when nothing is recorded. */
+static float FireScale(const sg_weapon_profile_t *profile, uint32_t relation)
+{
+	if (relation == 0U)
+		return 1.0f;
+	switch (profile->family)
+	{
+	case SG_WEAPON_FAMILY_HITSCAN:
+	case SG_WEAPON_FAMILY_SPREAD:
+	case SG_WEAPON_FAMILY_BFG:
+	case SG_WEAPON_FAMILY_SPECIAL:
+		return (relation & SG_RUNE_FIRE_LINE) ? 1.0f : 0.0f;
+	case SG_WEAPON_FAMILY_STRAIGHT_PROJECTILE:
+	case SG_WEAPON_FAMILY_HYPERBLASTER:
+	case SG_WEAPON_FAMILY_PLASMA_REFLECT:
+	case SG_WEAPON_FAMILY_PLASMA_SPREAD:
+		return (relation & SG_RUNE_FIRE_CORRIDOR) ? 1.0f : 0.0f;
+	case SG_WEAPON_FAMILY_ROCKET_SPLASH:
+		if (relation & SG_RUNE_FIRE_CORRIDOR)
+			return 1.0f;
+		return (relation & SG_RUNE_FIRE_BLAST) ? 0.6f : 0.0f;
+	case SG_WEAPON_FAMILY_GRENADE_BOUNCE:
+		if (relation & SG_RUNE_FIRE_CORRIDOR)
+			return 1.0f;
+		return (relation & SG_RUNE_FIRE_LOB) ? 0.5f : 0.0f;
+	default:
+		return 1.0f;
+	}
+}
+
+static uint32_t FireRelation(const edict_t *self, const vec3_t target_origin)
+{
+	uint32_t here = SG_RuneLevelLocate(self->s.origin,
+		(self->client->ps.pmove.pm_flags & PMF_DUCKED) != 0, NULL);
+	uint32_t there = SG_RuneLevelLocate(target_origin, 0, NULL);
+
+	if (here == SG_RUNE_CX_INDEX_NONE || there == SG_RUNE_CX_INDEX_NONE)
+		return 0U;
+	return SG_RuneLevelFire(here, there);
+}
+
 static int Choose(edict_t *self, combat_state_t *state, float range,
 	float target_speed, const vec3_t impact)
 {
@@ -400,6 +443,7 @@ static int Choose(edict_t *self, combat_state_t *state, float range,
 	int held = SlotOfItem(self->client->pers.weapon);
 	int best = -1;
 	float best_value = 0.0f, held_value = 0.0f;
+	uint32_t relation = range < 1.0e5f ? FireRelation(self, impact) : 0U;
 	size_t index;
 
 	for (index = 0U; index < WEAPON_COUNT; index++)
@@ -411,7 +455,8 @@ static int Choose(edict_t *self, combat_state_t *state, float range,
 			continue;
 		if (!SplashSafe(self, profile, impact))
 			continue;
-		value = ExpectedDamagePerSecond(profile, range, error, target_speed);
+		value = ExpectedDamagePerSecond(profile, range, error, target_speed) *
+			FireScale(profile, relation);
 		if ((int)index == held)
 			held_value = value;
 		if (value > best_value || (value == best_value && best >= 0 &&
@@ -579,6 +624,17 @@ static qboolean ShotLands(edict_t *self, const sg_weapon_profile_t *profile,
 
 /* ---- the frame ------------------------------------------------------------------- */
 
+static void CombatDebug(const edict_t *self, const edict_t *target, int slot,
+	float range, const char *what)
+{
+	if (!sg_cv.debug || !sg_cv.debug->value || level.framenum % 50 != 0)
+		return;
+	gi.dprintf("SGFIGHT %s target=%s range=%.0f slot=%d held=%s state=%d %s\n",
+		self->client->pers.netname, target->client->pers.netname, range, slot,
+		self->client->pers.weapon ? self->client->pers.weapon->pickup_name : "none",
+		self->client->weaponstate, what);
+}
+
 void SG_BotCombatFrame(edict_t *self, usercmd_t *cmd, qboolean *engaged_out)
 {
 	combat_state_t *state;
@@ -656,11 +712,21 @@ void SG_BotCombatFrame(edict_t *self, usercmd_t *cmd, qboolean *engaged_out)
 	 * aimed lands, and never into our own blast. */
 	if (self->client->pers.weapon != (slot >= 0 ? sg_weapon_items[slot] : NULL) ||
 		self->client->weaponstate != WEAPON_READY || !profile)
+	{
+		CombatDebug(self, target, slot, range, "weapon not ready");
 		return;
+	}
 	if (!ShotLands(self, profile, target, yaw, pitch, impact))
+	{
+		CombatDebug(self, target, slot, range, "shot misses");
 		return;
+	}
 	if (!SplashSafe(self, profile, impact))
+	{
+		CombatDebug(self, target, slot, range, "splash unsafe");
 		return;
+	}
+	CombatDebug(self, target, slot, range, "fire");
 	cmd->buttons |= BUTTON_ATTACK;
 }
 

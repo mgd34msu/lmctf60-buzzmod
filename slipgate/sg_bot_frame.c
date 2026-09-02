@@ -125,6 +125,8 @@ typedef struct team_pass_s
 
 static team_pass_t sg_team_pass;
 
+static uint32_t StandingCellNear(const vec3_t point);
+
 static int RoleFor(sg_bot_t *bot, qboolean carrying)
 {
 	int slot = (int)(bot - sg_bots);
@@ -296,6 +298,24 @@ static void TeamPass(int team)
 			sg_team_pass.assigned[i] = SG_ROLE_ATTACK;
 }
 
+/* Which of its team's defenders this bot is, in roster order: the first
+ * takes the best post, the second the next. */
+static int DefendRank(const sg_bot_t *bot)
+{
+	int slot = (int)(bot - sg_bots), i, rank = 0;
+
+	for (i = 0; i < slot && i < SG_MAXBOTS; i++)
+	{
+		const sg_bot_t *other = &sg_bots[i];
+
+		if (other->ent && other->ent->inuse && other->ent->client &&
+			sg_team_pass.assigned[i] == SG_ROLE_DEFEND &&
+			other->ent->client->ctf.teamnum == bot->ent->client->ctf.teamnum)
+			rank++;
+	}
+	return rank;
+}
+
 static qboolean DestinationFor(sg_bot_t *bot, int role, vec3_t out)
 {
 	edict_t *e = bot->ent;
@@ -321,12 +341,29 @@ static qboolean DestinationFor(sg_bot_t *bot, int role, vec3_t out)
 		return FlagNow(enemy, out);
 	case SG_ROLE_DEFEND:
 		target = TeamCarrier(enemy);
+		bot->post_facing_valid = false;
 		if (target)
 		{
 			VectorCopy(target->s.origin, out);
 			return true;
 		}
-		return FlagHome(team, out);
+		/* The flag at home: stand where the rune says the approaches are
+		 * covered, the second defender where the first leaves gaps. */
+		if (FlagHome(team, out))
+		{
+			uint32_t flag_cell = StandingCellNear(out);
+			vec3_t post, facing;
+
+			if (flag_cell != SG_RUNE_CX_INDEX_NONE &&
+				SG_RuneLevelDefendPost(flag_cell, DefendRank(bot), post, facing))
+			{
+				VectorCopy(post, out);
+				VectorCopy(facing, bot->post_facing);
+				bot->post_facing_valid = true;
+			}
+			return true;
+		}
+		return false;
 	default:
 		return FlagNow(enemy, out);
 	}
@@ -760,6 +797,17 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	else
 		SG_BotCombatFrame(e, &cmd, &engaged);
 	bot->engaged_last = engaged;
+	/* Posted and nothing in sight: face where the approaches are. */
+	if (!engaged && !moving && bot->post_facing_valid &&
+		bot->step.kind == SG_RUNE_STEP_ARRIVED)
+	{
+		float yaw = atan2f(bot->post_facing[1] - e->s.origin[1],
+			bot->post_facing[0] - e->s.origin[0]) * 180.0f / (float)M_PI;
+
+		cmd.angles[YAW] = (short)(ANGLE2SHORT(yaw) -
+			e->client->ps.pmove.delta_angles[YAW]);
+		cmd.angles[PITCH] = (short)(0 - e->client->ps.pmove.delta_angles[PITCH]);
+	}
 	if (moving)
 	{
 		float command_yaw = (float)SHORT2ANGLE(((int)cmd.angles[YAW] +
@@ -857,13 +905,17 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->step.move_kind = SG_RUNE_MOVE_JUMP;
 	if (sg_cv.debug && sg_cv.debug->value && level.framenum % 50 == 0)
 		gi.dprintf("SGBOT %s role=%d cell=%u dest=%u step=%s/%s at=(%.0f %.0f %.0f) "
-			"target=(%.0f %.0f %.0f) cost=%.1f\n", e->client->pers.netname,
+			"target=(%.0f %.0f %.0f) cost=%.1f st=%c%c v=%.0f hook=%d\n",
+			e->client->pers.netname,
 			bot->role, (unsigned int)bot->cell, (unsigned int)bot->destination_cell,
 			SG_RuneStepKindString(bot->step.kind),
 			bot->step.kind == SG_RUNE_STEP_CROSS ? SG_RuneMoveKindString(
 				(sg_rune_move_kind_t)bot->step.move_kind) : "-",
 			e->s.origin[0], e->s.origin[1], e->s.origin[2], bot->step.target[0],
-			bot->step.target[1], bot->step.target[2], bot->step.cost_to_go);
+			bot->step.target[1], bot->step.target[2], bot->step.cost_to_go,
+			(e->client->ps.pmove.pm_flags & PMF_DUCKED) ? 'C' : 'S',
+			bot->step.crouching_next ? 'c' : 's', VectorLength(e->velocity),
+			e->client->hookstate);
 	Emit(bot, e);
 }
 

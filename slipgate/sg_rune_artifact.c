@@ -76,6 +76,10 @@ static void Layouts(const sg_rune_artifact_t *source,
 		source->mechanisms.record_count);
 	LAYOUT(SG_RUNE_SECTION_MECHANISM_CELLS, source->mechanisms.cells,
 		source->mechanisms.cell_count);
+	LAYOUT(SG_RUNE_SECTION_FIRE_CELLS, source->fires.cells,
+		source->fires.cell_count);
+	LAYOUT(SG_RUNE_SECTION_FIRES, source->fires.records,
+		source->fires.record_count);
 #undef LAYOUT
 }
 
@@ -152,7 +156,9 @@ static const size_t ELEMENT_SIZES[SG_RUNE_SECTION_COUNT] = {
 	sizeof(sg_rune_cx_surface_t), sizeof(sg_rune_cx_vec3_t),
 	sizeof(sg_rune_move_capability_t), sizeof(sg_rune_move_profile_t),
 	sizeof(sg_rune_fn_function_t), sizeof(sg_rune_fn_term_t),
-	sizeof(sg_rune_fn_clause_t), sizeof(sg_rune_mech_t), sizeof(uint32_t)
+	sizeof(sg_rune_fn_clause_t), sizeof(sg_rune_mech_t), sizeof(uint32_t),
+	sizeof(sg_rune_fire_cell_t),
+	sizeof(sg_rune_fire_t),
 };
 
 sg_rune_artifact_status_t SG_RuneArtifactDecode(const unsigned char *image,
@@ -238,6 +244,10 @@ sg_rune_artifact_status_t SG_RuneArtifactDecode(const unsigned char *image,
 	artifact_out->mechanisms.record_count = counts[SG_RUNE_SECTION_MECHANISMS];
 	artifact_out->mechanisms.cells = arrays[SG_RUNE_SECTION_MECHANISM_CELLS];
 	artifact_out->mechanisms.cell_count = counts[SG_RUNE_SECTION_MECHANISM_CELLS];
+	artifact_out->fires.cells = arrays[SG_RUNE_SECTION_FIRE_CELLS];
+	artifact_out->fires.cell_count = counts[SG_RUNE_SECTION_FIRE_CELLS];
+	artifact_out->fires.records = arrays[SG_RUNE_SECTION_FIRES];
+	artifact_out->fires.record_count = counts[SG_RUNE_SECTION_FIRES];
 	artifact_out->image = image;
 	artifact_out->image_size = image_size;
 	if (!SG_RuneArtifactValid(artifact_out, fault_out))
@@ -372,6 +382,37 @@ int SG_RuneArtifactValid(const sg_rune_artifact_t *artifact,
 	for (index = 0U; index < artifact->mechanisms.cell_count; index++)
 		if (artifact->mechanisms.cells[index] >= cx->cell_count)
 			return Fault(fault_out, "mechanism cells", index, "cell");
+	if (artifact->fires.cell_count != 0U && artifact->fires.cell_count != cx->cell_count)
+		return Fault(fault_out, "fire cells", 0U, "count");
+	for (index = 0U; index < artifact->fires.cell_count; index++)
+	{
+		const sg_rune_fire_cell_t *row = &artifact->fires.cells[index];
+		uint32_t k;
+
+		if (row->first > artifact->fires.record_count ||
+			row->count > artifact->fires.record_count - row->first)
+			return Fault(fault_out, "fire cells", index, "span");
+		if (row->representative != SG_RUNE_CX_INDEX_NONE &&
+			(row->representative >= cx->cell_count ||
+			 artifact->fires.cells[row->representative].representative !=
+			 row->representative ||
+			 artifact->fires.cells[row->representative].first != row->first))
+			return Fault(fault_out, "fire cells", index, "representative");
+		if (row->representative == SG_RUNE_CX_INDEX_NONE && row->count != 0U)
+			return Fault(fault_out, "fire cells", index, "orphan row");
+		for (k = 0U; k < row->count; k++)
+		{
+			const sg_rune_fire_t *record = &artifact->fires.records[row->first + k];
+
+			if (record->target >= cx->cell_count)
+				return Fault(fault_out, "fires", row->first + k, "target");
+			if (k && record->target <= artifact->fires.records[row->first + k - 1U].target)
+				return Fault(fault_out, "fires", row->first + k, "order");
+			if (record->flags == 0U || (record->flags & ~(uint32_t)(SG_RUNE_FIRE_LINE |
+				SG_RUNE_FIRE_CORRIDOR | SG_RUNE_FIRE_BLAST | SG_RUNE_FIRE_LOB)))
+				return Fault(fault_out, "fires", row->first + k, "flags");
+		}
+	}
 	for (index = 0U; index < move->capability_count; index++)
 	{
 		const sg_rune_move_capability_t *capability = &move->capabilities[index];

@@ -24,6 +24,7 @@ typedef struct sg_rune_generate_report_s
 	uint32_t surfaces;
 	uint32_t mechanisms;
 	uint32_t hooks;           /* hook ride records */
+	uint32_t fires;           /* fire relation records */
 	size_t image_bytes;
 	double seconds;
 } sg_rune_generate_report_t;

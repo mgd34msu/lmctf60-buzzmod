@@ -116,8 +116,12 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 
 			to_bite = sqrtf(bx * bx + by * by + bz * bz);
 		}
+		/* Let go once the ride has the body at the landing's height, or
+		 * over the landing and nearly there, or about to meet the bite. */
 		if (!have_direction || body->origin[2] >= step->target[2] - HOOK_RELEASE_BELOW ||
-			flat < HOOK_RELEASE_FLAT || to_bite < HOOK_RELEASE_AT_BITE)
+			(flat < HOOK_RELEASE_FLAT &&
+			 body->origin[2] >= step->target[2] - 6.0f * HOOK_RELEASE_BELOW) ||
+			to_bite < HOOK_RELEASE_AT_BITE)
 		{
 			command->hook_release = 1U;
 			command->status = SG_TACTIC_COMMAND_MOVE;

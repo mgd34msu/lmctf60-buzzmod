@@ -15,6 +15,7 @@
 #include "slipgate/sg_rune_artifact.h"
 #include "slipgate/sg_rune_mechanisms.h"
 #include "slipgate/sg_rune_hook.h"
+#include "slipgate/sg_rune_fire.h"
 #include "slipgate/sg_rune_movement.h"
 
 static double Now(void)
@@ -31,6 +32,12 @@ static void Progress(void *context, uint32_t done, uint32_t total)
 	if (done == total || done % (total / 10U + 1U) == 0U)
 		fprintf(stderr, "  carve %u/%u (%u%%)\n", (unsigned)done,
 			(unsigned)total, (unsigned)(((uint64_t)done * 100U) / total));
+}
+
+static void FireProgress(void *context, uint32_t done, uint32_t total)
+{
+	fprintf(stderr, "fire: %u/%u sources [%.1fs]\n", (unsigned)done, (unsigned)total,
+		Now() - *(double *)context);
 }
 
 int main(int argc, char **argv)
@@ -163,6 +170,7 @@ int main(int argc, char **argv)
 		{
 			sg_rune_move_store_t movement;
 			sg_rune_mech_store_t mechanisms;
+			sg_rune_fire_store_t fires;
 			sg_rune_move_law_t law;
 			sg_rune_law_t law4;
 			uint32_t counts[SG_RUNE_MOVE_KIND_COUNT];
@@ -205,6 +213,24 @@ int main(int argc, char **argv)
 					(unsigned)hooks.records, (unsigned)hooks.traces, Now() - th,
 					(unsigned)hooks.candidates, (unsigned)hooks.bolt_clear,
 					(unsigned)hooks.pull_clear, (unsigned)hooks.flights);
+			}
+			{
+				sg_rune_fire_report_t fire;
+				double tf = Now();
+
+				SG_RuneFireStoreInit(&fires);
+				if (!SG_RuneFireEmit(world, &authority, geometry, &law4, &fires,
+					FireProgress, &tf, &fire))
+				{
+					fprintf(stderr, "fire relations failed\n");
+					return 1;
+				}
+				printf("fire: %u sources, %u pairs, %u records (line %u corridor %u "
+					"blast %u lob %u), %u traces, %u arcs [%.2fs]; %.1f MB\n",
+					(unsigned)fire.sources, (unsigned)fire.pairs, (unsigned)fire.records,
+					(unsigned)fire.line, (unsigned)fire.corridor, (unsigned)fire.blast,
+					(unsigned)fire.lob, (unsigned)fire.traces, (unsigned)fire.arcs,
+					Now() - tf, (double)fires.record_count * 8.0 / 1048576.0);
 			}
 			printf("mechanisms: %u records, %u gate cells\n",
 				(unsigned)mechanisms.record_count, (unsigned)mechanisms.cell_count);
@@ -262,6 +288,7 @@ int main(int argc, char **argv)
 				source.complex = view;
 				SG_RuneMoveStoreView(&movement, &source.movement);
 				SG_RuneMechStoreView(&mechanisms, &source.mechanisms);
+				SG_RuneFireStoreView(&fires, &source.fires);
 				t5 = Now();
 				status = SG_RuneArtifactEncode(&source, &image, &image_size);
 				t6 = Now();
@@ -296,6 +323,7 @@ int main(int argc, char **argv)
 				free(image);
 			}
 			SG_RuneMechStoreFree(&mechanisms);
+			SG_RuneFireStoreFree(&fires);
 			SG_RuneMoveStoreFree(&movement);
 		}
 		SG_RuneCxDestroy(geometry);
