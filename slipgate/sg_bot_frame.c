@@ -1303,6 +1303,47 @@ grounded:
 				gi.dprintf("SGBOT %s rope out to save a fall into harm\n",
 					e->client->pers.netname);
 		}
+		/* A hop or a fall that lands on floor: the route goes on from the
+		 * landing cell while the body is still in the air.  A walk there is
+		 * steered at now; a ride there is fired now, from the air, the way
+		 * a human does, and the pull takes the momentum along. */
+		if (bot->flight_capability == SG_RUNE_CX_INDEX_NONE && !bot->rescue &&
+			traced && live.outcome == SG_RUNE_FLIGHT_LANDED &&
+			live.landing_cell < sg_rune_level.artifact.complex.cell_count &&
+			(sg_rune_level.artifact.complex.cells[live.landing_cell].semantics &
+				SG_RUNE_CX_CELL_SUPPORTED) &&
+			bot->destination_cell != SG_RUNE_CX_INDEX_NONE)
+		{
+			const sg_rune_field_t *field = SG_RuneLevelField(bot->destination_cell);
+			sg_rune_step_t next;
+			uint32_t avoid[SG_BOT_AVOID];
+			uint32_t avoid_count = Avoided(bot, avoid);
+
+			if (field && SG_RuneStepSelectAvoiding(&sg_rune_level.router, field,
+				live.landing_cell, 0, destination, avoid, avoid_count, &next) &&
+				next.kind == SG_RUNE_STEP_CROSS)
+			{
+				if (next.move_kind == SG_RUNE_MOVE_HOOK && e->client->hookstate == 0 &&
+					SG_BotHookReady(e))
+				{
+					bot->step = next;
+					bot->step.cell = bot->cell;
+					bot->step.crouching_now = (uint8_t)crouching;
+					bot->step.run_up_present = 0U;
+					bot->flight_capability = next.capability;
+					{
+						const float *landing = &sg_rune_level.router.cell_center[
+							sg_rune_level.router.destination[next.capability] * 3U];
+
+						VectorCopy(landing, bot->flight_landing);
+					}
+					return;
+				}
+				if (next.move_kind == SG_RUNE_MOVE_WALK || next.move_kind == SG_RUNE_MOVE_RAMP ||
+					next.move_kind == SG_RUNE_MOVE_CROUCH)
+					VectorCopy(next.target, bot->flight_landing);
+			}
+		}
 		bot->step.kind = SG_RUNE_STEP_CROSS;
 		bot->step.cell = bot->cell;
 		bot->step.portal = SG_RUNE_CX_INDEX_NONE;
