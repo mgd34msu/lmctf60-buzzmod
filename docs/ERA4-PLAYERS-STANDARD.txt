@@ -1,0 +1,6 @@
+demos read: 155
+sinsemilla  519.0 min  speed mean 316 median 309 p90 628 over300 57%  rope 19.8/min out 0.55s fire 357 release 510
+seed        459.5 min  speed mean 326 median 310 p90 688 over300 58%  rope 19.4/min out 0.55s fire 365 release 521
+zest        382.3 min  speed mean 321 median 302 p90 662 over300 52%  rope 28.3/min out 0.51s fire 367 release 470
+buzz        289.1 min  speed mean 256 median 293 p90 386 over300 44%  rope  4.6/min out 0.64s fire 299 release 485
+em          280.2 min  speed mean 305 median 303 p90 660 over300 52%  rope 20.7/min out 0.53s fire 361 release 503

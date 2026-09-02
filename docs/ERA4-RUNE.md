@@ -171,7 +171,9 @@ replacement runs on a real map.
    therefore prices a ride at what it takes a running body: half the bolt's
    flight, the pull, the release arc, and no fixed penalty; before this a
    walk out-priced the rope on most edges and bots roped eight times a
-   minute.
+   minute. The archive-wide numbers (155 demos, about thirty hours of
+   visible movement) are in `docs/ERA4-PLAYERS-STANDARD.txt`: the four best
+   rope 19 to 28 times a minute; the owner 4.6.
 3. **Movement capabilities** (era 4, done). One record per crossing per
    admissible kind: cell, portal, destination cell, kind, source and
    destination stances, profile, launch velocity, seconds. Contact
