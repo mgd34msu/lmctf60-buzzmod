@@ -11,6 +11,7 @@
 #include "slipgate/sg_configuration_space.h"
 #include "slipgate/sg_configuration_semantics.h"
 #include "slipgate/sg_rune_compact_geometry.h"
+#include "slipgate/sg_rune_movement.h"
 
 static double Now(void)
 {
@@ -153,6 +154,34 @@ int main(int argc, char **argv)
 			(unsigned)view.facet_count, (unsigned)view.incidence_count,
 			(unsigned)view.vertex_count, (unsigned)view.portal_count,
 			(unsigned)view.source_surface_count, t3 - t2);
+		{
+			sg_rune_move_store_t movement;
+			sg_rune_move_law_t law;
+			uint32_t counts[SG_RUNE_MOVE_KIND_COUNT];
+			uint32_t index;
+			double t4;
+
+			law.gravity = identity.physics.gravity;
+			law.frame_ms = identity.physics.frame_ms;
+			law.substep_ms = identity.physics.substep_ms;
+			if (!SG_RuneMoveStoreInit(&movement, &law) ||
+				!SG_RuneMoveEmitGeometry(&movement, &view, semantics))
+			{
+				fprintf(stderr, "movement failed\n");
+				return 1;
+			}
+			t4 = Now();
+			memset(counts, 0, sizeof(counts));
+			for (index = 0U; index < movement.capability_count; index++)
+				counts[movement.capabilities[index].kind]++;
+			printf("movement: %u capabilities  [%.2fs]\n",
+				(unsigned)movement.capability_count, t4 - t3);
+			for (index = 0U; index < SG_RUNE_MOVE_KIND_COUNT; index++)
+				if (counts[index])
+					printf("  %-16s %u\n", SG_RuneMoveKindString(
+						(sg_rune_move_kind_t)index), (unsigned)counts[index]);
+			SG_RuneMoveStoreFree(&movement);
+		}
 		SG_RuneCompactGeometryDestroy(geometry);
 	}
 	SG_ConfigurationSemanticsDestroy(semantics);
