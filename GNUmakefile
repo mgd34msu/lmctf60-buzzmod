@@ -591,6 +591,11 @@ LDFLAGS = -ldl -lm
 LIBTOOL = otool
 endif
 
+# A Windows module (MSYS or a MinGW cross build) has no libdl.
+ifeq ($(PLATFORM),Windows)
+LDFLAGS = -lm
+endif
+
 # Linker flags for building a shared library (*.so).
 #
 # Redhat Linux users don't need -ldl or -lm...
