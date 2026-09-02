@@ -1,4 +1,9 @@
-/* Exact finite player-origin configuration space derived from a Quake II BSP. */
+/* Exact finite player-origin configuration space derived from a Quake II BSP.
+ *
+ * The world is the BSP's model 0 and every static model it declares
+ * (SG_RuneBspSetStatics): their player-solid brushes are carved away alike.
+ * Lava and slime, world or static, are not carved away: the origins whose
+ * feet would be in them are their own cells, flagged hazard. */
 #ifndef SG_CONFIGURATION_SPACE_H
 #define SG_CONFIGURATION_SPACE_H
 
@@ -133,7 +138,8 @@ typedef struct sg_configuration_cell_s
 	 * as cell-wide semantics. */
 	sg_configuration_pose_flags_t witness_pose_flags;
 	uint8_t witness_water_level;
-	uint8_t reserved[3];
+	uint8_t hazard;              /* a body's feet here are in lava or slime */
+	uint8_t reserved[2];
 } sg_configuration_cell_t;
 
 typedef struct sg_configuration_portal_s

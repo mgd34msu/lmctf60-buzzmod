@@ -18,6 +18,7 @@ typedef enum sg_rune_flight_outcome_e
 {
 	SG_RUNE_FLIGHT_LANDED = 0,  /* on a floor in landing_cell */
 	SG_RUNE_FLIGHT_WATER,       /* entered water in landing_cell */
+	SG_RUNE_FLIGHT_HARM,        /* entered lava or slime in landing_cell */
 	SG_RUNE_FLIGHT_LOST,        /* left the complex or flew too long */
 	SG_RUNE_FLIGHT_INVALID,
 	SG_RUNE_FLIGHT_OUTCOME_COUNT
@@ -32,6 +33,14 @@ typedef struct sg_rune_flight_s
 	float landing_velocity[3];
 	uint32_t crossings;         /* cells entered */
 } sg_rune_flight_t;
+
+/* Whether a flight from origin in start_cell lands on a floor that is
+ * neither lava nor slime (or in water), and still does so with its
+ * horizontal speed a tolerance slower and faster: a body never leaves a
+ * floor at exactly the modelled speed.  flight_out is the nominal flight. */
+int SG_RuneFlightLandsRobustly(const sg_rune_cx_view_t *complex,
+	const sg_rune_law_t *law, uint32_t start_cell, const float origin[3],
+	const float velocity[3], float tolerance, sg_rune_flight_t *flight_out);
 
 /* Traces from origin in start_cell with velocity, under law's gravity. */
 int SG_RuneFlightTrace(const sg_rune_cx_view_t *complex,

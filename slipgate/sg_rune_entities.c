@@ -121,6 +121,9 @@ static uint32_t Kind(const char *classname)
 		return SG_RUNE_ENTITY_ITEM;
 	if (!strncmp(classname, "info_player_", 12))
 		return SG_RUNE_ENTITY_SPAWN;
+	if (!strcmp(classname, "func_wall") || !strcmp(classname, "func_explosive") ||
+		!strcmp(classname, "func_object"))
+		return SG_RUNE_ENTITY_WALL;
 	return SG_RUNE_ENTITY_OTHER;
 }
 
@@ -349,4 +352,51 @@ uint32_t SG_RuneEntitiesTargetOf(const sg_rune_entities_t *entities,
 		entities->records[source].link_count == 0U)
 		return UINT32_MAX;
 	return entities->links[entities->records[source].first_link];
+}
+
+/* ---- statics ------------------------------------------------------------------- */
+
+#define WALL_TRIGGER_SPAWN 1U
+#define WALL_TOGGLE 2U
+#define WALL_START_ON 4U
+
+/* Whether a wall-kind entity is solid the moment the level starts. */
+static int StandsAtSpawn(const sg_rune_entity_t *e)
+{
+	if (!strcmp(e->classname, "func_wall"))
+	{
+		/* No flag at all: a plain wall.  START_ON: on until toggled.
+		 * Otherwise it waits for its trigger. */
+		if ((e->spawnflags & (WALL_TRIGGER_SPAWN | WALL_TOGGLE | WALL_START_ON)) == 0U)
+			return 1;
+		return (e->spawnflags & WALL_START_ON) != 0U;
+	}
+	if (!strcmp(e->classname, "func_explosive"))
+		return (e->spawnflags & WALL_TRIGGER_SPAWN) == 0U;
+	if (!strcmp(e->classname, "func_object"))
+		return e->spawnflags == 0U;
+	return 0;
+}
+
+uint32_t SG_RuneEntitiesStatics(const sg_rune_entities_t *entities,
+	sg_rune_bsp_static_t *out, uint32_t max)
+{
+	uint32_t index, count = 0U;
+
+	if (!entities)
+		return 0U;
+	for (index = 0U; index < entities->count; index++)
+	{
+		const sg_rune_entity_t *e = &entities->records[index];
+
+		if (e->kind != SG_RUNE_ENTITY_WALL || e->bmodel <= 0 || !StandsAtSpawn(e))
+			continue;
+		if (out && count < max)
+		{
+			out[count].model = (uint32_t)e->bmodel;
+			memcpy(out[count].origin, e->origin, sizeof(out[count].origin));
+		}
+		count++;
+	}
+	return count;
 }

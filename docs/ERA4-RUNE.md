@@ -13,6 +13,67 @@ replacement runs on a real map.
    Q8 bounds, leaf/area/cluster; facets with planes and polygons; incidences;
    portals with the shared facet, clearance, and valid stances; source
    surfaces (every solid brush side polygon in every model).
+   **The world as it stands (2026-09-02).** The carve subtracts the
+   player-solid brushes of model 0 and of every brush model that is solid
+   from spawn on: a `func_wall` with no trigger flags or with START_ON, a
+   `func_explosive` not waiting for a trigger, a `func_object` with no
+   flags (`SG_RuneEntitiesStatics`, declared on the BSP with
+   `SG_RuneBspSetStatics`; movers are mechanisms, not statics). Every
+   world trace (`SG_RuneTraceBox` on model 0, poses, point contents) sees
+   those models too, so hook pulls, fire lines and support tests agree with
+   the engine. bctf01 builds its base structures and both lava pits as
+   twelve `func_wall` models; before this the builder saw open floor where
+   the walls stand and a dry pit floor at z -388 under the lava, which
+   made bots walk into walls, re-fire the same hook into a wall, and drop
+   into the pits (203 lava deaths in one ten-minute game, 12 of them after
+   taking damage).
+   **Hazard cells.** Lava and slime brushes, world or static, are not
+   carved away: the free pieces are split by each such brush raised by the
+   feet's depth below the origin (the point the engine tests for water
+   level), and what is inside is a cell flagged `HAZARD`, never supported.
+   Portals into a hazard cell make no crossing; a flight that enters one
+   ends with outcome `HARM` and makes no record; a body already in one
+   keeps its departures so it can climb out. Schema id 0x...0002: every
+   earlier artifact is refused and regenerated.
+   **Portals across stances (2026-09-02).** The portal pass pairs faces by
+   construction key alone; a standing cell and a crouch-only cell that share
+   a face get a portal whose stance is crouching, and the witness sweep is
+   made with the crouch hull. Before this, cells of different stances never
+   paired, so every crouch-only sliver under a ceiling was sealed off and,
+   worse, its sealed bottom face counted as a floor.
+   **Support (2026-09-02).** A cell is supported when the host probe says so
+   or when one of its closed facets faces down out of it *and is an expanded
+   brush side*. Split planes and the domain never count. bctf01 lost half its
+   "floor" cells to this rule (22,228 cells with hook rides became 11,022):
+   they were ceiling slivers and other sealed faces, and hook rides and drops
+   had been landing on them.
+   **Run-up (2026-09-02, runtime).** A flight record is traced from the
+   cell's middle at full run speed toward its portal; a hook ride from the
+   cell's middle toward its bite. The step carries that point (`run_up`) and
+   the flight's launch velocity, and the tactic controller lines the body up
+   there first: behind the portal along the launch line, near the line, its
+   own velocity along it, before it runs at the edge or fires the rope. The
+   dense log showed bots running +y along a ledge, reaching a drop whose
+   launch pointed +x, and leaving the edge with their +y momentum over the
+   pit.
+   **Floor-exact cells (2026-09-02).** A brush's sides are cut in the order
+   walls, ceilings, floors. The piece outside a side is taken the moment
+   that side is cut, so cutting the floor side last confines the piece
+   above a floor to the floor's own footprint: a supported cell is floored
+   everywhere and its edge is the floor's edge. Cut first, that piece
+   reached out over whatever lay beside the brush, and bots walked off
+   ledges inside one "supported" cell.
+   **Rides that end at the bite (2026-09-02).** A hook ride's release arc
+   (let go at 50/75/100% of the pull and fly) is the plan; a body that
+   keeps riding is held at the bite and drops straight down. The builder
+   keeps a bite only when that hanging drop lands on a floor that is not
+   lava or slime. At runtime the release is let through only when the exact
+   tracer, run from the body's cell with the velocity it has now, lands it
+   on such a floor; otherwise the body rides to the bite, hangs, and the
+   stall rule lets go there without avoiding the ride. While the bolt is
+   still flying a supported body stands still. A body whose live flight
+   ends in harm or the void fires its rope at the best bite recorded from
+   the floor it left (ahead and above) and hangs.
 3. **Movement capabilities** (era 4, done). One record per crossing per
    admissible kind: cell, portal, destination cell, kind, source and
    destination stances, profile, launch velocity, seconds. Contact

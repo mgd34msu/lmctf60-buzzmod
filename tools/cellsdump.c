@@ -8,6 +8,7 @@
 #include <time.h>
 
 #include "slipgate/sg_rune_bsp.h"
+#include "slipgate/sg_rune_entities.h"
 #include "slipgate/sg_rune_law.h"
 #include "slipgate/sg_configuration_space.h"
 #include "slipgate/sg_configuration_semantics.h"
@@ -67,9 +68,21 @@ int main(int argc, char **argv)
 		return 1;
 	}
 	SG_RuneLawEngine(&law4, 800.0f);
-	printf("%s: %u leaves, %u brushes, %u planes\n", argv[1],
+	{
+		sg_rune_entities_t entities;
+		sg_rune_bsp_static_t statics[256];
+		uint32_t count = 0U;
+
+		if (SG_RuneEntitiesParse(world, &entities))
+		{
+			count = SG_RuneEntitiesStatics(&entities, statics, 256U);
+			SG_RuneEntitiesFree(&entities);
+			SG_RuneBspSetStatics(world, statics, count > 256U ? 256U : count);
+		}
+	}
+	printf("%s: %u leaves, %u brushes, %u planes, %u static models\n", argv[1],
 		(unsigned)world->leaf_count, (unsigned)world->brush_count,
-		(unsigned)world->plane_count);
+		(unsigned)world->plane_count, (unsigned)world->static_count);
 	t0 = Now();
 	if (!SG_ConfigurationBuildWithProgress(world, &law4, NULL, Progress, NULL,
 		&space, &error))

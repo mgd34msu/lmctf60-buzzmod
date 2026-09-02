@@ -54,6 +54,12 @@ typedef struct sg_bot_s
 	uint32_t avoid[SG_BOT_AVOID];
 	float avoid_until[SG_BOT_AVOID];
 	float ride_since;           /* level.time the rope attached */
+	uint32_t flight_from;       /* the floor cell the current flight left */
+	uint8_t rescue;             /* the rope is out to save a fall into harm */
+	float rescue_anchor[3];
+	uint8_t logged_kind, logged_move; /* the last decision written to the log */
+	uint32_t logged_capability;
+	float logged_target[3];
 	float ride_origin[3];       /* where the body was then */
 
 	/* A defender's post: its cell (the destination is that cell, not a

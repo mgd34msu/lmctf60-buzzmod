@@ -408,6 +408,8 @@ void SG_RuneFieldFree(sg_rune_field_t *field)
 
 static void Fill(const sg_rune_router_t *router, uint32_t capability,
 	uint8_t crouching_next, sg_rune_step_t *step_out);
+static void Lookahead(const sg_rune_router_t *router,
+	const sg_rune_field_t *field, sg_rune_step_t *step_out);
 
 int SG_RuneStepSelect(const sg_rune_router_t *router,
 	const sg_rune_field_t *field, uint32_t cell, int crouching,
@@ -467,19 +469,75 @@ int SG_RuneStepSelect(const sg_rune_router_t *router,
 		return 1;
 	}
 	Fill(router, capability, field->next_crouching[state], step_out);
+	Lookahead(router, field, step_out);
 	return 1;
 }
 
 /* The step through one capability: its portal's foot pushed into the cell
  * beyond, or a mechanism's or hook's landing. */
+/* A contact crossing whose next step, from the cell beyond, is a launch
+ * (a jump, drop, rocket jump or rope) or nothing at all is walked to its
+ * target, not through it: a body at full speed covers a body length a
+ * frame and overshoots a small cell at a floor's edge before it decides
+ * again.  The launch then lines itself up from a standing start. */
+static void Lookahead(const sg_rune_router_t *router,
+	const sg_rune_field_t *field, sg_rune_step_t *step_out)
+{
+	uint32_t beyond, state, next;
+	uint8_t kind;
+
+	step_out->ease = 0U;
+	if (step_out->kind != SG_RUNE_STEP_CROSS ||
+		step_out->capability == SG_RUNE_CX_INDEX_NONE)
+		return;
+	kind = step_out->move_kind;
+	if (kind != SG_RUNE_MOVE_WALK && kind != SG_RUNE_MOVE_CROUCH &&
+		kind != SG_RUNE_MOVE_RAMP && kind != SG_RUNE_MOVE_SWIM)
+		return;
+	beyond = router->destination[step_out->capability];
+	if (beyond >= router->artifact->complex.cell_count ||
+		beyond == field->destination_cell)
+		return;
+	state = SG_RUNE_FIELD_STATE(beyond, step_out->crouching_next);
+	next = field->next[state];
+	if (next == SG_RUNE_CX_INDEX_NONE)
+	{
+		step_out->ease = 1U;
+		return;
+	}
+	kind = router->artifact->movement.capabilities[next].kind;
+	if (kind == SG_RUNE_MOVE_JUMP || kind == SG_RUNE_MOVE_DROP ||
+		kind == SG_RUNE_MOVE_ROCKET_JUMP || kind == SG_RUNE_MOVE_HOOK)
+		step_out->ease = 1U;
+}
+
 static void Fill(const sg_rune_router_t *router, uint32_t capability,
 	uint8_t crouching_next, sg_rune_step_t *step_out)
 {
+	const sg_rune_move_capability_t *record =
+		&router->artifact->movement.capabilities[capability];
+
 	step_out->kind = SG_RUNE_STEP_CROSS;
 	step_out->capability = capability;
-	step_out->portal = router->artifact->movement.capabilities[capability].portal;
-	step_out->move_kind = router->artifact->movement.capabilities[capability].kind;
+	step_out->portal = record->portal;
+	step_out->move_kind = record->kind;
 	step_out->crouching_next = crouching_next;
+	step_out->run_up_present = 0U;
+	step_out->launch_present = 0U;
+	if (record->kind == SG_RUNE_MOVE_JUMP || record->kind == SG_RUNE_MOVE_DROP ||
+		record->kind == SG_RUNE_MOVE_ROCKET_JUMP || record->kind == SG_RUNE_MOVE_HOOK)
+	{
+		/* Where the record was traced from: the cell's middle. */
+		memcpy(step_out->run_up, &router->cell_center[record->cell * 3U],
+			sizeof(step_out->run_up));
+		step_out->run_up[2] += 24.0f;
+		step_out->run_up_present = 1U;
+		if (record->kind != SG_RUNE_MOVE_HOOK)
+		{
+			memcpy(step_out->launch, record->launch_velocity, sizeof(step_out->launch));
+			step_out->launch_present = 1U;
+		}
+	}
 	if (step_out->portal == SG_RUNE_CX_INDEX_NONE)
 	{
 		/* A mechanism or hook crossing: the target is the destination's
@@ -655,6 +713,7 @@ int SG_RuneStepSelectAvoiding(const sg_rune_router_t *router,
 		return 1;
 	}
 	Fill(router, best, best_crouching, step_out);
+	Lookahead(router, field, step_out);
 	step_out->cost_to_go = best_cost;
 	return 1;
 }

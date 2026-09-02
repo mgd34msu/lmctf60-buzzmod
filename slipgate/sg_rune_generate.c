@@ -11,6 +11,7 @@
 #include "sg_rune_trace.h"
 #include "sg_rune_law.h"
 #include "sg_rune_cx_build.h"
+#include "sg_rune_entities.h"
 #include "sg_rune_fire.h"
 #include "sg_rune_hook.h"
 #include "sg_rune_mechanisms.h"
@@ -60,7 +61,31 @@ static int Fail(sg_rune_generate_report_t *report, const char *error)
 	return 0;
 }
 
-int SG_RuneGenerate(const sg_rune_bsp_t *world,
+#define MAX_STATICS 256U
+
+/* The brush models standing in the world from spawn, from the entity text
+ * the level spawns from, declared on the BSP so the carve and every trace
+ * see them. */
+static int DeclareStatics(sg_rune_bsp_t *world, uint32_t *count_out)
+{
+	sg_rune_entities_t entities;
+	sg_rune_bsp_static_t statics[MAX_STATICS];
+	uint32_t count;
+	int ok;
+
+	*count_out = 0U;
+	if (!SG_RuneEntitiesParse(world, &entities))
+		return 0;
+	count = SG_RuneEntitiesStatics(&entities, statics, MAX_STATICS);
+	SG_RuneEntitiesFree(&entities);
+	if (count > MAX_STATICS)
+		count = MAX_STATICS;
+	ok = SG_RuneBspSetStatics(world, statics, count);
+	*count_out = world->static_count;
+	return ok;
+}
+
+int SG_RuneGenerate(sg_rune_bsp_t *world,
 	const sg_rune_identity_t *identity, const sg_rune_law_t *law,
 	sg_rune_generate_progress_fn progress, void *progress_context,
 	unsigned char **image_out, size_t *image_size_out,
@@ -102,6 +127,12 @@ int SG_RuneGenerate(const sg_rune_bsp_t *world,
 		goto done;
 	}
 
+	Begin(&link, "statics", &report);
+	if (!DeclareStatics(world, &report.statics))
+	{
+		Fail(&report, "static models could not be declared");
+		goto done;
+	}
 	Begin(&link, "cells", &report);
 	if (!SG_ConfigurationBuildWithProgress(world, law, NULL, CellProgress,
 		&link, &space, &space_error))

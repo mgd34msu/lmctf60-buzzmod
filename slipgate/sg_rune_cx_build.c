@@ -485,6 +485,9 @@ static int EmitCells(geometry_build_t *build)
 				record->semantics |= SG_RUNE_CX_CELL_SUPPORTED;
 			if (flags & SG_CONFIGURATION_SEMANTIC_REGION_WATER)
 				record->semantics |= SG_RUNE_CX_CELL_WATER;
+			/* A floor under lava or slime supports nothing. */
+			if (record->semantics & SG_RUNE_CX_CELL_HAZARD)
+				record->semantics &= ~(sg_rune_cx_semantics_t)SG_RUNE_CX_CELL_SUPPORTED;
 		}
 	}
 	geometry->cell_count = configuration->cell_count;
@@ -754,11 +757,25 @@ typedef struct surface_context_s
 {
 	geometry_build_t *build;
 	uint32_t model;
+	const sg_rune_bsp_static_t *fixed;  /* when the model stands in the world */
 } surface_context_t;
 
+static const sg_rune_bsp_static_t *StaticOf(const sg_rune_bsp_t *world,
+	uint32_t model)
+{
+	uint32_t index;
+
+	for (index = 0U; index < world->static_count; index++)
+		if (world->statics[index].model == model)
+			return &world->statics[index];
+	return NULL;
+}
+
 /* A cell rests on a floor when one of its closed facets faces down out of
- * it: the expanded floor plane under the body.  That is the complex's own
- * word on support; the probe-based region flag is kept where it agrees. */
+ * it and that facet is an expanded brush side: the floor plane under the
+ * body.  A closed facet from a split or the domain is no floor (a crouch
+ * sliver under a ceiling has one below it and hangs in the air).  The
+ * probe-based region flag is kept as well. */
 static void MarkSupport(geometry_build_t *build)
 {
 	sg_rune_cx_t *geometry = build->geometry;
@@ -769,6 +786,9 @@ static void MarkSupport(geometry_build_t *build)
 		sg_rune_cx_cell_t *record = &geometry->cells[cell];
 		uint32_t slot;
 
+		/* Nothing stands in lava or slime: the floor under it is no support. */
+		if (record->semantics & SG_RUNE_CX_CELL_HAZARD)
+			continue;
 		for (slot = 0U; slot < record->incidences.count; slot++)
 		{
 			const sg_rune_cx_incidence_t *incidence = &geometry->incidences[
@@ -778,6 +798,8 @@ static void MarkSupport(geometry_build_t *build)
 
 			if (facet->incidences.count != 1U)
 				continue;   /* shared with another cell: not a wall or floor */
+			if (facet->source.kind != SG_RUNE_CX_SOURCE_EXPANDED_BRUSH_SIDE)
+				continue;   /* a split or the domain, not a solid */
 			memcpy(&nz, &facet->plane.normal_bits[2], sizeof(nz));
 			if (incidence->side == SG_RUNE_CX_POSITIVE_SIDE)
 				nz = -nz;
@@ -828,22 +850,33 @@ static int AppendSourceSurface(void *context, uint32_t brush,
 		surface->flags = (flags & SG_RUNE_SURF_SKY) ? SG_RUNE_CX_SURFACE_SKY :
 			SG_RUNE_CX_SURFACE_HOOKABLE;
 	}
-	surface->frame = surface_context->model == 0U ?
+	/* A static model's surfaces are in the world's frame, at its origin. */
+	surface->frame = surface_context->model == 0U || surface_context->fixed ?
 		SG_RUNE_CX_SURFACE_WORLD :
 		SG_RUNE_CX_SURFACE_MODEL_LOCAL;
 	surface->cell = SG_RUNE_CX_INDEX_NONE;
 	surface->parent_surface = UINT32_MAX;
 	surface->split_ordinal = 0U;
-	for (axis = 0U; axis < 3U; axis++)
-		normal[axis] = plane->normal[axis];
-	surface->plane = PlaneBits(normal, plane->distance);
-	surface->vertices.first = geometry->surface_vertex_count;
-	surface->vertices.count = count;
-	for (index = 0U; index < count; index++)
+	{
+		const float *shift = surface_context->fixed ?
+			surface_context->fixed->origin : NULL;
+		float distance = plane->distance;
+
 		for (axis = 0U; axis < 3U; axis++)
-			geometry->surface_vertices[
-				geometry->surface_vertex_count + index].value[axis] =
-				Q8(points[index][axis]);
+		{
+			normal[axis] = plane->normal[axis];
+			if (shift)
+				distance += normal[axis] * shift[axis];
+		}
+		surface->plane = PlaneBits(normal, distance);
+		surface->vertices.first = geometry->surface_vertex_count;
+		surface->vertices.count = count;
+		for (index = 0U; index < count; index++)
+			for (axis = 0U; axis < 3U; axis++)
+				geometry->surface_vertices[
+					geometry->surface_vertex_count + index].value[axis] =
+					Q8(points[index][axis] + (shift ? shift[axis] : 0.0f));
+	}
 	geometry->surface_vertex_count += count;
 	geometry->surface_count++;
 	return 1;
@@ -893,7 +926,7 @@ static int EmitSourceSurfaces(geometry_build_t *build)
 		goto done;
 	for (model = 0U; model < world->model_count; model++)
 	{
-		surface_context_t context = { build, model };
+		surface_context_t context = { build, model, StaticOf(world, model) };
 
 		memset(marks, 0, (size_t)world->brush_count * sizeof(*marks));
 		if (!MarkModelBrushes(world, world->models[model].headnode, marks))

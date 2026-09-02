@@ -21,6 +21,7 @@
 #include "sg_bot_combat.h"
 #include "sg_bot_items.h"
 #include "sg_bot_cvars.h"
+#include "sg_engine_facts.h"
 #include "sg_rune_flight.h"
 #include "sg_rune_level.h"
 #include "sg_rune_mechanisms.h"
@@ -468,6 +469,7 @@ static uint32_t StandingCellNear(const vec3_t point)
 
 /* A crossing that failed on this body is avoided for a while. */
 #define AVOID_SECONDS 30.0f
+#define RELEASE_LIVE_TOLERANCE 0.1f  /* a live release arc is checked this much slower and faster */
 #define RIDE_STALL_SECONDS 1.5f
 #define RIDE_STALL_DISTANCE 24.0f
 
@@ -500,6 +502,80 @@ static uint32_t Avoided(const sg_bot_t *bot, uint32_t list[SG_BOT_AVOID])
 		if (bot->avoid_until[i] > level.time)
 			list[count++] = bot->avoid[i];
 	return count;
+}
+
+/* Where the body's live flight ends, by the exact tracer from its cell
+ * with the velocity it has now.  Safe when it lands on a floor that is
+ * neither lava nor slime. */
+static int LiveFlight(const sg_bot_t *bot, const edict_t *e, const vec3_t velocity,
+	sg_rune_flight_t *flight)
+{
+	if (bot->cell == SG_RUNE_CX_INDEX_NONE)
+		return 0;
+	return SG_RuneFlightTrace(&sg_rune_level.artifact.complex,
+		&sg_rune_level.artifact.law, bot->cell, e->s.origin, velocity, flight);
+}
+
+static qboolean FlightSafe(const sg_rune_flight_t *flight)
+{
+	const sg_rune_cx_view_t *cx = &sg_rune_level.artifact.complex;
+
+	if (flight->outcome == SG_RUNE_FLIGHT_WATER)
+		return true;
+	if (flight->outcome != SG_RUNE_FLIGHT_LANDED ||
+		flight->landing_cell >= cx->cell_count)
+		return false;
+	return (cx->cells[flight->landing_cell].semantics & SG_RUNE_CX_CELL_SUPPORTED) &&
+		!(cx->cells[flight->landing_cell].semantics & SG_RUNE_CX_CELL_HAZARD);
+}
+
+/* A body falling into harm fires its rope at the best bite it knows: of
+ * the hook rides recorded from the floor it left, the anchor most nearly
+ * ahead and above.  The ride's own records are not the point; the bite
+ * is, and the hanging drop from every recorded bite was checked safe. */
+#define RESCUE_ABOVE 32.0f
+#define RESCUE_RANGE 1000.0f
+
+static qboolean RescueAnchor(const sg_bot_t *bot, const edict_t *e, vec3_t anchor_out)
+{
+	const sg_rune_router_t *router = &sg_rune_level.router;
+	const sg_rune_move_table_t *move = &sg_rune_level.artifact.movement;
+	uint32_t from = bot->flight_from, slot;
+	float best = -2.0f;
+	vec3_t ahead;
+	qboolean found = false;
+
+	if (from == SG_RUNE_CX_INDEX_NONE || from >= sg_rune_level.artifact.complex.cell_count)
+		return false;
+	VectorCopy(e->velocity, ahead);
+	ahead[2] = 0.0f;
+	if (VectorNormalize(ahead) < 1.0f)
+		return false;
+	for (slot = router->departure_first[from]; slot < router->departure_first[from + 1U];
+		slot++)
+	{
+		const sg_rune_move_capability_t *record =
+			&move->capabilities[router->departures[slot]];
+		vec3_t to;
+		float flat, score;
+
+		if (record->kind != SG_RUNE_MOVE_HOOK)
+			continue;
+		VectorSubtract(record->anchor, e->s.origin, to);
+		if (to[2] < RESCUE_ABOVE || VectorLength(to) > RESCUE_RANGE)
+			continue;
+		flat = sqrtf(to[0] * to[0] + to[1] * to[1]);
+		/* Ahead of the fall and high: the pull lifts the body out. */
+		score = flat > 1.0f ? (to[0] * ahead[0] + to[1] * ahead[1]) / flat : 1.0f;
+		score += to[2] / VectorLength(to);
+		if (score > best)
+		{
+			best = score;
+			VectorCopy(record->anchor, anchor_out);
+			found = true;
+		}
+	}
+	return found;
 }
 
 /* The step for this frame: on a floor, the field's step; in the air, the
@@ -542,6 +618,23 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 	/* A rope out or attached: the hook crossing goes on, whatever is under
 	 * the body, until the rope is let go; then the body is on a flight to
 	 * the record's landing. */
+	if (e->client->hookstate != 0 && bot->rescue)
+	{
+		/* A rescue rope: ride it to the bite and hang; the release is
+		 * judged by the live flight like any ride. */
+		bot->airborne = (uint8_t)!supported;
+		bot->step.kind = SG_RUNE_STEP_CROSS;
+		bot->step.cell = bot->cell;
+		bot->step.portal = SG_RUNE_CX_INDEX_NONE;
+		bot->step.capability = SG_RUNE_CX_INDEX_NONE;
+		bot->step.move_kind = SG_RUNE_MOVE_HOOK;
+		bot->step.crouching_now = (uint8_t)crouching;
+		VectorCopy(bot->rescue_anchor, bot->step.target);
+		VectorCopy(bot->rescue_anchor, bot->step.hook_point);
+		bot->step.hook_point_present = 1U;
+		bot->step.hook_release_distance = 0.0f;
+		return;
+	}
 	if (e->client->hookstate != 0 && bot->flight_capability != SG_RUNE_CX_INDEX_NONE)
 	{
 		const sg_rune_move_capability_t *record =
@@ -568,15 +661,25 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 				}
 				else if (level.time - bot->ride_since > RIDE_STALL_SECONDS)
 				{
+					vec3_t to_bite;
+					qboolean hanging;
+
+					/* At the bite the rope holds the body still: that is the
+					 * ride's end, and the hanging drop was checked at
+					 * generation.  Stalled anywhere else, the ride failed. */
+					VectorSubtract(record->anchor, e->s.origin, to_bite);
+					to_bite[2] -= (float)e->viewheight;
+					hanging = VectorLength(to_bite) <= SG_FACT_HOOK_HOLD + 8.0f;
 					ctf_hook_abort(e);
 					bot->hook_phase = 3;
 					bot->hook_entity = NULL;
-					Avoid(bot, bot->flight_capability);
+					if (!hanging)
+						Avoid(bot, bot->flight_capability);
 					bot->flight_capability = SG_RUNE_CX_INDEX_NONE;
 					bot->ride_since = 0.0f;
 					if (sg_cv.debug && sg_cv.debug->value)
-						gi.dprintf("SGBOT %s rope stalled: ride avoided\n",
-							e->client->pers.netname);
+						gi.dprintf("SGBOT %s rope %s\n", e->client->pers.netname,
+							hanging ? "let go at the bite" : "stalled: ride avoided");
 					goto grounded;
 				}
 			}
@@ -601,21 +704,29 @@ grounded:
 	bot->airborne = (uint8_t)(!supported && !swimming);
 	if (bot->airborne)
 	{
+		sg_rune_flight_t live;
+		int traced = LiveFlight(bot, e, e->velocity, &live);
+
 		/* Riding a chosen flight: steer to its landing.  Otherwise trace
 		 * where this fall goes and steer there. */
 		if (bot->flight_capability == SG_RUNE_CX_INDEX_NONE)
 		{
-			sg_rune_flight_t flight;
-			vec3_t velocity;
-
-			VectorCopy(e->velocity, velocity);
-			if (SG_RuneFlightTrace(&sg_rune_level.artifact.complex,
-				&sg_rune_level.artifact.law, bot->cell, e->s.origin, velocity,
-				&flight) && (flight.outcome == SG_RUNE_FLIGHT_LANDED ||
-				flight.outcome == SG_RUNE_FLIGHT_WATER))
-				VectorCopy(flight.landing, bot->flight_landing);
+			if (traced && (live.outcome == SG_RUNE_FLIGHT_LANDED ||
+				live.outcome == SG_RUNE_FLIGHT_WATER))
+				VectorCopy(live.landing, bot->flight_landing);
 			else
 				VectorCopy(e->s.origin, bot->flight_landing);
+		}
+		/* Falling into lava or slime, or out of the world: the rope. */
+		if (traced && !FlightSafe(&live) && live.outcome != SG_RUNE_FLIGHT_LANDED &&
+			e->client->hookstate == 0 &&
+			!bot->rescue && SG_BotHookReady(e) && RescueAnchor(bot, e, bot->rescue_anchor))
+		{
+			bot->rescue = 1U;
+			if (sg_cv.debug && sg_cv.debug->value)
+				gi.dprintf("SGBOT %s rope out to save a fall into %s\n",
+					e->client->pers.netname,
+					live.outcome == SG_RUNE_FLIGHT_HARM ? "harm" : "the void");
 		}
 		bot->step.kind = SG_RUNE_STEP_CROSS;
 		bot->step.cell = bot->cell;
@@ -627,6 +738,8 @@ grounded:
 		return;
 	}
 	bot->flight_capability = SG_RUNE_CX_INDEX_NONE;
+	bot->flight_from = bot->cell;
+	bot->rescue = 0U;
 	/* Into or out of the enemy base, the route keeps out of the lines the
 	 * enemy's defenders hold where it can. */
 	field = NULL;
@@ -1022,6 +1135,26 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	ClientThink(e, &cmd);
 	if (command.want_launcher)
 		SG_BotRequestLauncher(e);
+	if (bot->rescue && e->client->hookstate == 0 && bot->hook_phase != 2 &&
+		SG_BotHookReady(e))
+	{
+		/* The rescue rope: aimed and fired here, whatever the step said. */
+		float yaw, pitch;
+		vec3_t eye;
+
+		VectorCopy(e->s.origin, eye);
+		eye[2] += (float)e->viewheight;
+		yaw = atan2f(bot->rescue_anchor[1] - eye[1], bot->rescue_anchor[0] - eye[0]) *
+			180.0f / (float)M_PI;
+		pitch = -atan2f(bot->rescue_anchor[2] - eye[2],
+			sqrtf((bot->rescue_anchor[0] - eye[0]) * (bot->rescue_anchor[0] - eye[0]) +
+				(bot->rescue_anchor[1] - eye[1]) * (bot->rescue_anchor[1] - eye[1]))) *
+			180.0f / (float)M_PI;
+		e->client->v_angle[YAW] = yaw;
+		e->client->v_angle[PITCH] = pitch;
+		command.hook_fire = 1U;
+		command.hook_release = 0U;
+	}
 	if (command.hook_fire && SG_BotHookReady(e))
 	{
 		Cmd_Hook_f(e);
@@ -1030,9 +1163,22 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	}
 	else if (command.hook_release && e->client->hookstate != 0)
 	{
-		ctf_hook_abort(e);
-		bot->hook_phase = 3;
-		bot->hook_entity = NULL;
+		sg_rune_flight_t live;
+		qboolean let_go = true;
+
+		/* Let go only where the body, with the velocity it has now, lands
+		 * on a floor; otherwise ride on to the bite and hang there. */
+		if (e->client->hookstate == 2 && bot->cell != SG_RUNE_CX_INDEX_NONE)
+			let_go = SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.complex,
+				&sg_rune_level.artifact.law, bot->cell, e->s.origin, e->velocity,
+				RELEASE_LIVE_TOLERANCE, &live) ? true : false;
+		if (let_go)
+		{
+			ctf_hook_abort(e);
+			bot->hook_phase = 3;
+			bot->hook_entity = NULL;
+			bot->rescue = 0U;
+		}
 	}
 	if (bot->hook_phase == 3 && e->groundentity && e->client->hookstate == 0)
 		bot->hook_phase = 0;
@@ -1099,19 +1245,40 @@ void SG_BotThink(sg_bot_t *bot)
 	ApplyMechanism(bot, e);
 	if (Stuck(bot, e) && e->groundentity)
 		bot->step.move_kind = SG_RUNE_MOVE_JUMP;
-	if (sg_cv.debug && sg_cv.debug->value && level.framenum % 50 == 0)
-		gi.dprintf("SGBOT %s role=%d cell=%u dest=%u step=%s/%s at=(%.0f %.0f %.0f) "
-			"target=(%.0f %.0f %.0f) cost=%.1f st=%c%c v=%.0f hook=%d hp=%d\n",
+	/* Every decision that differs from the last one written, and a
+	 * heartbeat every five seconds so a long crossing still shows. */
+	if (sg_cv.debug && sg_cv.debug->value &&
+		(sg_cv.debug->value >= 2.0f || level.framenum % 50 == 0 ||
+		 bot->logged_kind != bot->step.kind ||
+		 bot->logged_move != bot->step.move_kind ||
+		 bot->logged_capability != bot->step.capability ||
+		 fabsf(bot->logged_target[0] - bot->step.target[0]) > 4.0f ||
+		 fabsf(bot->logged_target[1] - bot->step.target[1]) > 4.0f ||
+		 fabsf(bot->logged_target[2] - bot->step.target[2]) > 4.0f))
+	{
+		bot->logged_kind = (uint8_t)bot->step.kind;
+		bot->logged_move = (uint8_t)bot->step.move_kind;
+		bot->logged_capability = bot->step.capability;
+		VectorCopy(bot->step.target, bot->logged_target);
+		gi.dprintf("SGBOT %s role=%d cell=%u dest=%u step=%s/%s cap=%u at=(%.0f %.0f %.0f) "
+			"target=(%.0f %.0f %.0f) cost=%.1f st=%c%c v=%.0f hook=%d hp=%d",
 			e->client->pers.netname,
 			bot->role, (unsigned int)bot->cell, (unsigned int)bot->destination_cell,
 			SG_RuneStepKindString(bot->step.kind),
 			bot->step.kind == SG_RUNE_STEP_CROSS ? SG_RuneMoveKindString(
 				(sg_rune_move_kind_t)bot->step.move_kind) : "-",
+			(unsigned int)bot->step.capability,
 			e->s.origin[0], e->s.origin[1], e->s.origin[2], bot->step.target[0],
 			bot->step.target[1], bot->step.target[2], bot->step.cost_to_go,
 			(e->client->ps.pmove.pm_flags & PMF_DUCKED) ? 'C' : 'S',
 			bot->step.crouching_next ? 'c' : 's', VectorLength(e->velocity),
 			e->client->hookstate, e->health);
+		if (bot->step.hook_point_present)
+			gi.dprintf(" anchor=(%.0f %.0f %.0f) release=%.0f",
+				bot->step.hook_point[0], bot->step.hook_point[1],
+				bot->step.hook_point[2], bot->step.hook_release_distance);
+		gi.dprintf("\n");
+	}
 	Emit(bot, e);
 }
 

@@ -78,6 +78,15 @@ typedef struct sg_rune_step_s
 	float cost_to_go;
 	float hook_point[3];
 	float hook_release_distance;  /* eye-to-bite distance to let go at */
+	/* A flight or a hook ride was traced from the cell's middle: run_up is
+	 * that point, launch the velocity the flight left the portal with.  The
+	 * body reproduces the record by lining up there first. */
+	float run_up[3];
+	float launch[3];
+	uint8_t run_up_present;
+	uint8_t launch_present;
+	uint8_t ease;             /* the step after this one is a launch or an
+	                             end: arrive at the target, not through it */
 } sg_rune_step_t;
 
 /* The step from (cell, crouching) toward the field's destination; point is

@@ -37,6 +37,7 @@ typedef enum sg_rune_entity_kind_e
 	SG_RUNE_ENTITY_ITEM,             /* item_*, weapon_*, ammo_* */
 	SG_RUNE_ENTITY_FLAG,             /* item_flag_team1/2 */
 	SG_RUNE_ENTITY_SPAWN,            /* info_player_* */
+	SG_RUNE_ENTITY_WALL,             /* func_wall, func_explosive, func_object */
 	SG_RUNE_ENTITY_KIND_COUNT
 } sg_rune_entity_kind_t;
 
@@ -76,6 +77,15 @@ typedef struct sg_rune_entities_s
 
 int SG_RuneEntitiesParse(const sg_rune_bsp_t *bsp, sg_rune_entities_t *out);
 void SG_RuneEntitiesFree(sg_rune_entities_t *entities);
+
+/* The brush models that stand in the world from spawn on, by the game's
+ * own spawn rules: a func_wall that is not waiting for a trigger (no
+ * TRIGGER_SPAWN, TOGGLE or START_ON flag, or START_ON), a func_explosive
+ * not waiting for one, a func_object with no flags.  Doors, lifts, trains
+ * and buttons move and are mechanisms, not statics.  Fills out (at most
+ * max) and returns how many there are. */
+uint32_t SG_RuneEntitiesStatics(const sg_rune_entities_t *entities,
+	sg_rune_bsp_static_t *out, uint32_t max);
 
 /* The first entity whose targetname is name, from after; UINT32_MAX. */
 uint32_t SG_RuneEntitiesFind(const sg_rune_entities_t *entities,

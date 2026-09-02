@@ -21,6 +21,8 @@
 #define BODY_ORIGIN 24.0f
 #define NEAR_BITE_STOP 40.0f
 #define MIN_PULL 64.0f
+#define RELEASE_TOLERANCE 0.15f   /* the pull speed a release arc is checked against, either way */
+#define HOLD_OFF_SURFACE 16.0f    /* the hull's half width: a hanging body's origin off the face */
 
 typedef struct bite_s
 {
@@ -261,6 +263,29 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 		if (clear < MIN_PULL)
 			continue;
 		build->report.pull_clear++;
+		/* The rope holds the body at the bite when the ride is not let go
+		 * of earlier; from there it drops straight down.  A bite whose
+		 * hanging drop ends in lava, in the void, or nowhere to stand is
+		 * no ride: the release arcs below are the plan, the hanging drop
+		 * is what a body that keeps riding gets. */
+		{
+			float hold[3], still[3] = { 0.0f, 0.0f, 0.0f };
+			uint32_t hold_cell;
+			sg_rune_flight_t drop;
+
+			hold[0] = bite->point[0] + bite->normal[0] * HOLD_OFF_SURFACE;
+			hold[1] = bite->point[1] + bite->normal[1] * HOLD_OFF_SURFACE;
+			hold[2] = bite->point[2] + bite->normal[2] * HOLD_OFF_SURFACE - EYE_HEIGHT;
+			hold_cell = SG_RuneLocate(&build->locator, hold, 0U, 8.0f, NULL);
+			if (hold_cell == SG_RUNE_CX_INDEX_NONE)
+				continue;
+			build->report.traces++;
+			if (!SG_RuneFlightTrace(cx, build->law, hold_cell, hold, still, &drop) ||
+				drop.outcome != SG_RUNE_FLIGHT_LANDED ||
+				!(cx->cells[drop.landing_cell].semantics & SG_RUNE_CX_CELL_SUPPORTED) ||
+				(cx->cells[drop.landing_cell].semantics & SG_RUNE_CX_CELL_HAZARD))
+				continue;
+		}
 		for (f = 0U; f < sizeof(fractions) / sizeof(fractions[0]); f++)
 		{
 			float release[3], velocity[3];
@@ -293,10 +318,10 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 				continue;
 			build->report.traces++;
 			build->report.flights++;
-			if (!SG_RuneFlightTrace(cx, build->law, start, release, velocity, &flight) ||
+			if (!SG_RuneFlightLandsRobustly(cx, build->law, start, release, velocity,
+				RELEASE_TOLERANCE, &flight) ||
 				flight.outcome != SG_RUNE_FLIGHT_LANDED ||
-				flight.landing_cell == cell ||
-				!(cx->cells[flight.landing_cell].semantics & SG_RUNE_CX_CELL_SUPPORTED))
+				flight.landing_cell == cell)
 				continue;
 			seconds = bolt_seconds + clear * fractions[f] /
 				build->law->hook_pull_speed + flight.seconds + 0.3f;

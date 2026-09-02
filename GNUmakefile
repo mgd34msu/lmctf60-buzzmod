@@ -1690,7 +1690,8 @@ CELLSDUMP_SRCS = slipgate/sg_configuration_cells.c \
 	slipgate/sg_rune_analytic.c slipgate/sg_rune_artifact.c \
 	slipgate/sg_rune_mechanisms.c slipgate/sg_rune_hook.c \
 	slipgate/sg_rune_vis.c slipgate/sg_rune_fire.c slipgate/sg_rune_fire_build.c \
-	slipgate/sg_rune_locate.c \
+	slipgate/sg_rune_locate.c slipgate/sg_rune_bsp.c slipgate/sg_rune_trace.c \
+	slipgate/sg_rune_law.c slipgate/sg_rune_crc.c slipgate/sg_rune_entities.c
 
 $(CELLSDUMP_BIN): tools/cellsdump.c $(CELLSDUMP_SRCS)
 	$(CC) -std=c11 -O2 -g -Wall -Wextra -I. tools/cellsdump.c \
@@ -1730,9 +1731,9 @@ fieldcheck: $(FIELDCHECK_BIN)
 $(FIELDCHECK_BIN): tools/fieldcheck.c slipgate/sg_rune_locate.c \
 		slipgate/sg_rune_field.c slipgate/sg_rune_artifact.c \
 		slipgate/sg_rune_cx.c slipgate/sg_rune_movement.c \
-		slipgate/sg_rune_analytic.c
+		slipgate/sg_rune_analytic.c slipgate/sg_rune_law.c slipgate/sg_rune_crc.c
 	$(CC) -std=c11 -O2 -g -Wall -Wextra -I. tools/fieldcheck.c \
 		slipgate/sg_rune_locate.c slipgate/sg_rune_field.c \
 		slipgate/sg_rune_artifact.c slipgate/sg_rune_cx.c \
 		slipgate/sg_rune_movement.c slipgate/sg_rune_analytic.c \
- -lm -o $@
+		slipgate/sg_rune_law.c slipgate/sg_rune_crc.c slipgate/sg_rune_flight.c -lm -o $@

@@ -972,6 +972,11 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 
 	SG_BotHostNewLevel ();
 
+	/* The roster's slots and fill clock belong to the level that is ending:
+	 * the memset below retires every bot edict, and a fill stamp taken on the
+	 * old clock would hold the new level empty until that clock is reached. */
+	SG_RosterStorageReset ();
+
 	// BUZZKILL - the session recorder's per-level state: chat counts, the
 	// written-match latch, and the match id the rows hang off. All three are
 	// level scoped, because a match is a level here.

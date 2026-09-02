@@ -116,6 +116,15 @@ typedef struct sg_rune_bsp_visibility_s
 	uint32_t byte_count;
 } sg_rune_bsp_visibility_t;
 
+/* An inline model that stands in the world from spawn on (a func_wall
+ * that starts solid, a func_explosive not yet blown): the world as the
+ * RUNE reads it is model 0 plus these, each at its origin. */
+typedef struct sg_rune_bsp_static_s
+{
+	uint32_t model;
+	float origin[3];
+} sg_rune_bsp_static_t;
+
 typedef struct sg_rune_bsp_s
 {
 	const sg_rune_bsp_plane_t *planes;
@@ -140,8 +149,11 @@ typedef struct sg_rune_bsp_s
 	uint32_t file_crc32;
 	uint32_t entity_crc32;
 	uint64_t file_bytes;
+	const sg_rune_bsp_static_t *statics; /* models standing from spawn */
+	uint32_t static_count;
 	void *arena;              /* everything above lives here */
 	char *entities_owned;     /* a replaced entity text, or NULL */
+	void *statics_owned;      /* the statics array, or NULL */
 } sg_rune_bsp_t;
 
 typedef enum sg_rune_bsp_lump_e
@@ -175,6 +187,11 @@ void SG_RuneBspFree(sg_rune_bsp_t *bsp);
 /* Replaces the entity text (the game may spawn from an override file);
  * the entity CRC follows. */
 int SG_RuneBspReplaceEntities(sg_rune_bsp_t *bsp, const char *text);
+
+/* Declares the models that stand in the world from spawn: model 0 traces
+ * and the carve include them.  A copy is kept; count 0 clears. */
+int SG_RuneBspSetStatics(sg_rune_bsp_t *bsp, const sg_rune_bsp_static_t *statics,
+	uint32_t count);
 
 /* The leaf of a model's tree holding a point (model 0 is the world). */
 int32_t SG_RuneBspLeafAt(const sg_rune_bsp_t *bsp, uint32_t model,

@@ -275,8 +275,11 @@ static int AppendRegion(semantic_build_t *build, uint32_t cell_index)
 			return 0;
 		}
 		region->sample_leaves[sample] = leaf;
+		/* The contents of the world as it stands: the leaf's, and any
+		 * static model's at the point (a lava func_wall fills its pit). */
 		region->sample_contents[sample] =
-			(int32_t)world->leaves[leaf].contents;
+			(int32_t)world->leaves[leaf].contents |
+			SG_RuneTraceContents(world, 0U, NULL, point);
 		region->sample_areas[sample] = world->leaves[leaf].area;
 		region->sample_clusters[sample] = world->leaves[leaf].cluster;
 	}
@@ -299,6 +302,10 @@ static int AppendRegion(semantic_build_t *build, uint32_t cell_index)
 	if (region->water_type & SG_RUNE_CONTENTS_SLIME)
 		region->flags |= SG_CONFIGURATION_SEMANTIC_REGION_SLIME |
 			SG_CONFIGURATION_SEMANTIC_REGION_HAZARD;
+	/* The carve's word: this cell is where a body's feet are in lava or
+	 * slime, whatever the samples above the feet found. */
+	if (cell->hazard)
+		region->flags |= SG_CONFIGURATION_SEMANTIC_REGION_HAZARD;
 	/* Support from the host at the witness, then at the floor. */
 	memset(&pose, 0, sizeof(pose));
 	if (!Pose(build, cell->interior_witness.value, cell->stance, &pose))

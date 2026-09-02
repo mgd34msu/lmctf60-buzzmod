@@ -5,7 +5,8 @@
  * through a wall, the body is launched at the portal's foot at full run
  * speed toward it, once as a drop, once as a jump, once as a rocket jump,
  * and the arc is followed through the complex to where it lands.  Each
- * landing on a floor or in water is one capability to that cell. */
+ * landing on a floor or in water is one capability to that cell; an arc
+ * into lava or slime, or a portal into them, is none. */
 #include "sg_rune_movement.h"
 
 #include <math.h>
@@ -13,6 +14,8 @@
 
 #include "sg_rune_cx.h"
 #include "sg_rune_flight.h"
+
+#define LAUNCH_TOLERANCE 0.15f    /* the run speed a flight is checked against, either way */
 
 static float FloatBits(uint32_t bits)
 {
@@ -155,18 +158,15 @@ static int EmitFlights(sg_rune_move_store_t *store,
 		start[0] = origin[0];
 		start[1] = origin[1];
 		start[2] = origin[2] + launch->rise_before;
-		if (!SG_RuneFlightTrace(cx, law, source_cell, start, velocity, &flight))
-			continue;
-		if (flight.outcome != SG_RUNE_FLIGHT_LANDED &&
-			flight.outcome != SG_RUNE_FLIGHT_WATER)
+		/* The arc must land well at the modelled speed and a little slower
+		 * and faster: a body never leaves the edge at exactly that speed. */
+		if (!SG_RuneFlightLandsRobustly(cx, law, source_cell, start, velocity,
+			LAUNCH_TOLERANCE, &flight))
 			continue;
 		if (flight.landing_cell == source_cell ||
 			flight.landing_cell >= cx->cell_count)
 			continue;
 		landing = &cx->cells[flight.landing_cell];
-		if (flight.outcome == SG_RUNE_FLIGHT_LANDED &&
-			(landing->semantics & SG_RUNE_CX_CELL_SUPPORTED) == 0U)
-			continue;
 		if (!SG_RuneMoveAppendFlight(store, source_cell, portal_index,
 			launch->kind, source_stances, Stances(landing->valid_stances),
 			flight.landing_cell, velocity, flight.seconds + launch->lead_seconds))
@@ -205,6 +205,10 @@ int SG_RuneMoveEmitComplex(sg_rune_move_store_t *store,
 			return 0;
 		source = &complex->cells[negative->cell];
 		target = &complex->cells[positive->cell];
+		/* Nothing is routed into lava or slime; a body already in it may
+		 * still climb out, so its own departures stand. */
+		if (target->semantics & SG_RUNE_CX_CELL_HAZARD)
+			continue;
 		vertical = fabsf(FloatBits(facet->plane.normal_bits[2])) < 0.70710678f;
 		memset(&crossing, 0, sizeof(crossing));
 		crossing.cell = negative->cell;

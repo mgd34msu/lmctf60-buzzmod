@@ -9,6 +9,7 @@
 
 #include "slipgate/sg_rune_artifact.h"
 #include "slipgate/sg_rune_field.h"
+#include "slipgate/sg_rune_flight.h"
 #include "slipgate/sg_rune_locate.h"
 
 static double Now(void)
@@ -32,9 +33,9 @@ int main(int argc, char **argv)
 	double t0, t1, t2, t3;
 	sg_rune_artifact_status_t status;
 
-	if (argc != 8 && argc != 2)
+	if (argc != 8 && argc != 2 && argc != 3 && argc != 9)
 	{
-		fprintf(stderr, "usage: fieldcheck MAP.rune [x y z x y z]\n");
+		fprintf(stderr, "usage: fieldcheck MAP.rune [x y z x y z | x y z c<cell> 0 0 | d<cell> | f x y z vx vy vz]\n");
 		return 2;
 	}
 	if (argc == 2)
@@ -85,6 +86,93 @@ int main(int argc, char **argv)
 			(unsigned)artifact.complex.portal_count,
 			(unsigned)artifact.movement.capability_count,
 			(unsigned long)artifact.image_size);
+		SG_RuneArtifactRelease(&artifact);
+		return 0;
+	}
+	/* "d<N>": every departure from cell N, with what the record holds. */
+	if (argc == 3 && argv[2][0] == 'd' && argv[2][1] >= '0' && argv[2][1] <= '9')
+	{
+		uint32_t cell_index = (uint32_t)strtoul(argv[2] + 1, NULL, 10), slot;
+
+		status = SG_RuneArtifactLoadFile(argv[1], &artifact, &os_error, &fault);
+		if (status != SG_RUNE_ARTIFACT_OK)
+		{
+			fprintf(stderr, "load: %s\n", SG_RuneArtifactStatusString(status));
+			return 1;
+		}
+		if (!SG_RuneRouterBuild(&router, &artifact) ||
+			cell_index >= artifact.complex.cell_count)
+		{
+			fprintf(stderr, "no such cell\n");
+			return 1;
+		}
+		{
+			const sg_rune_cx_cell_t *c = &artifact.complex.cells[cell_index];
+
+			printf("cell %u: z %g..%g xy %g..%g %g..%g stances %u semantics 0x%x "
+				"centre (%.0f %.0f %.0f)\n", cell_index,
+				(double)c->bounds.mins.value[2] / 8.0, (double)c->bounds.maxs.value[2] / 8.0,
+				(double)c->bounds.mins.value[0] / 8.0, (double)c->bounds.maxs.value[0] / 8.0,
+				(double)c->bounds.mins.value[1] / 8.0, (double)c->bounds.maxs.value[1] / 8.0,
+				c->valid_stances, c->semantics,
+				router.cell_center[cell_index * 3U], router.cell_center[cell_index * 3U + 1U],
+				router.cell_center[cell_index * 3U + 2U]);
+		}
+		for (slot = router.departure_first[cell_index];
+			slot < router.departure_first[cell_index + 1U]; slot++)
+		{
+			uint32_t capability = router.departures[slot];
+			const sg_rune_move_capability_t *r =
+				&artifact.movement.capabilities[capability];
+			const float *centre = &router.cell_center[r->destination * 3U];
+
+			printf("  cap %u %-13s -> cell %u (%.0f %.0f %.0f) portal %u stances %u/%u "
+				"cost %.2f seconds %.2f", capability,
+				SG_RuneMoveKindString((sg_rune_move_kind_t)r->kind), r->destination,
+				centre[0], centre[1], centre[2], r->portal, r->source_stances,
+				r->destination_stances, router.edge_cost[capability], r->seconds);
+			if (r->kind == SG_RUNE_MOVE_HOOK)
+				printf(" anchor (%.0f %.0f %.0f) release %.0f", r->anchor[0],
+					r->anchor[1], r->anchor[2], r->parameter);
+			if (r->kind == SG_RUNE_MOVE_JUMP || r->kind == SG_RUNE_MOVE_DROP ||
+				r->kind == SG_RUNE_MOVE_ROCKET_JUMP)
+				printf(" launch (%.0f %.0f %.0f)", r->launch_velocity[0],
+					r->launch_velocity[1], r->launch_velocity[2]);
+			printf("\n");
+		}
+		SG_RuneRouterFree(&router);
+		SG_RuneArtifactRelease(&artifact);
+		return 0;
+	}
+	/* "f x y z vx vy vz": the flight of a body launched there. */
+	if (argc == 9 && !strcmp(argv[2], "f"))
+	{
+		float origin[3], velocity[3];
+		sg_rune_flight_t flight;
+		uint32_t start;
+
+		origin[0] = (float)atof(argv[3]); origin[1] = (float)atof(argv[4]);
+		origin[2] = (float)atof(argv[5]);
+		velocity[0] = (float)atof(argv[6]); velocity[1] = (float)atof(argv[7]);
+		velocity[2] = (float)atof(argv[8]);
+		status = SG_RuneArtifactLoadFile(argv[1], &artifact, &os_error, &fault);
+		if (status != SG_RUNE_ARTIFACT_OK || !SG_RuneLocatorBuild(&locator, &artifact))
+		{
+			fprintf(stderr, "load failed\n");
+			return 1;
+		}
+		start = SG_RuneLocate(&locator, origin, 0U, 8.0f, &violation);
+		printf("start cell %u violation %g\n", start, violation);
+		if (start != SG_RUNE_CX_INDEX_NONE &&
+			SG_RuneFlightTrace(&artifact.complex, &artifact.law, start, origin,
+				velocity, &flight))
+			printf("flight: outcome %d landing cell %u at (%.0f %.0f %.0f) after %.2fs, "
+				"%u crossings, velocity (%.0f %.0f %.0f)\n", (int)flight.outcome,
+				flight.landing_cell, flight.landing[0], flight.landing[1],
+				flight.landing[2], flight.seconds, flight.crossings,
+				flight.landing_velocity[0], flight.landing_velocity[1],
+				flight.landing_velocity[2]);
+		SG_RuneLocatorFree(&locator);
 		SG_RuneArtifactRelease(&artifact);
 		return 0;
 	}

@@ -25,13 +25,16 @@ typedef struct sg_rune_generate_report_s
 	uint32_t mechanisms;
 	uint32_t hooks;           /* hook ride records */
 	uint32_t fires;           /* fire relation records */
+	uint32_t statics;         /* brush models carved as part of the world */
 	size_t image_bytes;
 	double seconds;
 } sg_rune_generate_report_t;
 
 /* The image is malloc'd; free it with free().  Progress is reported per
  * stage with done/total, and once with total 0 as each stage begins. */
-int SG_RuneGenerate(const struct sg_rune_bsp_s *world,
+/* The world is carved as it stands: the static brush models the entity
+ * text declares are set on it first (SG_RuneBspSetStatics). */
+int SG_RuneGenerate(struct sg_rune_bsp_s *world,
 	const sg_rune_identity_t *identity, const sg_rune_law_t *law,
 	sg_rune_generate_progress_fn progress, void *progress_context,
 	unsigned char **image_out, size_t *image_size_out,

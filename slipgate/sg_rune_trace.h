@@ -30,7 +30,9 @@ typedef struct sg_rune_trace_s
 
 /* The segment start..end with the box mins..maxs (NULL for a point)
  * against model's brushes whose contents meet mask.  model_origin, when
- * given, is where the model stands (its tree is at the origin). */
+ * given, is where the model stands (its tree is at the origin).  Model 0
+ * is the world as it stands: its own tree and every static the BSP
+ * declares (SG_RuneBspSetStatics), the nearest hit of them all. */
 int SG_RuneTraceBox(const sg_rune_bsp_t *bsp, uint32_t model,
 	const float model_origin[3], const float start[3], const float mins[3],
 	const float maxs[3], const float end[3], int32_t mask,

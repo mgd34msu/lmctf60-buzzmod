@@ -207,7 +207,8 @@ static void Walk(work_t *w, int32_t node_index, float p1f, float p2f,
 	Walk(w, node->children[side ^ 1], midf, p2f, mid, p2);
 }
 
-int SG_RuneTraceBox(const sg_rune_bsp_t *bsp, uint32_t model,
+/* One model's tree, at its origin. */
+static int TraceModel(const sg_rune_bsp_t *bsp, uint32_t model,
 	const float model_origin[3], const float start[3], const float mins[3],
 	const float maxs[3], const float end[3], int32_t mask,
 	sg_rune_trace_t *trace_out)
@@ -215,13 +216,11 @@ int SG_RuneTraceBox(const sg_rune_bsp_t *bsp, uint32_t model,
 	work_t w;
 	uint32_t axis;
 
-	if (!trace_out)
-		return 0;
 	memset(trace_out, 0, sizeof(*trace_out));
 	trace_out->fraction = 1.0f;
 	trace_out->texinfo = -1;
 	trace_out->brush = UINT32_MAX;
-	if (!bsp || model >= bsp->model_count || !start || !end)
+	if (model >= bsp->model_count)
 		return 0;
 	memset(&w, 0, sizeof(w));
 	w.bsp = bsp;
@@ -308,11 +307,56 @@ int SG_RuneTraceBox(const sg_rune_bsp_t *bsp, uint32_t model,
 	return 1;
 }
 
+int SG_RuneTraceBox(const sg_rune_bsp_t *bsp, uint32_t model,
+	const float model_origin[3], const float start[3], const float mins[3],
+	const float maxs[3], const float end[3], int32_t mask,
+	sg_rune_trace_t *trace_out)
+{
+	uint32_t index;
+
+	if (!trace_out)
+		return 0;
+	memset(trace_out, 0, sizeof(*trace_out));
+	trace_out->fraction = 1.0f;
+	trace_out->texinfo = -1;
+	trace_out->brush = UINT32_MAX;
+	if (!bsp || model >= bsp->model_count || !start || !end)
+		return 0;
+	if (!TraceModel(bsp, model, model_origin, start, mins, maxs, end, mask, trace_out))
+		return 0;
+	if (model != 0U)
+		return 1;
+	/* The world is model 0 and every model standing in it: the nearest
+	 * hit of all of them, solid at the start if any says so. */
+	for (index = 0U; index < bsp->static_count; index++)
+	{
+		const sg_rune_bsp_static_t *fixed = &bsp->statics[index];
+		sg_rune_trace_t other;
+
+		if (!TraceModel(bsp, fixed->model, fixed->origin, start, mins, maxs, end,
+			mask, &other))
+			continue;
+		if (other.startsolid)
+			trace_out->startsolid = 1;
+		if (other.allsolid)
+			trace_out->allsolid = 1;
+		if (other.fraction < trace_out->fraction)
+		{
+			int startsolid = trace_out->startsolid, allsolid = trace_out->allsolid;
+
+			*trace_out = other;
+			trace_out->startsolid = startsolid;
+			trace_out->allsolid = allsolid;
+		}
+	}
+	return 1;
+}
+
 int32_t SG_RuneTraceContents(const sg_rune_bsp_t *bsp, uint32_t model,
 	const float model_origin[3], const float point[3])
 {
 	float local[3];
-	int32_t leaf;
+	int32_t leaf, contents;
 
 	if (!bsp || model >= bsp->model_count || !point)
 		return 0;
@@ -320,7 +364,26 @@ int32_t SG_RuneTraceContents(const sg_rune_bsp_t *bsp, uint32_t model,
 	local[1] = point[1] - (model_origin ? model_origin[1] : 0.0f);
 	local[2] = point[2] - (model_origin ? model_origin[2] : 0.0f);
 	leaf = SG_RuneBspLeafAt(bsp, model, local);
-	return leaf < 0 ? 0 : bsp->leaves[leaf].contents;
+	contents = leaf < 0 ? 0 : bsp->leaves[leaf].contents;
+	if (model == 0U)
+	{
+		/* What stands in the world adds its contents, as the engine's
+		 * point contents does for the models it links. */
+		uint32_t index;
+
+		for (index = 0U; index < bsp->static_count; index++)
+		{
+			const sg_rune_bsp_static_t *fixed = &bsp->statics[index];
+
+			local[0] = point[0] - fixed->origin[0];
+			local[1] = point[1] - fixed->origin[1];
+			local[2] = point[2] - fixed->origin[2];
+			leaf = SG_RuneBspLeafAt(bsp, fixed->model, local);
+			if (leaf >= 0)
+				contents |= bsp->leaves[leaf].contents;
+		}
+	}
+	return contents;
 }
 
 void SG_RuneTracePose(const sg_rune_bsp_t *bsp, const float origin[3],

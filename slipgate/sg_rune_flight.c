@@ -153,6 +153,11 @@ int SG_RuneFlightTrace(const sg_rune_cx_view_t *cx,
 		uint32_t slot, exit_facet = SG_RUNE_CX_INDEX_NONE, exit_side = 0U;
 		float exit_time = INFINITY, exit_normal[3] = { 0.0f, 0.0f, 0.0f };
 
+		if (record->semantics & SG_RUNE_CX_CELL_HAZARD)
+		{
+			flight_out->outcome = SG_RUNE_FLIGHT_HARM;
+			break;
+		}
 		if (record->semantics & SG_RUNE_CX_CELL_WATER)
 		{
 			flight_out->outcome = SG_RUNE_FLIGHT_WATER;
@@ -275,5 +280,43 @@ int SG_RuneFlightTrace(const sg_rune_cx_view_t *cx,
 	flight_out->seconds = elapsed;
 	memcpy(flight_out->landing, position, sizeof(position));
 	memcpy(flight_out->landing_velocity, speed, sizeof(speed));
+	return 1;
+}
+
+static int LandsWell(const sg_rune_cx_view_t *cx, const sg_rune_flight_t *flight)
+{
+	if (flight->outcome == SG_RUNE_FLIGHT_WATER)
+		return 1;
+	if (flight->outcome != SG_RUNE_FLIGHT_LANDED || flight->landing_cell >= cx->cell_count)
+		return 0;
+	return (cx->cells[flight->landing_cell].semantics & SG_RUNE_CX_CELL_SUPPORTED) &&
+		!(cx->cells[flight->landing_cell].semantics & SG_RUNE_CX_CELL_HAZARD);
+}
+
+int SG_RuneFlightLandsRobustly(const sg_rune_cx_view_t *cx,
+	const sg_rune_law_t *law, uint32_t start_cell, const float origin[3],
+	const float velocity[3], float tolerance, sg_rune_flight_t *flight_out)
+{
+	static const float signs[2] = { -1.0f, 1.0f };
+	sg_rune_flight_t nominal, other;
+	uint32_t index;
+
+	if (!SG_RuneFlightTrace(cx, law, start_cell, origin, velocity, &nominal))
+		return 0;
+	if (flight_out)
+		*flight_out = nominal;
+	if (!LandsWell(cx, &nominal))
+		return 0;
+	for (index = 0U; index < 2U && tolerance > 0.0f; index++)
+	{
+		float scaled[3];
+
+		scaled[0] = velocity[0] * (1.0f + signs[index] * tolerance);
+		scaled[1] = velocity[1] * (1.0f + signs[index] * tolerance);
+		scaled[2] = velocity[2];
+		if (!SG_RuneFlightTrace(cx, law, start_cell, origin, scaled, &other) ||
+			!LandsWell(cx, &other))
+			return 0;
+	}
 	return 1;
 }

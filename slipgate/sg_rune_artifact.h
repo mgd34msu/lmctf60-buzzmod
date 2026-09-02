@@ -20,7 +20,7 @@
 #include "sg_rune_movement.h"
 
 #define SG_RUNE_ARTIFACT_VERSION UINT32_C(7)
-#define SG_RUNE_ARTIFACT_SCHEMA_ID UINT64_C(0x52554E4534000001)
+#define SG_RUNE_ARTIFACT_SCHEMA_ID UINT64_C(0x52554E4534000002)
 
 typedef struct sg_rune_identity_s
 {

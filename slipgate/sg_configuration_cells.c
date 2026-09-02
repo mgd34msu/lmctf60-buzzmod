@@ -5,9 +5,12 @@
  *
  *   1. One carve, with the crouch hull.  Every BSP leaf's polytope (the node
  *      planes down to it, inside the world bounds) is cut by every player-solid
- *      brush expanded by the hull.  What is outside every brush is free space;
- *      each convex piece of it is a crouching cell.  Nothing is recorded about
- *      how a piece was cut.
+ *      brush expanded by the hull, the world's and the static models'.  What
+ *      is outside every brush is free space; each convex piece of it is a
+ *      crouching cell.  Lava and slime brushes then split the free pieces:
+ *      what is inside one (raised by the feet's depth below the origin) is a
+ *      hazard cell, kept apart so no route stands in it.  Nothing is recorded
+ *      about how a piece was cut.
  *   2. Vertices are snapped to Q8 once, per final cell.
  *   3. Standing validity by translation.  The standing box shares footprint
  *      and bottom with the crouch box and is 28 taller, so the standing box
@@ -517,6 +520,16 @@ static int Clear(const sg_rune_law_t *law, const float from[3], const float to[3
 
 /* ---- build state --------------------------------------------------------- */
 
+/* A brush reaching the leaf being carved, with the origin of the model it
+ * belongs to (the world's is zero). */
+typedef struct gathered_brush_s
+{
+	uint32_t brush;
+	float origin[3];
+} gathered_brush_t;
+
+#define CELL_HAZARD (SG_RUNE_CONTENTS_LAVA | SG_RUNE_CONTENTS_SLIME)
+
 typedef struct cell_build_s
 {
 	const sg_rune_law_t *law;
@@ -528,8 +541,11 @@ typedef struct cell_build_s
 	uint32_t cell_capacity, face_capacity, vertex_capacity, portal_capacity;
 	uint32_t overlap_capacity;
 	uint32_t *brush_marks;        /* per brush: leaf + 1 that last gathered it */
-	uint32_t *brush_list;
+	gathered_brush_t *brush_list; /* player-solid, reaching the leaf */
 	uint32_t brush_list_count, brush_list_capacity;
+	gathered_brush_t *hazard_list; /* lava and slime, reaching the leaf */
+	uint32_t hazard_list_count, hazard_list_capacity;
+	sg_cfg_hull_t hazard_hull;    /* the feet's depth: lava rises by it */
 	uint32_t leaves_done, last_percent;
 	sg_configuration_error_t error;
 } cell_build_t;
@@ -572,8 +588,12 @@ static float Q8(float value)
 
 /* ---- brush gathering ----------------------------------------------------- */
 
+/* Gathers the brushes of one model's tree that reach the box (given in
+ * the model's own frame): player-solid ones to the brush list, lava and
+ * slime to the hazard list, each with the model's origin. */
 static int GatherBrushesInBox(cell_build_t *build, int32_t node,
-	const float mins[3], const float maxs[3], uint32_t leaf_mark)
+	const float mins[3], const float maxs[3], uint32_t leaf_mark,
+	const float origin[3])
 {
 	const sg_rune_bsp_t *world = build->world;
 
@@ -604,7 +624,7 @@ static int GatherBrushesInBox(cell_build_t *build, int32_t node,
 		else
 		{
 			if (!GatherBrushesInBox(build, record->children[0], mins, maxs,
-				leaf_mark))
+				leaf_mark, origin))
 				return 0;
 			node = record->children[1];
 		}
@@ -628,15 +648,67 @@ static int GatherBrushesInBox(cell_build_t *build, int32_t node,
 			if (brush >= world->brush_count ||
 				build->brush_marks[brush] == leaf_mark)
 				continue;
-			if (!(world->brushes[brush].contents & CELL_PLAYER_SOLID))
-				continue;
-			build->brush_marks[brush] = leaf_mark;
-			if (!GrowArray((void **)&build->brush_list,
-				&build->brush_list_capacity, build->brush_list_count + 1U,
-				UINT32_MAX, sizeof(*build->brush_list)))
-				return 0;
-			build->brush_list[build->brush_list_count++] = brush;
+			if (world->brushes[brush].contents & CELL_PLAYER_SOLID)
+			{
+				gathered_brush_t *entry;
+
+				build->brush_marks[brush] = leaf_mark;
+				if (!GrowArray((void **)&build->brush_list,
+					&build->brush_list_capacity, build->brush_list_count + 1U,
+					UINT32_MAX, sizeof(*build->brush_list)))
+					return 0;
+				entry = &build->brush_list[build->brush_list_count++];
+				entry->brush = brush;
+				memcpy(entry->origin, origin, sizeof(entry->origin));
+			}
+			else if (world->brushes[brush].contents & CELL_HAZARD)
+			{
+				gathered_brush_t *entry;
+
+				build->brush_marks[brush] = leaf_mark;
+				if (!GrowArray((void **)&build->hazard_list,
+					&build->hazard_list_capacity, build->hazard_list_count + 1U,
+					UINT32_MAX, sizeof(*build->hazard_list)))
+					return 0;
+				entry = &build->hazard_list[build->hazard_list_count++];
+				entry->brush = brush;
+				memcpy(entry->origin, origin, sizeof(entry->origin));
+			}
 		}
+	}
+	return 1;
+}
+
+/* The brushes of the world and of every static model that reach a leaf's
+ * hull-expanded box. */
+static int GatherLeafBrushes(cell_build_t *build, const float mins[3],
+	const float maxs[3], uint32_t leaf_mark)
+{
+	const sg_rune_bsp_t *world = build->world;
+	static const float zero[3] = { 0.0f, 0.0f, 0.0f };
+	uint32_t index;
+
+	build->brush_list_count = 0U;
+	build->hazard_list_count = 0U;
+	if (!GatherBrushesInBox(build, world->models[0].headnode, mins, maxs,
+		leaf_mark, zero))
+		return 0;
+	for (index = 0U; index < world->static_count; index++)
+	{
+		const sg_rune_bsp_static_t *fixed = &world->statics[index];
+		float local_mins[3], local_maxs[3];
+		uint32_t axis;
+
+		if (fixed->model >= world->model_count)
+			continue;
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			local_mins[axis] = mins[axis] - fixed->origin[axis];
+			local_maxs[axis] = maxs[axis] - fixed->origin[axis];
+		}
+		if (!GatherBrushesInBox(build, world->models[fixed->model].headnode,
+			local_mins, local_maxs, leaf_mark, fixed->origin))
+			return 0;
 	}
 	return 1;
 }
@@ -656,26 +728,71 @@ static float HullOffset(const sg_cfg_hull_t *hull,
 	return result;
 }
 
+#define SIDE_ORDER_MAX 64U
+
+/* The order a brush's sides are cut in: walls first, then ceilings, floors
+ * last.  A piece outside a side is taken as soon as that side is cut, so
+ * the piece above a floor side is cut last of all and is confined to the
+ * floor's own footprint: a cell that stands on a floor stands on it
+ * everywhere, and the edge of the floor is the edge of the cell.  Cut
+ * first, the piece above the floor would reach out over whatever lies
+ * beside the brush, and a body walking it would walk off the edge. */
+static uint32_t OrderSides(const sg_rune_bsp_t *world,
+	const sg_rune_bsp_brush_t *brush, uint32_t order[SIDE_ORDER_MAX])
+{
+	uint32_t count = brush->side_count < SIDE_ORDER_MAX ? brush->side_count :
+		SIDE_ORDER_MAX;
+	uint32_t rank, filled = 0U;
+
+	for (rank = 0U; rank < 3U; rank++)
+	{
+		uint32_t side;
+
+		for (side = 0U; side < count; side++)
+		{
+			const uint32_t side_index = brush->first_side + side;
+			float nz = 0.0f;
+			uint32_t this_rank;
+
+			if (side_index < world->side_count &&
+				world->sides[side_index].plane < world->plane_count)
+				nz = world->planes[world->sides[side_index].plane].normal[2];
+			this_rank = nz >= 0.7f ? 2U : (nz <= -0.7f ? 1U : 0U);
+			if (this_rank == rank)
+				order[filled++] = side;
+		}
+	}
+	return filled;
+}
+
 /* Subtracts one hull-expanded brush from every polytope in the list.  Pieces
  * outside any side are free and go to the output; what is inside every side
  * is solid and is dropped. */
-static int SubtractBrush(cell_build_t *build, uint32_t brush_index,
+static int SubtractBrush(cell_build_t *build, const gathered_brush_t *entry,
 	const sg_cfg_hull_t *hull, polytope_list_t *pieces,
 	polytope_list_t *out)
 {
 	const sg_rune_bsp_t *world = build->world;
+	const uint32_t brush_index = entry->brush;
 	const sg_rune_bsp_brush_t *brush = &world->brushes[brush_index];
+	uint32_t order[SIDE_ORDER_MAX];
+	const uint32_t ordered = OrderSides(world, brush, order);
 	uint32_t piece;
 
+	if (ordered < brush->side_count)
+	{
+		SetError(build, SG_CONFIGURATION_ERROR_INVALID_WORLD, brush_index);
+		return 0;
+	}
 	for (piece = 0U; piece < pieces->count; piece++)
 	{
 		polytope_t current = pieces->items[piece];
-		uint32_t side;
+		uint32_t rank;
 
 		memset(&pieces->items[piece], 0, sizeof(pieces->items[piece]));
-		for (side = 0U; side < brush->side_count && current.count; side++)
+		for (rank = 0U; rank < ordered && current.count; rank++)
 		{
-			const uint32_t side_index = brush->first_side + side;
+			const uint32_t side_index = brush->first_side + order[rank];
 			const sg_rune_bsp_side_t *record;
 			const sg_rune_bsp_plane_t *source;
 			sg_configuration_plane_t plane;
@@ -691,8 +808,12 @@ static int SubtractBrush(cell_build_t *build, uint32_t brush_index,
 			memset(&plane, 0, sizeof(plane));
 			for (axis = 0U; axis < 3U; axis++)
 				plane.normal[axis] = source->normal[axis];
-			/* Inside the expanded brush: n.p <= d - hull offset. */
-			plane.distance = source->distance - HullOffset(hull, plane.normal);
+			/* Inside the expanded brush: n.p <= d - hull offset, the brush
+			 * standing at its model's origin. */
+			plane.distance = source->distance - HullOffset(hull, plane.normal) +
+				plane.normal[0] * entry->origin[0] +
+				plane.normal[1] * entry->origin[1] +
+				plane.normal[2] * entry->origin[2];
 			plane.source_kind = SG_CONFIGURATION_PLANE_EXPANDED_BRUSH;
 			plane.source_index = side_index;
 			plane.source_variant = SG_CFG_CROUCHING;
@@ -738,15 +859,105 @@ invalid:
 	return 1;
 }
 
+/* Splits every free piece by one lava or slime brush raised by the feet's
+ * depth: what is inside every side is where a body's feet are in it and
+ * goes to the hazard list; the rest stays free.  Both are kept. */
+static int SplitHazard(cell_build_t *build, const gathered_brush_t *entry,
+	polytope_list_t *pieces, polytope_list_t *free_out,
+	polytope_list_t *hazard_out)
+{
+	const sg_rune_bsp_t *world = build->world;
+	const uint32_t brush_index = entry->brush;
+	const sg_rune_bsp_brush_t *brush = &world->brushes[brush_index];
+	uint32_t piece;
+
+	for (piece = 0U; piece < pieces->count; piece++)
+	{
+		polytope_t current = pieces->items[piece];
+		uint32_t side;
+
+		memset(&pieces->items[piece], 0, sizeof(pieces->items[piece]));
+		for (side = 0U; side < brush->side_count && current.count; side++)
+		{
+			const uint32_t side_index = brush->first_side + side;
+			const sg_rune_bsp_side_t *record;
+			const sg_rune_bsp_plane_t *source;
+			sg_configuration_plane_t plane;
+			polytope_t inside, outside;
+			uint32_t axis;
+
+			if (side_index >= world->side_count)
+				goto invalid;
+			record = &world->sides[side_index];
+			if (record->plane >= world->plane_count)
+				goto invalid;
+			source = &world->planes[record->plane];
+			memset(&plane, 0, sizeof(plane));
+			for (axis = 0U; axis < 3U; axis++)
+				plane.normal[axis] = source->normal[axis];
+			plane.distance = source->distance -
+				HullOffset(&build->hazard_hull, plane.normal) +
+				plane.normal[0] * entry->origin[0] +
+				plane.normal[1] * entry->origin[1] +
+				plane.normal[2] * entry->origin[2];
+			plane.source_kind = SG_CONFIGURATION_PLANE_EXPANDED_BRUSH;
+			plane.source_index = side_index;
+			plane.source_variant = SG_CFG_CROUCHING;
+			if (SplitPolytope(&current, &plane, &inside, &outside) < 0)
+			{
+				PolytopeFree(&current);
+				SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY,
+					brush_index);
+				return 0;
+			}
+			PolytopeFree(&current);
+			if (outside.count)
+			{
+				uint32_t face;
+
+				for (face = 0U; face < outside.count; face++)
+					if (outside.faces[face].plane.source_kind ==
+						SG_CONFIGURATION_PLANE_EXPANDED_BRUSH &&
+						outside.faces[face].plane.source_index == side_index)
+						outside.faces[face].plane.reversed = 1U;
+				if (!ListTake(free_out, &outside))
+				{
+					PolytopeFree(&outside);
+					PolytopeFree(&inside);
+					SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY,
+						brush_index);
+					return 0;
+				}
+			}
+			current = inside;
+		}
+		if (current.count && !ListTake(hazard_out, &current))
+		{
+			PolytopeFree(&current);
+			SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, brush_index);
+			return 0;
+		}
+		continue;
+
+invalid:
+		PolytopeFree(&current);
+		SetError(build, SG_CONFIGURATION_ERROR_INVALID_WORLD, brush_index);
+		return 0;
+	}
+	pieces->count = 0U;
+	return 1;
+}
+
 static int EmitCell(cell_build_t *build, const polytope_t *poly,
-	uint32_t leaf_index, sg_cfg_stance_t stance, uint32_t *cell_out);
+	uint32_t leaf_index, sg_cfg_stance_t stance, int hazard,
+	uint32_t *cell_out);
 
 static int CarveLeaf(cell_build_t *build, uint32_t leaf_index,
 	const polytope_t *leaf_poly, const sg_cfg_hull_t *hull)
 {
 	const sg_rune_bsp_t *world = build->world;
 	const sg_rune_bsp_leaf_t *leaf = &world->leaves[leaf_index];
-	polytope_list_t pieces, next;
+	polytope_list_t pieces, next, hazard;
 	float mins[3], maxs[3];
 	uint32_t brush, axis, index;
 
@@ -754,6 +965,7 @@ static int CarveLeaf(cell_build_t *build, uint32_t leaf_index,
 		return 1;
 	memset(&pieces, 0, sizeof(pieces));
 	memset(&next, 0, sizeof(next));
+	memset(&hazard, 0, sizeof(hazard));
 	/* Brushes whose hull expansion can reach this leaf. */
 	for (axis = 0U; axis < 3U; axis++)
 	{
@@ -762,9 +974,7 @@ static int CarveLeaf(cell_build_t *build, uint32_t leaf_index,
 		maxs[axis] = (float)leaf->maxs[axis] +
 			hull->maxs.value[axis] + 1.0f;
 	}
-	build->brush_list_count = 0U;
-	if (!GatherBrushesInBox(build, world->models[0].headnode, mins, maxs,
-		leaf_index + 1U))
+	if (!GatherLeafBrushes(build, mins, maxs, leaf_index + 1U))
 	{
 		SetError(build, SG_CONFIGURATION_ERROR_INVALID_WORLD, leaf_index);
 		return 0;
@@ -790,10 +1000,28 @@ static int CarveLeaf(cell_build_t *build, uint32_t leaf_index,
 	}
 	for (brush = 0U; brush < build->brush_list_count && pieces.count; brush++)
 	{
-		if (!SubtractBrush(build, build->brush_list[brush], hull, &pieces, &next))
+		if (!SubtractBrush(build, &build->brush_list[brush], hull, &pieces, &next))
 		{
 			ListFree(&pieces);
 			ListFree(&next);
+			return 0;
+		}
+		{
+			polytope_list_t swap = pieces;
+
+			pieces = next;
+			next = swap;
+		}
+	}
+	/* Lava and slime: the free pieces are split, not cut away. */
+	for (brush = 0U; brush < build->hazard_list_count && pieces.count; brush++)
+	{
+		if (!SplitHazard(build, &build->hazard_list[brush], &pieces, &next,
+			&hazard))
+		{
+			ListFree(&pieces);
+			ListFree(&next);
+			ListFree(&hazard);
 			return 0;
 		}
 		{
@@ -808,20 +1036,36 @@ static int CarveLeaf(cell_build_t *build, uint32_t leaf_index,
 		uint32_t cell;
 
 		if (!EmitCell(build, &pieces.items[index], leaf_index,
-			SG_CFG_CROUCHING, &cell))
+			SG_CFG_CROUCHING, 0, &cell))
 		{
 			ListFree(&pieces);
 			ListFree(&next);
+			ListFree(&hazard);
+			return 0;
+		}
+	}
+	for (index = 0U; index < hazard.count; index++)
+	{
+		uint32_t cell;
+
+		if (!EmitCell(build, &hazard.items[index], leaf_index,
+			SG_CFG_CROUCHING, 1, &cell))
+		{
+			ListFree(&pieces);
+			ListFree(&next);
+			ListFree(&hazard);
 			return 0;
 		}
 	}
 	ListFree(&pieces);
 	ListFree(&next);
+	ListFree(&hazard);
 	return 1;
 
 out_of_memory:
 	ListFree(&pieces);
 	ListFree(&next);
+	ListFree(&hazard);
 	SetError(build, SG_CONFIGURATION_ERROR_OUT_OF_MEMORY, leaf_index);
 	return 0;
 }
@@ -966,7 +1210,8 @@ static int CellWitness(const sg_configuration_space_t *space,
 }
 
 static int EmitCell(cell_build_t *build, const polytope_t *poly,
-	uint32_t leaf_index, sg_cfg_stance_t stance, uint32_t *cell_out)
+	uint32_t leaf_index, sg_cfg_stance_t stance, int hazard,
+	uint32_t *cell_out)
 {
 	sg_configuration_space_t *space = build->space;
 	const sg_rune_bsp_leaf_t *leaf = &build->world->leaves[leaf_index];
@@ -987,6 +1232,7 @@ static int EmitCell(cell_build_t *build, const polytope_t *poly,
 	cell = &space->cells[cell_index];
 	memset(cell, 0, sizeof(*cell));
 	cell->stance = stance;
+	cell->hazard = hazard ? 1U : 0U;
 	cell->first_face = space->face_count;
 	for (axis = 0U; axis < 3U; axis++)
 	{
@@ -1340,7 +1586,7 @@ static int EmitStancePieces(cell_build_t *build)
 				}
 		for (index = 0U; index < standing.count; index++)
 			if (!EmitCell(build, &standing.items[index],
-				original->bsp_leaf.index, SG_CFG_STANDING, NULL))
+				original->bsp_leaf.index, SG_CFG_STANDING, original->hazard, NULL))
 			{
 				ListFree(&pending);
 				ListFree(&next);
@@ -1349,7 +1595,7 @@ static int EmitStancePieces(cell_build_t *build)
 			}
 		for (index = 0U; index < pending.count; index++)
 			if (!EmitCell(build, &pending.items[index],
-				original->bsp_leaf.index, SG_CFG_CROUCHING, NULL))
+				original->bsp_leaf.index, SG_CFG_CROUCHING, original->hazard, NULL))
 			{
 				ListFree(&pending);
 				ListFree(&next);
@@ -1393,8 +1639,9 @@ static uint64_t FaceKey(const sg_configuration_plane_t *plane,
 	sg_cfg_stance_t stance)
 {
 	uint64_t key = ((uint64_t)plane->source_kind << 56) ^
-		((uint64_t)plane->source_variant << 40) ^
-		((uint64_t)stance << 36) ^ (uint64_t)plane->source_index;
+		((uint64_t)plane->source_variant << 40) ^ (uint64_t)plane->source_index;
+
+	(void)stance;
 
 	key ^= key >> 29;
 	key *= UINT64_C(0x9E3779B97F4A7C15);
@@ -1563,8 +1810,12 @@ static int EmitPortal(cell_build_t *build, uint32_t from, uint32_t to,
 	const uint32_t index = space->portal_count;
 	uint32_t vertex, axis;
 	float clearance = INFINITY;
+	/* The crossing is made in the stance both cells allow: crouching when
+	 * either side is crouch-only. */
+	const sg_cfg_stance_t stance = space->cells[from].stance == SG_CFG_CROUCHING ||
+		space->cells[to].stance == SG_CFG_CROUCHING ? SG_CFG_CROUCHING : SG_CFG_STANDING;
 
-	if (!Clear(build->law, from_witness, to_witness, space->cells[from].stance))
+	if (!Clear(build->law, from_witness, to_witness, stance))
 	{
 		portal_stats.transition_failed++;
 		return 1;
@@ -1582,7 +1833,7 @@ static int EmitPortal(cell_build_t *build, uint32_t from, uint32_t to,
 	memset(portal, 0, sizeof(*portal));
 	portal->from_cell = from;
 	portal->to_cell = to;
-	portal->stance = space->cells[from].stance;
+	portal->stance = stance;
 	portal->plane = from_face->plane;
 	portal->first_vertex = space->vertex_count;
 	portal->vertex_count = polygon->count;
@@ -1640,8 +1891,10 @@ static int EmitPortals(cell_build_t *build)
 		return 0;
 	}
 	memset(hash, 0xFF, (size_t)capacity * sizeof(*hash));
-	/* Faces hashed by construction key and stance; only domain, BSP, and
-	 * brush planes can be shared, and only between cells of one stance. */
+	/* Faces hashed by construction key; only domain, BSP, brush and
+	 * stance-split planes can be shared.  Cells of different stances pair
+	 * too: a standing cell beside a crouch-only one is crossed crouching,
+	 * which the portal's stance records and the witness sweep checks. */
 	for (cell = 0U; cell < space->cell_count; cell++)
 		for (face = 0U; face < space->cells[cell].face_count; face++)
 		{
@@ -1659,7 +1912,7 @@ static int EmitPortals(cell_build_t *build)
 				const sg_configuration_face_t *other_face =
 					&space->faces[other_cell->first_face + other->face];
 
-				if (other->cell != cell && other_cell->stance == owner->stance &&
+				if (other->cell != cell &&
 					SameKey(&other_face->plane, &record->plane) &&
 					Dot(other_face->plane.normal, record->plane.normal) < 0.0f)
 				{
@@ -1811,6 +2064,10 @@ int SG_ConfigurationBuildWithProgress(const sg_rune_bsp_t *bsp,
 
 		memcpy(crouching.mins.value, law->crouching_mins, sizeof(crouching.mins.value));
 		memcpy(crouching.maxs.value, law->crouching_maxs, sizeof(crouching.maxs.value));
+		/* The feet are a unit above the hull's bottom: an origin is in a
+		 * liquid when that point is, so the liquid rises by the depth. */
+		memset(&build.hazard_hull, 0, sizeof(build.hazard_hull));
+		build.hazard_hull.mins.value[2] = law->crouching_mins[2] + 1.0f;
 		if (!CarveNode(&build, build.world->models[0].headnode, &domain, &crouching))
 			goto done;
 	}
@@ -1824,6 +2081,7 @@ done:
 	PolytopeFree(&domain);
 	free(build.brush_marks);
 	free(build.brush_list);
+	free(build.hazard_list);
 	if (ok)
 		*space_out = build.space;
 	else

@@ -52,6 +52,69 @@ static float FlightReach(const sg_tactic_body_t *body, float vertical_velocity)
 	return speed * (2.0f * vertical_velocity / body->gravity);
 }
 
+/* A flight record was traced from the cell's middle at full run speed
+ * toward its portal.  The body reproduces it by being behind the portal
+ * along that launch direction, close to the line, with its own velocity
+ * along it; otherwise it goes to the run-up point first.  launch_out is
+ * the launch's horizontal unit direction when there is one. */
+#define RUN_UP_CLOSE 16.0f
+#define RUN_UP_BEHIND 8.0f
+#define RUN_UP_LATERAL 12.0f
+#define RUN_UP_LATERAL_PER_UNIT 0.2f
+#define RUN_UP_VELOCITY_ALIGNED 0.85f
+#define RUN_UP_VELOCITY_MATTERS 120.0f
+
+static int LinedUp(const sg_rune_step_t *step, const sg_tactic_body_t *body,
+	float launch_out[3])
+{
+	const float lx = step->launch[0], ly = step->launch[1];
+	const float length = sqrtf(lx * lx + ly * ly);
+	float bx, by, along, across, speed;
+
+	if (!step->launch_present || !isfinite(length) || length < 1.0f)
+		return 1;
+	launch_out[0] = lx / length;
+	launch_out[1] = ly / length;
+	launch_out[2] = 0.0f;
+	if (!step->run_up_present)
+		return 1;
+	/* At the run-up point itself, or with no room behind the portal. */
+	bx = step->run_up[0] - step->target[0];
+	by = step->run_up[1] - step->target[1];
+	if (bx * bx + by * by < RUN_UP_BEHIND * RUN_UP_BEHIND)
+		return 1;
+	bx = body->origin[0] - step->run_up[0];
+	by = body->origin[1] - step->run_up[1];
+	if (bx * bx + by * by < RUN_UP_CLOSE * RUN_UP_CLOSE)
+		return 1;
+	bx = body->origin[0] - step->target[0];
+	by = body->origin[1] - step->target[1];
+	along = bx * launch_out[0] + by * launch_out[1];
+	across = fabsf(-bx * launch_out[1] + by * launch_out[0]);
+	if (along > -RUN_UP_BEHIND ||
+		across > RUN_UP_LATERAL + RUN_UP_LATERAL_PER_UNIT * -along)
+		return 0;
+	speed = sqrtf(body->velocity[0] * body->velocity[0] +
+		body->velocity[1] * body->velocity[1]);
+	if (speed > RUN_UP_VELOCITY_MATTERS &&
+		(body->velocity[0] * launch_out[0] + body->velocity[1] * launch_out[1]) <
+			RUN_UP_VELOCITY_ALIGNED * speed)
+		return 0;
+	return 1;
+}
+
+/* Going to the run-up point: eased in over the last body length. */
+static void ToRunUp(const sg_rune_step_t *step, const sg_tactic_body_t *body,
+	sg_tactic_command_t *command)
+{
+	float direction[3], distance, rise;
+
+	if (Steer(body, step->run_up, direction, &distance, &rise))
+		Toward(command, direction, distance < 32.0f ? distance / 32.0f : 1.0f);
+	else
+		command->status = SG_TACTIC_COMMAND_MOVE;
+}
+
 static int AimAngles(const float from[3], const float to[3], float *yaw_out,
 	float *pitch_out)
 {
@@ -69,6 +132,8 @@ static int AimAngles(const float from[3], const float to[3], float *yaw_out,
  * the aim at the bite; the body keeps pushing toward the landing throughout;
  * the rope is let go once the ride has carried the body up to the landing's
  * height or over it, or when the bite is about to be reached. */
+#define EASE_DISTANCE 64.0f       /* a walk that must end at its target slows over this */
+#define HOOK_STAND_CLOSE 24.0f
 #define HOOK_RELEASE_BELOW 8.0f
 #define HOOK_RELEASE_FLAT 40.0f
 #define HOOK_RELEASE_AT_BITE 60.0f
@@ -81,14 +146,32 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 	float eye[3];
 
 	(void)distance;
-	if (have_direction)
+	/* The body pushes toward the landing once the rope has it or once it
+	 * is off the floor; with the bolt still flying it stands where it
+	 * fired, or it runs off the edge before the rope bites. */
+	if (have_direction && !(live == SG_TACTIC_HOOK_IN_FLIGHT && body->supported))
 		Toward(command, direction, 1.0f);
+	if (live == SG_TACTIC_HOOK_IN_FLIGHT && body->supported)
+		command->status = SG_TACTIC_COMMAND_MOVE;
 	if (live == SG_TACTIC_HOOK_IDLE || live == SG_TACTIC_HOOK_COAST)
 	{
 		if (step->hook_point_present == 0U || body->hook_ready == 0U)
 		{
 			command->status = SG_TACTIC_COMMAND_UNSUPPORTED;
 			return;
+		}
+		/* The ride was traced from the cell's middle: fire from there, so
+		 * the pull runs the line the record checked. */
+		if (body->supported && step->run_up_present)
+		{
+			const float dx = step->run_up[0] - body->origin[0];
+			const float dy = step->run_up[1] - body->origin[1];
+
+			if (dx * dx + dy * dy > HOOK_STAND_CLOSE * HOOK_STAND_CLOSE)
+			{
+				ToRunUp(step, body, command);
+				return;
+			}
 		}
 		memcpy(eye, body->origin, sizeof(eye));
 		eye[2] += body->view_height;
@@ -105,6 +188,9 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 	if (live == SG_TACTIC_HOOK_ATTACHED)
 	{
 		float dx = step->target[0] - body->origin[0];
+
+		/* The ride was swept with the crouch hull: ride crouched. */
+		command->up = -1.0f;
 		float dy = step->target[1] - body->origin[1];
 		float flat = sqrtf(dx * dx + dy * dy);
 		float to_bite = INFINITY;
@@ -178,16 +264,33 @@ int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 	{
 	case SG_RUNE_MOVE_WALK:
 	case SG_RUNE_MOVE_RAMP:
-	case SG_RUNE_MOVE_DROP:
 	case SG_RUNE_MOVE_AIR_CONTROL:
 	case SG_RUNE_MOVE_MOVER:
 	case SG_RUNE_MOVE_EXTERNAL_FORCE:
 		if (have_direction)
+			Toward(&command, direction, step->ease && distance < EASE_DISTANCE ?
+				distance / EASE_DISTANCE : 1.0f);
+		break;
+	case SG_RUNE_MOVE_DROP:
+	{
+		float launch[3];
+
+		/* Off the edge along the record's own line, from behind it. */
+		if (body->supported != 0U && !LinedUp(step, body, launch))
+		{
+			ToRunUp(step, body, &command);
+			break;
+		}
+		if (body->supported != 0U && step->launch_present)
+			Toward(&command, launch, 1.0f);
+		else if (have_direction)
 			Toward(&command, direction, 1.0f);
 		break;
+	}
 	case SG_RUNE_MOVE_CROUCH:
 		if (have_direction)
-			Toward(&command, direction, 1.0f);
+			Toward(&command, direction, step->ease && distance < EASE_DISTANCE ?
+				distance / EASE_DISTANCE : 1.0f);
 		command.up = -1.0f;
 		command.status = SG_TACTIC_COMMAND_MOVE;
 		break;
@@ -206,10 +309,21 @@ int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 		}
 		break;
 	case SG_RUNE_MOVE_JUMP:
-		/* Run at the crossing; press jump once it is within the jump's own
-		 * reach, so the arc lands past the portal rather than short of it.
-		 * Off the ground the press is nothing and the run is air control. */
-		if (have_direction)
+	{
+		float launch[3];
+
+		/* Run at the crossing along the record's line, from behind it;
+		 * press jump once it is within the jump's own reach, so the arc
+		 * lands past the portal rather than short of it.  Off the ground
+		 * the press is nothing and the run is air control. */
+		if (body->supported != 0U && !LinedUp(step, body, launch))
+		{
+			ToRunUp(step, body, &command);
+			break;
+		}
+		if (body->supported != 0U && step->launch_present)
+			Toward(&command, launch, 1.0f);
+		else if (have_direction)
 			Toward(&command, direction, 1.0f);
 		if (body->supported != 0U && (distance <=
 			FlightReach(body, body->law ? body->law->jump_velocity : 0.0f) ||
@@ -219,15 +333,25 @@ int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 			command.status = SG_TACTIC_COMMAND_MOVE;
 		}
 		break;
+	}
 	case SG_RUNE_MOVE_ROCKET_JUMP:
 	{
 		sg_rune_rocket_jump_t launch;
+		float line[3];
 
 		/* The launcher must be in hand first; until it is, close in on the
-		 * crossing.  Then, on the ground, within the launch's reach: face
-		 * the crossing, aim straight down, fire and jump in one command. */
+		 * crossing along the record's line, from behind it.  Then, on the
+		 * ground, within the launch's reach: face the crossing, aim straight
+		 * down, fire and jump in one command. */
 		command.want_launcher = 1U;
-		if (have_direction)
+		if (body->supported != 0U && !LinedUp(step, body, line))
+		{
+			ToRunUp(step, body, &command);
+			break;
+		}
+		if (body->supported != 0U && step->launch_present)
+			Toward(&command, line, 1.0f);
+		else if (have_direction)
 			Toward(&command, direction, 1.0f);
 		if (body->launcher_ready == 0U || body->supported == 0U || !body->law ||
 			!SG_RuneLawRocketJump(body->law, &launch))

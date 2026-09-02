@@ -418,7 +418,36 @@ void SG_RuneBspFree(sg_rune_bsp_t *bsp)
 		return;
 	free(bsp->arena);
 	free(bsp->entities_owned);
+	free(bsp->statics_owned);
 	memset(bsp, 0, sizeof(*bsp));
+}
+
+int SG_RuneBspSetStatics(sg_rune_bsp_t *bsp, const sg_rune_bsp_static_t *statics,
+	uint32_t count)
+{
+	sg_rune_bsp_static_t *copy = NULL;
+	uint32_t index, kept = 0U;
+
+	if (!bsp)
+		return 0;
+	if (count && statics)
+	{
+		copy = malloc((size_t)count * sizeof(*copy));
+		if (!copy)
+			return 0;
+		for (index = 0U; index < count; index++)
+		{
+			/* Model 0 is the world itself; an index past the file is refused. */
+			if (statics[index].model == 0U || statics[index].model >= bsp->model_count)
+				continue;
+			copy[kept++] = statics[index];
+		}
+	}
+	free(bsp->statics_owned);
+	bsp->statics_owned = copy;
+	bsp->statics = copy;
+	bsp->static_count = kept;
+	return 1;
 }
 
 int SG_RuneBspReplaceEntities(sg_rune_bsp_t *bsp, const char *text)
