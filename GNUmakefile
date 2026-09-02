@@ -453,6 +453,8 @@ RUNE_COMPACT_READER_SOURCES = \
 	slipgate/sg_rune_compact_model.c \
 	slipgate/sg_rune_compact_source_surface_catalog.c \
 	slipgate/sg_rune_compact_weapon_catalog.c \
+	slipgate/sg_weapon_effect_profile.c \
+	slipgate/sg_rune_model.c \
 	slipgate/sg_rune_compact_analytic.c \
 	slipgate/sg_rune_compact_static.c
 RUNE_COMPACT_READER_HEADERS = $(wildcard *.h slipgate/*.h)
