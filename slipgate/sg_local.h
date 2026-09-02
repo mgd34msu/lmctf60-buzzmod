@@ -11,6 +11,8 @@ typedef enum
 	SG_ROLES
 } sg_role_t;
 
+uint32_t SG_BotStandingCellNear(const vec3_t point);
+
 /* roster (sg_bot_roster.c) */
 qboolean	SG_InternalClientConnect(edict_t *ent);
 qboolean	SG_RetireBotForClient(edict_t *ent);

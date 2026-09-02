@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "sg_bot_orders.h"
+#include "sg_bot_callout.h"
 #include "sg_bot_combat.h"
 #include "sg_bot_items.h"
 #include "sg_cvars.h"
@@ -121,11 +122,21 @@ static edict_t *TeamCarrier(int team)
 typedef struct team_pass_s
 {
 	int assigned[SG_MAXBOTS];
+	int previous[SG_MAXBOTS];  /* last frame's assignment, for stickiness */
 } team_pass_t;
 
 static team_pass_t sg_team_pass;
 
+#define ROLE_KEEP_SCALE 0.6f     /* a held role counts this much nearer */
+
 static uint32_t StandingCellNear(const vec3_t point);
+
+#define ESCORT_GAP_SECONDS 1.0f   /* an escort holds this far behind the carrier */
+
+uint32_t SG_BotStandingCellNear(const vec3_t point)
+{
+	return StandingCellNear(point);
+}
 
 static int RoleFor(sg_bot_t *bot, qboolean carrying)
 {
@@ -142,31 +153,17 @@ static int RoleFor(sg_bot_t *bot, qboolean carrying)
 	return role;
 }
 
-/* Where a team's flag is now: with its carrier, or wherever the flag entity
- * stands (its base, or the ground it was dropped on). */
+/* Where a team's flag is now: with its carrier, or wherever the game's one
+ * flag entity for that team stands (its base, or where it was dropped). */
 static qboolean FlagNow(int team, vec3_t out)
 {
 	edict_t *flag = ctf_flagsearch(team);
 	edict_t *carrier = TeamCarrier(SG_EnemyTeam(team));
-	int i;
 
 	if (carrier)
 	{
 		VectorCopy(carrier->s.origin, out);
 		return true;
-	}
-	/* A dropped flag is a second entity of the same class, solid. */
-	for (i = 1; i < globals.num_edicts; i++)
-	{
-		edict_t *e = &g_edicts[i];
-
-		if (e->inuse && e->classname && flag && flag->classname &&
-			e != flag && strcmp(e->classname, flag->classname) == 0 &&
-			e->solid != SOLID_NOT && e->item)
-		{
-			VectorCopy(e->s.origin, out);
-			return true;
-		}
 	}
 	if (flag)
 	{
@@ -199,20 +196,26 @@ static float DistanceTo(const edict_t *e, const vec3_t point)
 	return VectorLength(delta);
 }
 
-static int NearestUnassigned(int team, const vec3_t point)
+/* The nearest free bot to a point for a role.  The bot that held the role
+ * last frame counts as nearer than it is, so a role does not flip between
+ * two bots at like distances every frame. */
+static int NearestUnassigned(int team, const vec3_t point, int role)
 {
 	int i, best = -1;
-	float best_distance = 1.0e9f;
+	float best_distance = 1.0e30f;
 
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		edict_t *e = sg_bots[i].ent;
 		float distance;
 
-		if (!sg_bots[i].active || !e || !e->client || e->deadflag ||
-			e->client->ctf.teamnum != team || sg_team_pass.assigned[i] >= 0)
+		if (!sg_bots[i].active || !e || !e->client ||
+			e->client->ctf.teamnum != team || sg_team_pass.assigned[i] >= 0 ||
+			e->health <= 0)
 			continue;
 		distance = DistanceTo(e, point);
+		if (sg_team_pass.previous[i] == role)
+			distance *= ROLE_KEEP_SCALE;
 		if (distance < best_distance)
 		{
 			best_distance = distance;
@@ -261,7 +264,7 @@ static void TeamPass(int team)
 
 		while (recoverers-- > 0)
 		{
-			int slot = NearestUnassigned(team, flag_now);
+			int slot = NearestUnassigned(team, flag_now, SG_ROLE_RECOVER);
 
 			if (slot < 0)
 				break;
@@ -276,7 +279,7 @@ static void TeamPass(int team)
 
 		while (want-- > 0)
 		{
-			int slot = NearestUnassigned(team, home);
+			int slot = NearestUnassigned(team, home, SG_ROLE_DEFEND);
 
 			if (slot < 0)
 				break;
@@ -286,7 +289,7 @@ static void TeamPass(int team)
 	/* Our carrier gets the nearest free bot as escort. */
 	if (our_carrier)
 	{
-		int slot = NearestUnassigned(team, our_carrier->s.origin);
+		int slot = NearestUnassigned(team, our_carrier->s.origin, SG_ROLE_ESCORT);
 
 		if (slot >= 0)
 			sg_team_pass.assigned[slot] = SG_ROLE_ESCORT;
@@ -296,6 +299,10 @@ static void TeamPass(int team)
 			sg_bots[i].ent->client->ctf.teamnum == team &&
 			sg_team_pass.assigned[i] < 0)
 			sg_team_pass.assigned[i] = SG_ROLE_ATTACK;
+	for (i = 0; i < SG_MAXBOTS; i++)
+		if (sg_bots[i].active && sg_bots[i].ent && sg_bots[i].ent->client &&
+			sg_bots[i].ent->client->ctf.teamnum == team)
+			sg_team_pass.previous[i] = sg_team_pass.assigned[i];
 }
 
 /* Which of its team's defenders this bot is, in roster order: the first
@@ -550,6 +557,16 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 	}
 	(void)SG_RuneStepSelect(&sg_rune_level.router, field, bot->cell, crouching,
 		destination, &bot->step);
+	/* An escort keeps a second behind the carrier rather than on top of
+	 * it: close enough to fight what reaches the carrier, out of its way. */
+	if (bot->role == SG_ROLE_ESCORT && bot->step.kind == SG_RUNE_STEP_CROSS &&
+		bot->step.cost_to_go < ESCORT_GAP_SECONDS)
+	{
+		bot->step.kind = SG_RUNE_STEP_ARRIVED;
+		bot->step.portal = SG_RUNE_CX_INDEX_NONE;
+		bot->step.capability = SG_RUNE_CX_INDEX_NONE;
+		VectorCopy(e->s.origin, bot->step.target);
+	}
 flight:
 	/* Standing where the complex knows no floor (an entity's top, a brush
 	 * model): walk to the nearest floor the field reaches from. */
@@ -749,6 +766,60 @@ static void ApplyMechanism(sg_bot_t *bot, edict_t *e)
 	}
 }
 
+/* Teammates do not walk through each other: a teammate close ahead pushes
+ * the direction sideways, away from it, the more the closer. */
+#define GIVE_WAY_REACH 56.0f
+
+static void GiveWay(const edict_t *e, float direction[3])
+{
+	int i;
+	float push[2] = { 0.0f, 0.0f };
+
+	for (i = 1; i <= game.maxclients; i++)
+	{
+		const edict_t *other = &g_edicts[i];
+		float dx, dy, flat, ahead, side, weight;
+
+		if (other == e || !other->inuse || !other->client || other->health <= 0 ||
+			other->client->ctf.teamnum != e->client->ctf.teamnum)
+			continue;
+		dx = other->s.origin[0] - e->s.origin[0];
+		dy = other->s.origin[1] - e->s.origin[1];
+		if (fabsf(other->s.origin[2] - e->s.origin[2]) > 48.0f)
+			continue;
+		flat = sqrtf(dx * dx + dy * dy);
+		if (flat >= GIVE_WAY_REACH || flat < 1.0f)
+			continue;
+		ahead = (dx * direction[0] + dy * direction[1]) / flat;
+		if (ahead < 0.3f)
+			continue;   /* beside or behind: no need */
+		/* Which side it is on, from our direction; push to the other. */
+		side = direction[0] * dy - direction[1] * dx;
+		weight = (GIVE_WAY_REACH - flat) / GIVE_WAY_REACH;
+		if (side >= 0.0f)
+		{
+			push[0] += direction[1] * weight;
+			push[1] += -direction[0] * weight;
+		}
+		else
+		{
+			push[0] += -direction[1] * weight;
+			push[1] += direction[0] * weight;
+		}
+	}
+	if (push[0] != 0.0f || push[1] != 0.0f)
+	{
+		float x = direction[0] + push[0], y = direction[1] + push[1];
+		float length = sqrtf(x * x + y * y);
+
+		if (length > 1e-3f)
+		{
+			direction[0] = x / length;
+			direction[1] = y / length;
+		}
+	}
+}
+
 static void Emit(sg_bot_t *bot, edict_t *e)
 {
 	usercmd_t cmd;
@@ -779,6 +850,8 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	}
 	moving = command.status != SG_TACTIC_COMMAND_HOLD && command.speed > 0.0f &&
 		isfinite(command.direction[0]) && isfinite(command.direction[1]);
+	if (moving)
+		GiveWay(e, command.direction);
 	if (moving)
 	{
 		float yaw = atan2f(command.direction[1], command.direction[0]) *
@@ -883,6 +956,7 @@ void SG_BotThink(sg_bot_t *bot)
 	bot->death_taught = false;
 	carrying = BotCarrying(e);
 	bot->role = RoleFor(bot, carrying);
+	SG_BotCalloutRole(bot, bot->role);
 	bot->last_role = bot->role;
 	if (carrying && !bot->was_carrying)
 		bot->carry_start = level.time;
@@ -905,7 +979,7 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->step.move_kind = SG_RUNE_MOVE_JUMP;
 	if (sg_cv.debug && sg_cv.debug->value && level.framenum % 50 == 0)
 		gi.dprintf("SGBOT %s role=%d cell=%u dest=%u step=%s/%s at=(%.0f %.0f %.0f) "
-			"target=(%.0f %.0f %.0f) cost=%.1f st=%c%c v=%.0f hook=%d\n",
+			"target=(%.0f %.0f %.0f) cost=%.1f st=%c%c v=%.0f hook=%d hp=%d\n",
 			e->client->pers.netname,
 			bot->role, (unsigned int)bot->cell, (unsigned int)bot->destination_cell,
 			SG_RuneStepKindString(bot->step.kind),
@@ -915,7 +989,7 @@ void SG_BotThink(sg_bot_t *bot)
 			bot->step.target[1], bot->step.target[2], bot->step.cost_to_go,
 			(e->client->ps.pmove.pm_flags & PMF_DUCKED) ? 'C' : 'S',
 			bot->step.crouching_next ? 'c' : 's', VectorLength(e->velocity),
-			e->client->hookstate);
+			e->client->hookstate, e->health);
 	Emit(bot, e);
 }
 
@@ -930,6 +1004,7 @@ void SG_RunFrame(void)
 	Botfill_Frame();
 	TeamPass(CTF_TEAM_RED);
 	TeamPass(CTF_TEAM_BLUE);
+	SG_BotCalloutFrame();
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		edict_t *ent;

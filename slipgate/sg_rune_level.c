@@ -392,7 +392,11 @@ static int BuildPosts(post_set_t *set, uint32_t flag_cell)
 	{
 		uint32_t best = SG_RUNE_CX_INDEX_NONE;
 		float best_score = 0.0f, best_centre[3] = { 0.0f, 0.0f, 0.0f };
+		int attempts = 0;
 
+retry:
+		best = SG_RUNE_CX_INDEX_NONE;
+		best_score = 0.0f;
 		for (cell = 0U; cell < cell_count; cell++)
 		{
 			float cost = field->cost[SG_RUNE_FIELD_STATE(cell, 0)];
@@ -401,7 +405,7 @@ static int BuildPosts(post_set_t *set, uint32_t flag_cell)
 			int other;
 
 			if (!(cost >= 0.0f && cost <= POST_REACH_SECONDS) ||
-				Flat(centre, flag_centre) < POST_MIN_FROM_FLAG)
+				Flat(centre, flag_centre) < POST_MIN_FROM_FLAG || covered[cell] == 2U)
 				continue;
 			for (other = 0; other < slot; other++)
 				if (Flat(centre, &sg_rune_level.router.cell_center[set->post[other] * 3U]) <
@@ -419,6 +423,21 @@ static int BuildPosts(post_set_t *set, uint32_t flag_cell)
 		}
 		if (best == SG_RUNE_CX_INDEX_NONE)
 			break;
+		/* The post must be reachable from the flag as well as cover it: a
+		 * ledge that only drops to the flag is no post.  A few tries. */
+		{
+			const sg_rune_field_t *to_post = SG_RuneLevelField(best);
+
+			if (!to_post || !(to_post->cost[SG_RUNE_FIELD_STATE(flag_cell, 0)] <
+				POST_REACH_SECONDS * 2.0f))
+			{
+				weight[best] = 0.0f;   /* not an approach either, from now on */
+				covered[best] = 2U;    /* excluded as a post */
+				if (++attempts < 12)
+					goto retry;
+				break;
+			}
+		}
 		set->post[slot] = best;
 		memcpy(set->facing[slot], best_centre, sizeof(set->facing[slot]));
 		MarkCovered(best, covered);

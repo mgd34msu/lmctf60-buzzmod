@@ -359,6 +359,7 @@
     <ClCompile Include="slipgate\sg_rune_movement_build.c" />
     <ClCompile Include="slipgate\sg_rune_movement.c" />
     <ClCompile Include="slipgate\sg_rune_locate.c" />
+    <ClCompile Include="slipgate\sg_bot_callout.c" />
     <ClCompile Include="slipgate\sg_bot_combat.c" />
     <ClCompile Include="slipgate\sg_bot_items.c" />
     <ClCompile Include="slipgate\sg_bot_orders.c" />
@@ -462,6 +463,7 @@
     <ClInclude Include="slipgate\sg_rune_locate.h" />
     <ClInclude Include="slipgate\sg_ammo_pickup.h" />
     <ClInclude Include="slipgate\sg_armor_pickup.h" />
+    <ClInclude Include="slipgate\sg_bot_callout.h" />
     <ClInclude Include="slipgate\sg_bot_combat.h" />
     <ClInclude Include="slipgate\sg_bot_items.h" />
     <ClInclude Include="slipgate\sg_bot_orders.h" />

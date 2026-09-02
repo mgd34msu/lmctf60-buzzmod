@@ -1,5 +1,7 @@
 #include "sg_rune_locate.h"
 
+#define SG_RUNE_LOCATE_FLOOR_SLACK 2.0f   /* units over a floor cell that still count as in it */
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -220,15 +222,17 @@ uint32_t SG_RuneLocate(const sg_rune_locator_t *locator,
 
 		if (violation > slack)
 			continue;
-		/* Inside a stance-valid cell beats everything; then nearer beats
-		 * farther; a stance-valid near miss beats an invalid exact hit. */
+		/* A stance-valid cell beats an invalid one; among those, a floor
+		 * cell the body is within a step of its top beats an air cell it
+		 * is exactly inside (a body at rest sits a unit or two over the
+		 * carve's floor level); then nearer beats farther. */
 		supported = (locator->artifact->complex.cells[cell].semantics &
-			SG_RUNE_CX_CELL_SUPPORTED) != 0;
+			SG_RUNE_CX_CELL_SUPPORTED) != 0 && violation <= SG_RUNE_LOCATE_FLOOR_SLACK;
 		if (best == SG_RUNE_CX_INDEX_NONE ||
 			(stance_ok && !best_stance) ||
-			(stance_ok == best_stance && violation < best_violation) ||
-			(stance_ok == best_stance && violation == best_violation &&
-				supported && !best_supported))
+			(stance_ok == best_stance && supported && !best_supported) ||
+			(stance_ok == best_stance && supported == best_supported &&
+				violation < best_violation))
 		{
 			best = cell;
 			best_violation = violation;

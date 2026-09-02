@@ -545,7 +545,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o g_skins.o g_tourney.o \
 	slipgate/sg_rune_locate.o slipgate/sg_rune_field.o slipgate/sg_rune_flight.o \
 	slipgate/sg_rune_fire.o \
 	slipgate/sg_rune_level.o slipgate/sg_bot_frame.o slipgate/sg_bot_orders.o \
-	slipgate/sg_bot_combat.o slipgate/sg_bot_items.o slipgate/sg_bsp_world.o slipgate/sg_host_collision.o \
+	slipgate/sg_bot_callout.o slipgate/sg_bot_combat.o slipgate/sg_bot_items.o slipgate/sg_bsp_world.o slipgate/sg_host_collision.o \
 	slipgate/sg_bsp_entity_semantics.o \
 	slipgate/sg_bsp_entity_semantics_audit_expected.o \
 	slipgate/sg_bsp_entity_semantics_publication.o slipgate/sg_rune_model.o \

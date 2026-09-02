@@ -3,6 +3,7 @@
 #undef world
 #include "sg_local.h"
 #include "sg_bot.h"
+#include "sg_bot_callout.h"
 #include "sg_bot_combat.h"
 
 #include <math.h>
@@ -226,7 +227,10 @@ static edict_t *Look(edict_t *self, combat_state_t *state)
 	if (best)
 	{
 		if (best != state->target)
+		{
 			state->target_since = level.time;
+			SG_BotCalloutSeen(self, &g_edicts[best]);
+		}
 		state->target = best;
 		return &g_edicts[best];
 	}
@@ -682,6 +686,36 @@ void SG_BotCombatFrame(edict_t *self, usercmd_t *cmd, qboolean *engaged_out)
 	{
 		/* Nothing to fight: the view follows the walk; keep the best
 		 * general-purpose weapon in hand for what comes next. */
+		if (sg_cv.debug && sg_cv.debug->value && level.framenum % 50 == 0)
+		{
+			int i, nearest = 0;
+			float nearest_range = 1.0e9f;
+
+			for (i = 1; i <= game.maxclients; i++)
+			{
+				edict_t *other = &g_edicts[i];
+				vec3_t d;
+				float r;
+
+				if (!Enemy(self, other))
+					continue;
+				VectorSubtract(other->s.origin, self->s.origin, d);
+				r = VectorLength(d);
+				if (r < nearest_range)
+				{
+					nearest_range = r;
+					nearest = i;
+				}
+			}
+			if (nearest)
+				gi.dprintf("SGFIGHT %s no target; nearest enemy %s range=%.0f "
+					"visible=%d\n", self->client->pers.netname,
+					g_edicts[nearest].client->pers.netname, nearest_range,
+					Visible(self, &g_edicts[nearest]) ? 1 : 0);
+			else
+				gi.dprintf("SGFIGHT %s no target; no enemy in the game\n",
+					self->client->pers.netname);
+		}
 		state->aim_valid = false;
 		if (level.time - state->choice_at > 2.0f)
 		{
