@@ -4,9 +4,6 @@
 #include "g_tourney.h"
 #include "slipgate/sg_cvars.h"
 
-void SG_CombatHit(edict_t *att, edict_t *victim);
-void SG_NoteDamage(edict_t *victim, edict_t *att, uint64_t att_ctfid,
-	int dmg, int means, vec3_t d);
 
 /*
 ============
@@ -645,11 +642,8 @@ void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, 
 		targ->health = targ->health - take;
 
 		// Record accuracy only after damage lands.
-		SG_CombatHit(attacker, targ);
 
 		// Publish the hit to SG perception after damage lands.
-		SG_NoteDamage(targ, attacker,
-		    G_DamageAttackerCtfid(inflictor, attacker), take, mod, dir);
 
 		/* Debug damage telemetry records the committed hit. */
 		if (sg_cv.debug->value && client &&

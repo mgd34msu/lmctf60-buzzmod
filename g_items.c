@@ -30,8 +30,6 @@ void Weapon_BFG(edict_t* ent);
 // SKWiD MOD
 #include "plasma.h"
 
-void SG_NoteItemTaken(edict_t *taker, edict_t *item);
-void SG_NoteItemRejected(edict_t *taker, edict_t *item);
 extern void Weapon_Plasma(edict_t* ent);
 extern void Use_PLASMA(edict_t* ent, gitem_t* inv);
 // END
@@ -1082,7 +1080,6 @@ void Touch_Item(edict_t* ent, edict_t* other, cplane_t* plane, csurface_t* surf)
 		return;		// dead people can't pickup
 	if (!ent->item->pickup)
 	{
-		SG_NoteItemRejected(other, ent);
 		return;		// not a grabbable item?
 	}
 
@@ -1093,7 +1090,6 @@ void Touch_Item(edict_t* ent, edict_t* other, cplane_t* plane, csurface_t* surf)
 		// game's pickup law refused it. Retire that owner's errand before
 		// targets may mutate or free the entity; another client's rejected
 		// touch cannot affect the claimant.
-		SG_NoteItemRejected(other, ent);
 	}
 
 	if (taken)
@@ -1131,7 +1127,6 @@ void Touch_Item(edict_t* ent, edict_t* other, cplane_t* plane, csurface_t* surf)
 		// is allowed to free its caller through a self-matching killtarget, so a
 		// later notification can silently lose a successful quad/invuln pickup.
 		// Every decision about whether it matters remains in sg_caco.c.
-		SG_NoteItemTaken(other, ent);
 	}
 
 	if (!(ent->spawnflags & ITEM_TARGETS_USED))

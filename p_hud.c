@@ -2,7 +2,6 @@
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "g_tourney.h"
 #include "bat.h"
-#include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatLevelEnd from BeginIntermission
 #include "slipgate/sg_local.h"
 #include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionRecord from BeginIntermission
 #include "ui_boards.h"              // settled boards: UI_Boards_MatchEnd from BeginIntermission
@@ -107,7 +106,6 @@ void BeginIntermission (edict_t *targ)
 	 * it can end intermission (ClientThink, this file's counterpart in
 	 * p_client.c).
 	 */
-	SG_ChatLevelEnd();
 
 	/*
 	 * The session attendance, for the same reason and in the same place: the
