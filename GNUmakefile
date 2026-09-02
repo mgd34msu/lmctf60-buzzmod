@@ -550,7 +550,7 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o g_skins.o g_tourney.o \
 	slipgate/sg_bsp_entity_semantics_audit_expected.o \
 	slipgate/sg_bsp_entity_semantics_publication.o slipgate/sg_rune_model.o \
 	slipgate/sg_host_pmove.o slipgate/sg_host_engine_pmove.o \
-	slipgate/sg_host_engine_runtime.o slipgate/sg_host_engine_parity.o \
+	slipgate/sg_host_engine_runtime.o  \
 	slipgate/sg_host_hook_law.o slipgate/sg_host_mechanism_law.o \
 	slipgate/sg_host_law_owner.o slipgate/sg_host_law_publication.o \
 	slipgate/sg_weapon_effect_profile.o sg_net.o slipgate/sg_persona.o
@@ -792,9 +792,6 @@ slipgate/sg_host_engine_runtime.o: slipgate/sg_host_engine_runtime.c \
 		slipgate/sg_host_pmove.h slipgate/sg_host_collision.h \
 		slipgate/sg_bsp_world.h slipgate/sg_identity.h \
 		slipgate/sg_destination.h game.h q_shared.h
-slipgate/sg_host_engine_parity.o: slipgate/sg_host_engine_parity.c \
-		slipgate/sg_host_engine_parity.h slipgate/sg_host_engine_pmove.h \
-		game.h q_shared.h
 slipgate/sg_host_hook_law.o: slipgate/sg_host_hook_law.c \
 		slipgate/sg_host_hook_law.h slipgate/sg_host_pmove.h \
 		slipgate/sg_weapon_host_constants.h q_shared.h
@@ -809,7 +806,7 @@ slipgate/sg_host_law_publication.o: slipgate/sg_host_law_publication.c \
 		slipgate/sg_host_law_publication_private.h \
 		slipgate/sg_host_collision.h \
 		slipgate/sg_host_pmove.h slipgate/sg_host_engine_pmove.h \
-		slipgate/sg_host_engine_parity.h slipgate/sg_host_hook_law.h \
+		slipgate/sg_host_hook_law.h \
 		slipgate/sg_host_mechanism_law.h slipgate/sg_weapon_host_constants.h \
 		game.h q_shared.h
 
