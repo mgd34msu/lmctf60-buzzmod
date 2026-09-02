@@ -732,6 +732,9 @@ static void ThinkDead(sg_bot_t *bot, edict_t *e)
 /* The cell a body would stand in at or near a point: flags, items, and
  * players sit at various heights over their floor, so try the standing
  * origin above the point first, then the point, then higher and lower. */
+#define STAND_SEARCH_RADIUS 160.0f /* a destination's floor is looked for this far around it */
+#define STAND_SEARCH_RISE 96.0f
+
 static uint32_t StandingCellNear(const vec3_t point)
 {
 	static const float rises[] = { 24.0f, 0.0f, 48.0f, -24.0f, 72.0f, 12.0f };
@@ -778,6 +781,15 @@ static uint32_t StandingCellNear(const vec3_t point)
 				(sg_rune_level.artifact.complex.cells[cell].semantics & SG_RUNE_CX_CELL_SUPPORTED))
 				return cell;
 		}
+	}
+	/* Still nothing: the nearest floor cell around the point.  An air
+	 * cell as a destination reaches nothing and parks the body. */
+	{
+		uint32_t near = SG_RuneLocateNearestFloor(&sg_rune_level.locator, point,
+			STAND_SEARCH_RADIUS, STAND_SEARCH_RISE);
+
+		if (near != SG_RUNE_CX_INDEX_NONE)
+			return near;
 	}
 	return first;
 }
