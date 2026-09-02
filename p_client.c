@@ -2821,7 +2821,6 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 	
 	level.current_entity = ent;
 	client = ent->client;
-	SG_HumanSpeedClientThinkBegin(ent);
 	
 	// CTF CODE -- LM_JORM
 	//surt spam control
@@ -3022,9 +3021,7 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 		}
 		else
 		{
-			SG_HumanSpeedPmoveBegin(ent, &pm.s, pm.cmd.msec);
 			gi.Pmove (&pm);
-			SG_HumanSpeedPmoveEnd(ent, &pm.s, pm.cmd.msec);
 		}
 
 		// save results of pmove

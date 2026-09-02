@@ -11,13 +11,6 @@ typedef enum
 	SG_ROLES
 } sg_role_t;
 
-/* strafe-jump landing adapter (sg_human_speed.c) */
-void	SG_HumanSpeedClientThinkBegin(edict_t *ent);
-void	SG_HumanSpeedPmoveBegin(edict_t *ent, pmove_state_t *pmove,
-	unsigned command_msec);
-void	SG_HumanSpeedPmoveEnd(edict_t *ent, const pmove_state_t *pmove,
-	unsigned command_msec);
-
 /* roster (sg_bot_roster.c) */
 qboolean	SG_InternalClientConnect(edict_t *ent);
 qboolean	SG_RetireBotForClient(edict_t *ent);

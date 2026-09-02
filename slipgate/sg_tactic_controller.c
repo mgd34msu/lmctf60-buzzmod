@@ -108,7 +108,7 @@ int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 	sg_tactic_command_t *command_out)
 {
 	sg_tactic_command_t command;
-	float direction[3];
+	float direction[3] = { 0.0f, 0.0f, 0.0f };
 	float distance = 0.0f;
 	float rise = 0.0f;
 	int have_direction;

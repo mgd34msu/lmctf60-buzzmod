@@ -21,6 +21,11 @@ qboolean SG_BotLauncherReady(edict_t *self);   /* in hand, ready, loaded */
 void SG_BotRequestLauncher(edict_t *self);
 qboolean SG_BotHookReady(edict_t *self);       /* the offhand hook may fire */
 
+/* A sound a player made (from the net bridge): bots within earshot note
+ * where an enemy was heard. */
+void SG_NoteSound(edict_t *emitter, vec3_t origin, int channel,
+	int soundindex, float volume, float attenuation);
+
 /* Level and client lifecycle. */
 void SG_BotCombatReset(void);
 void SG_BotCombatResetClient(edict_t *self);

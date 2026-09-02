@@ -224,10 +224,7 @@ SPECTATOR_SOUND_TEST_ALL_ARTIFACTS = \
 	.sg_spectator_sound_test.$(flavor).d \
 	.sg_spectator_sound_net_under_test.$(flavor).o \
 	.sg_spectator_sound_net_under_test.$(flavor).d)
-HUMAN_SPEED_TEST_BIN = sg_human_speed_test.gnu
-HUMAN_SPEED_TEST_OBJS = .sg_human_speed_test.gnu.o \
-	.sg_human_speed_under_test.gnu.o \
-	.sg_human_speed_pmove_under_test.gnu.o \
+HUMAN_SPEED_TEST_OBJS = .sg_human_speed_pmove_under_test.gnu.o \
 	.sg_human_speed_q_shared_under_test.gnu.o
 HUMAN_SPEED_TEST_DEPS = $(HUMAN_SPEED_TEST_OBJS:.o=.d)
 HUMAN_TRACE_IO_TEST_BIN = sg_human_trace_io_test.gnu
@@ -542,12 +539,12 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o g_skins.o g_tourney.o \
 	slipgate/sg_rune_source_authority.o slipgate/sg_rune_v2_content_identity.o \
 	sg_cvars.o sg_hooks.o sg_util.o slipgate/sg_bot_roster.o \
 	slipgate/sg_client_ownership.o slipgate/sg_pov_identity.o \
-	slipgate/sg_human_speed.o slipgate/sg_tactic_controller.o \
-	slipgate/sg_destination.o slipgate/sg_rune_game.o slipgate/sg_rune_cx.o \
-	slipgate/sg_rune_analytic.o slipgate/sg_rune_movement.o \
-	slipgate/sg_rune_artifact.o slipgate/sg_rune_locate.o \
-	slipgate/sg_rune_field.o slipgate/sg_rune_flight.o slipgate/sg_rune_level.o \
-	slipgate/sg_bot_frame.o slipgate/sg_bot_orders.o slipgate/sg_bot_combat.o slipgate/sg_bsp_world.o slipgate/sg_host_collision.o \
+	slipgate/sg_tactic_controller.o slipgate/sg_destination.o \
+	slipgate/sg_rune_game.o slipgate/sg_rune_cx.o slipgate/sg_rune_analytic.o \
+	slipgate/sg_rune_movement.o slipgate/sg_rune_artifact.o \
+	slipgate/sg_rune_locate.o slipgate/sg_rune_field.o slipgate/sg_rune_flight.o \
+	slipgate/sg_rune_level.o slipgate/sg_bot_frame.o slipgate/sg_bot_orders.o \
+	slipgate/sg_bot_combat.o slipgate/sg_bsp_world.o slipgate/sg_host_collision.o \
 	slipgate/sg_bsp_entity_semantics.o \
 	slipgate/sg_bsp_entity_semantics_audit_expected.o \
 	slipgate/sg_bsp_entity_semantics_publication.o slipgate/sg_rune_model.o \
@@ -1222,18 +1219,7 @@ $(ENTFILE_TEST_BIN): $(ENTFILE_TEST_OBJS)
 
 
 
-.sg_human_speed_test.gnu.o: tests/sg_human_speed_test.c \
-		slipgate/sg_human_speed.h tests/support/yq2_pmove.c \
-		$(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_human_speed_under_test.gnu.o: slipgate/sg_human_speed.c \
-		slipgate/sg_human_speed.h $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_human_speed_pmove_under_test.gnu.o: tests/support/yq2_pmove.c \
 		q_shared.h $(REVISION_HEADER)

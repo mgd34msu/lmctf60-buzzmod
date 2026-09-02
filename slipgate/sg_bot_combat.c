@@ -237,6 +237,51 @@ static edict_t *Look(edict_t *self, combat_state_t *state)
 	return NULL;
 }
 
+/* A sound carries as far as its attenuation lets it; every bot on the
+ * other team within that reach learns where the emitter was, as if seen. */
+void SG_NoteSound(edict_t *emitter, vec3_t origin, int channel,
+	int soundindex, float volume, float attenuation)
+{
+	int i;
+	float reach;
+	vec3_t where;
+
+	(void)channel;
+	(void)soundindex;
+	if (!emitter || !emitter->client || volume <= 0.0f)
+		return;
+	reach = attenuation <= 0.0f ? 8192.0f : 1000.0f / attenuation;
+	if (origin)
+		VectorCopy(origin, where);
+	else
+		VectorCopy(emitter->s.origin, where);
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		edict_t *self = sg_bots[i].ent;
+		combat_state_t *state;
+		vec3_t delta;
+		int ci;
+
+		if (!sg_bots[i].active || !self || !self->client || !Enemy(self, emitter))
+			continue;
+		VectorSubtract(where, self->s.origin, delta);
+		if (VectorLength(delta) > reach)
+			continue;
+		state = StateOf(self);
+		ci = (int)(emitter->client - game.clients);
+		if (!state || ci < 0 || ci >= MAX_CLIENTS)
+			continue;
+		VectorCopy(where, state->seen[ci].origin);
+		VectorCopy(emitter->velocity, state->seen[ci].velocity);
+		state->seen[ci].at = level.time;
+		if (!state->target)
+		{
+			state->target = ci + 1;
+			state->target_since = level.time;
+		}
+	}
+}
+
 /* ---- weapon choice ------------------------------------------------------------ */
 
 /* Expected damage per second of a weapon at this range, from its profile:
