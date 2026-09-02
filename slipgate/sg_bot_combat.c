@@ -643,8 +643,16 @@ static qboolean ShotLands(edict_t *self, const sg_weapon_profile_t *profile,
 		VectorScale(forward, ahead, along);
 		VectorSubtract(to_target, along, delta);
 		miss = VectorLength(delta);
-		allowed = 20.0f + distance * (profile && profile->horizontal_spread > 0.0f ?
-			profile->horizontal_spread / 8192.0f : 0.01f);
+		/* Within the body plus the wider of the weapon's spread and the
+		 * aim's own error cone at this range: the shot is taken, and the
+		 * tremor decides whether it lands. */
+		{
+			float cone = tanf(AimErrorDegrees(self) * (float)M_PI / 180.0f);
+			float spread = profile && profile->horizontal_spread > 0.0f ?
+				profile->horizontal_spread / 8192.0f : 0.0f;
+
+			allowed = 20.0f + distance * (cone > spread ? cone : spread);
+		}
 		return miss <= allowed;
 	}
 }
