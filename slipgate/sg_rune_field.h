@@ -47,6 +47,12 @@ typedef struct sg_rune_field_s
  * the same field reuses its arrays. */
 int SG_RuneFieldBuild(sg_rune_field_t *field, const sg_rune_router_t *router,
 	uint32_t destination_cell);
+/* The same with a surcharge (seconds) added for every cell entered: what
+ * a cell costs beyond the time to cross it, such as being under an
+ * enemy's line of fire.  NULL surcharge is the plain build. */
+int SG_RuneFieldBuildWeighted(sg_rune_field_t *field,
+	const sg_rune_router_t *router, uint32_t destination_cell,
+	const float *cell_surcharge);
 void SG_RuneFieldFree(sg_rune_field_t *field);
 
 typedef enum sg_rune_step_kind_e

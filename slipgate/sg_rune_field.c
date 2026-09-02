@@ -285,6 +285,13 @@ static int HeapPop(heap_t *heap, heap_item_t *out)
 int SG_RuneFieldBuild(sg_rune_field_t *field, const sg_rune_router_t *router,
 	uint32_t destination_cell)
 {
+	return SG_RuneFieldBuildWeighted(field, router, destination_cell, NULL);
+}
+
+int SG_RuneFieldBuildWeighted(sg_rune_field_t *field,
+	const sg_rune_router_t *router, uint32_t destination_cell,
+	const float *cell_surcharge)
+{
 	const sg_rune_artifact_t *artifact;
 	const sg_rune_cx_view_t *cx;
 	const sg_rune_move_table_t *move;
@@ -370,7 +377,8 @@ int SG_RuneFieldBuild(sg_rune_field_t *field, const sg_rune_router_t *router,
 					continue;
 				from_state = SG_RUNE_FIELD_STATE(record->cell, source_stance);
 				candidate = item.cost + edge +
-					(source_stance != crouching ? STANCE_CHANGE_COST : 0.0f);
+					(source_stance != crouching ? STANCE_CHANGE_COST : 0.0f) +
+					(cell_surcharge ? cell_surcharge[cell] : 0.0f);
 				if (candidate < field->cost[from_state])
 				{
 					field->cost[from_state] = candidate;

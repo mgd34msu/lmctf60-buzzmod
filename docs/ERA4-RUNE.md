@@ -77,33 +77,65 @@ replacement runs on a real map.
 
 - `sg_rune_locate`: a 128-unit grid over the cells; a point resolves to the
   cell whose facet planes contain it, preferring a cell valid for the
-  stance and then a supported one (a floor cell's top is an air cell's
-  bottom). bctf01: 33x32x9 buckets, 210k entries, built in 60 ms.
-- `sg_rune_field`: the router indexes arrivals per cell and the cost of
-  every record once per level; a field is one destination's reverse
-  shortest-path pass over (cell, stance) states, 4 ms on bctf01 over the
-  19,966 floor states; a step is what the body does now from its state:
-  arrived, cross this portal this way toward this point, or unreachable.
-  Air cells have no outgoing records, so routing never leaves the floor
-  except by a traced flight.
+  stance, then a floor cell the body is within two units over (a body at
+  rest sits a unit or two over the carve's floor level), then the nearest.
+  bctf01: 33x32x9 buckets, 210k entries, built in 60 ms.
+- `sg_rune_field`: the router indexes arrivals and departures per cell and
+  the cost of every record once per level; a field is one destination's
+  reverse shortest-path pass over (cell, stance) states, 4 ms on bctf01;
+  a weighted build adds a per-cell surcharge (exposure). A step is what
+  the body does now from its state: arrived, cross this capability toward
+  this point (a portal's foot pushed sixteen units into the next cell, a
+  hook's bite and landing, a mechanism's landing), or unreachable. A
+  selection that avoids listed capabilities takes the cheapest other
+  departure by edge cost plus the field beyond it.
+- `sg_rune_fire` (runtime half): the relation for a pair of cells, either
+  cell resolved to its representative.
 - `sg_tactic_controller`: step and body in, command out. Walk, crouch,
   swim, jump (press within the jump's reach), drop, rocket jump (launcher
-  in hand, within reach, aim down, fire and jump), hook (fire at the bite
-  point, release at the crossing).
+  in hand, within reach, aim down, fire and jump), hook (fire at the bite,
+  push toward the landing, let go at the landing's height, over it, or at
+  the bite).
 - `sg_rune_level` (game): loads `<gamedir>/maps/<map>.rune` at level start,
-  refuses it when its identity or law differs from the live host (message
-  names what differs and says to run `sv rune`), builds the locator and
-  router, keeps eight destination fields alive by use.
-- `sg_bot_frame` (game): the driver. Role from carrying and chat orders
-  (carry, recover, escort, defend, attack); destination from the flags and
-  carriers; locate; the destination's cell; the field's step; a body in
-  the air is traced to its landing and steered there; the executor's
-  command becomes the usercmd the host's client think consumes; combat
-  owns the view unless the step does; hook fire and release go through the
-  same entry points a human's commands reach.
-- `tools/fieldcheck`: loads an artifact, locates two points, builds the
-  field, walks the chain. Red flag to blue flag on bctf01: 130 steps, 118
-  walks, 3 jumps, 7 drops, 2 rocket jumps, 26 s of cost.
+  refuses it when its identity or law differs from the live host, builds
+  the locator and router, keeps eight fields alive by use (plain and
+  exposure variants), binds mechanism records to live edicts, answers fire
+  relations, chooses defend posts (the floor cells whose lines cover the
+  most of a flag's approaches, reachable from the flag, the second where
+  the first leaves gaps), and builds the exposure surcharge for a base
+  (every cell its posts and flag can fire into costs two seconds more).
+- `sg_bot_frame` (game): the driver. The team pass assigns roles once per
+  frame per team (recoverers nearest a taken flag, defenders when there
+  are enough of us, an escort for the carrier, the rest attack; a held
+  role counts as nearer so roles do not flap; human orders override).
+  Destinations: the enemy flag or its carrier, our flag or its carrier,
+  the carrier to escort (held a second behind), a defend post. Attackers,
+  carriers and escorts route on the exposure field of the enemy base.
+  Locate; the field's step, never through a crossing that failed on this
+  body lately; a rope that pulls nowhere is let go and its ride avoided;
+  a body in the air is traced to its landing and steered there; item
+  detours priced against the goal; teammates close ahead are given way;
+  the executor's command becomes the usercmd the host's client think
+  consumes; combat owns the view unless the step does; a posted defender
+  with nothing in sight faces the approaches its post covers.
+- `sg_bot_combat` (game): sight and hearing, target choice (our flag's
+  carrier first, else nearest, kept two seconds), weapon choice by expected
+  damage per second under the aim error, scaled by the fire relation for
+  the pair of cells (rays need a line, projectiles a corridor, rockets a
+  corridor or a blast at the feet, grenades a corridor or a lob), a switch
+  finishes before another is asked for; aim with lead and arc; fire when
+  the aimed ray reaches the target or passes within the body plus the
+  weapon's spread at that range, never into our own blast.
+- `sg_bot_callout` (game): team talk for what a teammate cannot see: the
+  enemy carrier and where, incoming at our base, our flag taken, dropped,
+  home, got their flag and which way, need cover, role changes; places
+  named by route time to each flag; rate-limited per bot and per team.
+- `sg_bot_roster`, `sg_bot_orders`, `sg_bot_items`: add, remove, list
+  bots and personas; human orders in; item worth by role.
+- `tools/fieldcheck`: loads an artifact (section sizes, kind tally),
+  locates two points, builds the field, walks the chain; the generation
+  script's acceptance gate. `tools/cellsdump`: the whole offline pipeline
+  with counts and timings.
 - `tests/sg_rune_runtime_test`: a synthetic complex (three floor cells, an
   air column, a lower floor) through locate, movement emission with traced
   flights, the flight tracer, the field, and the step chain.

@@ -603,7 +603,24 @@ grounded:
 		return;
 	}
 	bot->flight_capability = SG_RUNE_CX_INDEX_NONE;
-	field = SG_RuneLevelField(bot->destination_cell);
+	/* Into or out of the enemy base, the route keeps out of the lines the
+	 * enemy's defenders hold where it can. */
+	field = NULL;
+	if (bot->role == SG_ROLE_ATTACK || bot->role == SG_ROLE_CARRY ||
+		bot->role == SG_ROLE_ESCORT)
+	{
+		vec3_t enemy_home;
+
+		if (FlagHome(SG_EnemyTeam(e->client->ctf.teamnum), enemy_home))
+		{
+			uint32_t enemy_flag_cell = StandingCellNear(enemy_home);
+
+			if (enemy_flag_cell != SG_RUNE_CX_INDEX_NONE)
+				field = SG_RuneLevelFieldExposed(bot->destination_cell, enemy_flag_cell);
+		}
+	}
+	if (!field)
+		field = SG_RuneLevelField(bot->destination_cell);
 	if (!field)
 		return;
 	/* An item worth the detour becomes the destination for now; the goal's

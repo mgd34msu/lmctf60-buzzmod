@@ -16,6 +16,7 @@ typedef struct sg_rune_level_field_s
 {
 	sg_rune_field_t field;
 	uint32_t destination_cell;  /* INDEX_NONE when the slot is empty */
+	uint32_t variant;           /* 0 plain; else 1 + exposure index */
 	uint64_t last_used_frame;
 } sg_rune_level_field_t;
 
@@ -43,6 +44,13 @@ int SG_RuneLevelCurrent(void);
 /* The field toward a destination cell, built on first use and kept while
  * it is used.  NULL when nothing is loaded or the cell is out of range. */
 const sg_rune_field_t *SG_RuneLevelField(uint32_t destination_cell);
+
+/* The same field, with every cell the defenders of the flag in
+ * enemy_flag_cell can fire into (their posts and the flag itself) costing
+ * extra: the route an attacker or carrier takes past a guarded base. */
+const sg_rune_field_t *SG_RuneLevelFieldExposed(uint32_t destination_cell,
+	uint32_t enemy_flag_cell);
+void SG_RuneLevelExposureClear(void);
 
 /* The live entity a mechanism record describes (a door, a lift, a pad,
  * a train), bound on first use by its brush model or its position; NULL

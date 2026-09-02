@@ -74,6 +74,7 @@ void SG_RuneLevelClear(void)
 	free(sg_rune_level.mechanism_edict);
 	memset(&sg_rune_level, 0, sizeof(sg_rune_level));
 	memset(sg_posts, 0, sizeof(sg_posts));
+	SG_RuneLevelExposureClear();
 	for (index = 0U; index < SG_RUNE_LEVEL_FIELDS; index++)
 		sg_rune_level.fields[index].destination_cell = SG_RUNE_CX_INDEX_NONE;
 }
@@ -169,7 +170,16 @@ int SG_RuneLevelBegin(const char *mapname)
 	return 1;
 }
 
+static const sg_rune_field_t *FieldVariant(uint32_t destination_cell,
+	uint32_t variant, const float *surcharge);
+
 const sg_rune_field_t *SG_RuneLevelField(uint32_t destination_cell)
+{
+	return FieldVariant(destination_cell, 0U, NULL);
+}
+
+static const sg_rune_field_t *FieldVariant(uint32_t destination_cell,
+	uint32_t variant, const float *surcharge)
 {
 	uint32_t index, victim = 0U;
 	uint64_t oldest = UINT64_MAX;
@@ -182,7 +192,7 @@ const sg_rune_field_t *SG_RuneLevelField(uint32_t destination_cell)
 	{
 		sg_rune_level_field_t *slot = &sg_rune_level.fields[index];
 
-		if (slot->destination_cell == destination_cell)
+		if (slot->destination_cell == destination_cell && slot->variant == variant)
 		{
 			slot->last_used_frame = sg_rune_level.frame;
 			return &slot->field;
@@ -196,13 +206,14 @@ const sg_rune_field_t *SG_RuneLevelField(uint32_t destination_cell)
 	{
 		sg_rune_level_field_t *slot = &sg_rune_level.fields[victim];
 
-		if (!SG_RuneFieldBuild(&slot->field, &sg_rune_level.router,
-			destination_cell))
+		if (!SG_RuneFieldBuildWeighted(&slot->field, &sg_rune_level.router,
+			destination_cell, surcharge))
 		{
 			slot->destination_cell = SG_RUNE_CX_INDEX_NONE;
 			return NULL;
 		}
 		slot->destination_cell = destination_cell;
+		slot->variant = variant;
 		slot->last_used_frame = sg_rune_level.frame;
 		return &slot->field;
 	}
@@ -482,4 +493,114 @@ int SG_RuneLevelDefendPost(uint32_t flag_cell, int slot, float point_out[3],
 	if (facing_out)
 		memcpy(facing_out, set->facing[slot], 3U * sizeof(float));
 	return 1;
+}
+
+/* ---- exposure ------------------------------------------------------------------- */
+
+#define EXPOSURE_SECONDS 2.0f      /* a cell under a defender's line costs this */
+#define EXPOSURE_SETS 2
+
+typedef struct exposure_s
+{
+	uint32_t flag_cell;
+	float *surcharge;          /* per cell */
+} exposure_t;
+
+static exposure_t sg_exposure[EXPOSURE_SETS];
+
+static void ExposeFrom(uint32_t post, float *surcharge)
+{
+	const sg_rune_fire_table_t *fires = &sg_rune_level.artifact.fires;
+	const sg_rune_fire_cell_t *row;
+	uint32_t k;
+
+	if (post >= fires->cell_count)
+		return;
+	row = &fires->cells[post];
+	for (k = 0U; k < row->count; k++)
+		if (fires->records[row->first + k].flags & SG_RUNE_FIRE_LINE)
+			surcharge[fires->records[row->first + k].target] = EXPOSURE_SECONDS;
+}
+
+static const float *Exposure(uint32_t enemy_flag_cell)
+{
+	uint32_t cell_count = sg_rune_level.artifact.complex.cell_count;
+	exposure_t *set = NULL;
+	int index, slot;
+
+	for (index = 0; index < EXPOSURE_SETS; index++)
+		if (sg_exposure[index].surcharge && sg_exposure[index].flag_cell == enemy_flag_cell)
+			return sg_exposure[index].surcharge;
+	for (index = 0; index < EXPOSURE_SETS; index++)
+		if (!sg_exposure[index].surcharge)
+		{
+			set = &sg_exposure[index];
+			break;
+		}
+	if (!set)
+		set = &sg_exposure[0];
+	free(set->surcharge);
+	set->surcharge = calloc(cell_count ? cell_count : 1U, sizeof(float));
+	if (!set->surcharge)
+		return NULL;
+	set->flag_cell = enemy_flag_cell;
+	ExposeFrom(enemy_flag_cell, set->surcharge);
+	for (slot = 0; slot < POST_SLOTS; slot++)
+	{
+		vec3_t point, facing;
+		uint32_t post;
+
+		if (!SG_RuneLevelDefendPost(enemy_flag_cell, slot, point, facing))
+			break;
+		post = SG_RuneLevelLocate(point, 0, NULL);
+		if (post != SG_RUNE_CX_INDEX_NONE)
+			ExposeFrom(post, set->surcharge);
+	}
+	/* The surcharge is borrowed by the representative rows: every floor
+	 * cell that borrows a row is exposed as its representative is. */
+	{
+		const sg_rune_fire_table_t *fires = &sg_rune_level.artifact.fires;
+		uint32_t cell;
+
+		if (fires->cell_count == cell_count)
+			for (cell = 0U; cell < cell_count; cell++)
+			{
+				uint32_t rep = fires->cells[cell].representative;
+
+				if (rep != SG_RUNE_CX_INDEX_NONE && rep != cell && rep < cell_count)
+					set->surcharge[cell] = set->surcharge[rep];
+			}
+	}
+	return set->surcharge;
+}
+
+const sg_rune_field_t *SG_RuneLevelFieldExposed(uint32_t destination_cell,
+	uint32_t enemy_flag_cell)
+{
+	const float *surcharge;
+	int index;
+
+	if (!sg_rune_level.current ||
+		enemy_flag_cell >= sg_rune_level.artifact.complex.cell_count ||
+		sg_rune_level.artifact.fires.cell_count == 0U)
+		return SG_RuneLevelField(destination_cell);
+	surcharge = Exposure(enemy_flag_cell);
+	if (!surcharge)
+		return SG_RuneLevelField(destination_cell);
+	for (index = 0; index < EXPOSURE_SETS; index++)
+		if (sg_exposure[index].surcharge == surcharge)
+			return FieldVariant(destination_cell, 1U + (uint32_t)index, surcharge);
+	return SG_RuneLevelField(destination_cell);
+}
+
+void SG_RuneLevelExposureClear(void)
+{
+	int index;
+
+	for (index = 0; index < EXPOSURE_SETS; index++)
+	{
+		free(sg_exposure[index].surcharge);
+		sg_exposure[index].surcharge = NULL;
+		sg_exposure[index].flag_cell = SG_RUNE_CX_INDEX_NONE;
+	}
 }
