@@ -2088,9 +2088,14 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 		if (sg_cv.debug && sg_cv.debug->value && !let_go && !bot->release_held_logged)
 		{
 			bot->release_held_logged = 1U;
-			gi.dprintf("SGROPE %s release held: live arc fails at speed=%.0f from (%.0f %.0f %.0f)\n",
+			gi.dprintf("SGROPE %s release held: live arc fails at speed=%.0f v=(%.0f %.0f %.0f) from (%.0f %.0f %.0f) cell=%u outcome=%d clips=%u landing=(%.0f %.0f %.0f) cell %u sem=0x%x\n",
 				e->client->pers.netname, VectorLength(e->velocity),
-				e->s.origin[0], e->s.origin[1], e->s.origin[2]);
+				e->velocity[0], e->velocity[1], e->velocity[2],
+				e->s.origin[0], e->s.origin[1], e->s.origin[2], (unsigned)bot->cell,
+				(int)live.outcome, (unsigned)live.clips, live.landing[0], live.landing[1], live.landing[2],
+				(unsigned)live.landing_cell,
+				live.landing_cell < sg_rune_level.artifact.complex.cell_count ?
+					(unsigned)sg_rune_level.artifact.complex.cells[live.landing_cell].semantics : 0U);
 		}
 		if (let_go)
 		{
