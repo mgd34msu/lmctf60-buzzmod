@@ -32,10 +32,29 @@ int main(int argc, char **argv)
 	double t0, t1, t2, t3;
 	sg_rune_artifact_status_t status;
 
-	if (argc != 8)
+	if (argc != 8 && argc != 2)
 	{
-		fprintf(stderr, "usage: fieldcheck MAP.rune x y z x y z\n");
+		fprintf(stderr, "usage: fieldcheck MAP.rune [x y z x y z]\n");
 		return 2;
+	}
+	if (argc == 2)
+	{
+		/* Load only: the gate the generation script runs on a fresh file. */
+		status = SG_RuneArtifactLoadFile(argv[1], &artifact, &os_error, &fault);
+		if (status != SG_RUNE_ARTIFACT_OK)
+		{
+			fprintf(stderr, "load: %s%s%s\n",
+				SG_RuneArtifactStatusString(status), fault.array ? " at " : "",
+				fault.array ? fault.array : "");
+			return 1;
+		}
+		printf("rune ok: cells %u portals %u capabilities %u bytes %lu\n",
+			(unsigned)artifact.complex.cell_count,
+			(unsigned)artifact.complex.portal_count,
+			(unsigned)artifact.movement.capability_count,
+			(unsigned long)artifact.image_size);
+		SG_RuneArtifactRelease(&artifact);
+		return 0;
 	}
 	from[0] = (float)atof(argv[2]); from[1] = (float)atof(argv[3]);
 	from[2] = (float)atof(argv[4]);

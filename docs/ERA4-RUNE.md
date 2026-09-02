@@ -29,8 +29,8 @@ replacement runs on a real map.
    (`sg_rune_flight`). Profiles are shared by every crossing of a kind under
    this map's gravity; the rocket profile's cost carries the health the
    blast takes.
-   bctf01: 86,375 records (39,208 walk, 39,596 crouch, 2,471 jump, 284
-   drop, 4,816 rocket jump).
+   bctf01: 98,558 records (39,208 walk, 39,596 crouch, 6,669 jump, 6,275
+   drop, 6,810 rocket jump).
 4. **Analytic functions** (era 4, done). Constants, affines, polynomials,
    ballistics, piecewise with clauses, over named input dimensions with
    named output meanings. Flat coefficient store. One evaluator.
@@ -70,9 +70,23 @@ replacement runs on a real map.
   swim, jump (press within the jump's reach), drop, rocket jump (launcher
   in hand, within reach, aim down, fire and jump), hook (fire at the bite
   point, release at the crossing).
+- `sg_rune_level` (game): loads `<gamedir>/maps/<map>.rune` at level start,
+  refuses it when its identity or law differs from the live host (message
+  names what differs and says to run `sv rune`), builds the locator and
+  router, keeps eight destination fields alive by use.
+- `sg_bot_frame` (game): the driver. Role from carrying and chat orders
+  (carry, recover, escort, defend, attack); destination from the flags and
+  carriers; locate; the destination's cell; the field's step; a body in
+  the air is traced to its landing and steered there; the executor's
+  command becomes the usercmd the host's client think consumes; combat
+  owns the view unless the step does; hook fire and release go through the
+  same entry points a human's commands reach.
 - `tools/fieldcheck`: loads an artifact, locates two points, builds the
-  field, walks the chain. Red flag to blue flag on bctf01: 130 steps, 126
-  walks, 2 jumps, 1 drop, 1 rocket jump, 21 s of cost.
+  field, walks the chain. Red flag to blue flag on bctf01: 130 steps, 118
+  walks, 3 jumps, 7 drops, 2 rocket jumps, 26 s of cost.
+- `tests/sg_rune_runtime_test`: a synthetic complex (three floor cells, an
+  air column, a lower floor) through locate, movement emission with traced
+  flights, the flight tracer, the field, and the step chain.
 
 ## What the field state does not carry
 

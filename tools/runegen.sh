@@ -25,7 +25,7 @@ MAXCLIENTS="${MAXCLIENTS:-16}"
 PORT_START="${PORT_START:-62000}"
 STARTUP_SLEEP="${STARTUP_SLEEP:-1}"
 RUNE_GENERATOR_MODULE="${RUNE_GENERATOR_MODULE:-}"
-RUNE_COMPACT_READER="${RUNE_COMPACT_READER:-$PROJECT_ROOT/runecompactread.gnu}"
+RUNE_COMPACT_READER="${RUNE_COMPACT_READER:-$PROJECT_ROOT/fieldcheck}"
 MAP_MANIFEST="${RUNE_MAP_MANIFEST:-$SCRIPT_DIR/rune-corpus-maps.txt}"
 RUNEGEN_TEST_IO_FAULT="${RUNEGEN_TEST_IO_FAULT:-}"
 
@@ -124,7 +124,7 @@ if [ -z "$RUNE_GENERATOR_MODULE" ] || [ ! -f "$RUNE_GENERATOR_MODULE" ] || \
 fi
 if ! RUNE_COMPACT_READER_REAL="$(readlink -f -- "$RUNE_COMPACT_READER")" || \
         [ ! -x "$RUNE_COMPACT_READER_REAL" ]; then
-    echo "runegen: canonical compact C reader is not executable: $RUNE_COMPACT_READER" >&2
+    echo "runegen: the era-4 reader (make fieldcheck) is not executable: $RUNE_COMPACT_READER" >&2
     exit 1
 fi
 
