@@ -156,6 +156,7 @@ int main(int argc, char **argv)
 		{
 			sg_rune_move_store_t movement;
 			sg_rune_move_law_t law;
+			sg_rune_law_t law4;
 			uint32_t counts[SG_RUNE_MOVE_KIND_COUNT];
 			uint32_t index;
 			double t4;
@@ -163,8 +164,12 @@ int main(int argc, char **argv)
 			law.gravity = identity.physics.gravity;
 			law.frame_ms = identity.physics.frame_ms;
 			law.substep_ms = identity.physics.substep_ms;
+			memset(&law4, 0, sizeof(law4));
+			law4.gravity = identity.physics.gravity;
+			law4.frame_ms = identity.physics.frame_ms;
+			law4.substep_ms = identity.physics.substep_ms;
 			if (!SG_RuneMoveStoreInit(&movement, &law) ||
-				!SG_RuneMoveEmitComplex(&movement, &view))
+				!SG_RuneMoveEmitComplex(&movement, &view, &law4))
 			{
 				fprintf(stderr, "movement failed\n");
 				return 1;

@@ -109,7 +109,8 @@ int main(void)
 	CHECK(SG_RuneMoveEmitCrossing(&store, &crossing));
 	CHECK(Count(&store, SG_RUNE_MOVE_DROP) == 2U);
 
-	/* Water both sides swims; one side water does not. */
+	/* Water both sides swims; so does leaving water onto a floor; a floor
+	 * into water is a flight the builder traces. */
 	Reset(&store);
 	crossing = Level();
 	crossing.source_water = 1;
@@ -119,26 +120,47 @@ int main(void)
 	Reset(&store);
 	crossing.target_water = 0;
 	CHECK(SG_RuneMoveEmitCrossing(&store, &crossing));
-	CHECK(Count(&store, SG_RUNE_MOVE_SWIM) == 0U);
-	CHECK(Count(&store, SG_RUNE_MOVE_WALK) == 1U);
+	CHECK(Count(&store, SG_RUNE_MOVE_SWIM) == 2U);
+	CHECK(Count(&store, SG_RUNE_MOVE_WALK) == 0U);
+	Reset(&store);
+	crossing = Level();
+	crossing.target_water = 1;
+	crossing.target_supported = 0;
+	CHECK(SG_RuneMoveEmitCrossing(&store, &crossing));
+	CHECK(store.capability_count == 0U);
 
-	/* Off an edge through a partition drops; up through a floor jumps and
-	 * may rocket jump; airborne into anything is air control. */
+	/* Off a floor into the air is a flight the builder traces; contact
+	 * emission produces nothing for it, nor for anything airborne. */
 	Reset(&store);
 	crossing = Level();
 	crossing.target_supported = 0;
 	CHECK(SG_RuneMoveEmitCrossing(&store, &crossing));
-	CHECK(Count(&store, SG_RUNE_MOVE_DROP) == 2U);
-	Reset(&store);
-	crossing.vertical_facet = 0;
-	CHECK(SG_RuneMoveEmitCrossing(&store, &crossing));
-	CHECK(Count(&store, SG_RUNE_MOVE_JUMP) == 2U);
-	CHECK(Count(&store, SG_RUNE_MOVE_ROCKET_JUMP) == 2U);
+	CHECK(store.capability_count == 0U);
 	Reset(&store);
 	crossing = Level();
 	crossing.source_supported = 0;
 	CHECK(SG_RuneMoveEmitCrossing(&store, &crossing));
-	CHECK(Count(&store, SG_RUNE_MOVE_AIR_CONTROL) == 2U);
+	CHECK(store.capability_count == 0U);
+	/* Out of water onto a floor is a swim. */
+	Reset(&store);
+	crossing = Level();
+	crossing.source_water = 1;
+	CHECK(SG_RuneMoveEmitCrossing(&store, &crossing));
+	CHECK(Count(&store, SG_RUNE_MOVE_SWIM) == 2U);
+	/* A traced flight records its landing and launch. */
+	Reset(&store);
+	{
+		const float launch[3] = { 300.0f, 0.0f, 270.0f };
+
+		CHECK(SG_RuneMoveAppendFlight(&store, 0U, 5U, SG_RUNE_MOVE_JUMP,
+			SG_RUNE_MOVE_STANDING, SG_RUNE_MOVE_STANDING, 9U, launch, 0.7f));
+		CHECK(store.capability_count == 1U);
+		CHECK(store.capabilities[0].destination == 9U);
+		CHECK(store.capabilities[0].seconds == 0.7f);
+		CHECK(store.capabilities[0].launch_velocity[2] == 270.0f);
+		CHECK(!SG_RuneMoveAppendFlight(&store, 0U, 5U, SG_RUNE_MOVE_WALK,
+			SG_RUNE_MOVE_STANDING, SG_RUNE_MOVE_STANDING, 9U, launch, 0.7f));
+	}
 
 	/* The jump profile: z after 0.1 s from rest is 22 exactly, the
 	 * substep-exact value, and the velocity is 190. */

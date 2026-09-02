@@ -6,7 +6,7 @@
 #include "slipgate/sg_rocketjump_game.h"
 #include "slipgate/sg_compound_drop_game.h"
 #include "slipgate/sg_compound_hook_game.h"
-#include "slipgate/sg_rune_compact_game.h"
+#include "slipgate/sg_rune_game.h"
 #include "ctf_file_io.h"
 
 void SpawnLoadout_ListItems(void);
@@ -468,7 +468,7 @@ void	ServerCommand (void)
 	{
 		if (gi.argc() == 2)
 		{
-			if (SG_RuneCompactGameGenerate(level.mapname))
+			if (SG_RuneGameGenerate(level.mapname))
 				SG_LevelSetupAfterRuneWrite();
 		}
 		else

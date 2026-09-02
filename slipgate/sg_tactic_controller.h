@@ -1,18 +1,15 @@
-/* The era-4 executor.  The RUNE says a crossing exists, the selector chose
- * how to make it; this turns that choice plus the live body into one body
- * command for this frame.  It is stateless: every frame the selector chooses
- * again from the localized state, so a capability that spans frames (walk to
- * the edge, then jump; switch to the launcher, then fire) is re-derived each
- * time from where the body is now.  Nothing here touches engine types; the
- * bot think converts the command to a usercmd and issues hook and weapon
- * commands through the same entry points a human uses. */
+/* The executor: one step and one body in, one command out.
+ *
+ * The field says which crossing to take and how (the step's capability
+ * kind and launch); this turns that into what the body presses this frame
+ * under the host's movement law.  Stateless per frame. */
 #ifndef SG_TACTIC_CONTROLLER_H
 #define SG_TACTIC_CONTROLLER_H
 
 #include <stdint.h>
 
-#include "sg_rune_compact_model.h"
-#include "sg_tactic_execution.h"
+#include "sg_host_hook_law.h"
+#include "sg_rune_field.h"
 
 typedef enum sg_tactic_command_status_e
 {
@@ -22,7 +19,6 @@ typedef enum sg_tactic_command_status_e
 	SG_TACTIC_COMMAND_STATUS_COUNT
 } sg_tactic_command_status_t;
 
-/* The live body, as the executor needs it. */
 typedef struct sg_tactic_body_s
 {
 	float origin[3];
@@ -55,16 +51,8 @@ typedef struct sg_tactic_command_s
 	uint8_t reserved[3];
 } sg_tactic_command_t;
 
-/* The model resolves a hook target to a point to aim at; it may be NULL when
- * no hook capability can be selected. */
-int SG_TacticControl(const sg_rune_compact_model_t *model,
-	const sg_tactic_execution_t *execution, const sg_tactic_body_t *body,
+int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 	sg_tactic_command_t *command_out);
-
-/* Where a RUNE hook target is aimed at: a certified fact's witness on the
- * target surface, or the nearest patch centre of a candidate group. */
-int SG_TacticHookTargetAim(const sg_rune_compact_model_t *model,
-	uint32_t hook_target, const float from[3], float aim_out[3]);
 
 const char *SG_TacticCommandStatusString(sg_tactic_command_status_t status);
 

@@ -5,14 +5,14 @@
  * side, the portals that join two cells across one facet, and the brush
  * polygons (source surfaces) the hook can bite.  Every record is plain,
  * fixed-layout, and indexed by array position; SG_RUNE_CX_INDEX_NONE marks
- * an absent reference.  Coordinates are Q8 fixed point (units of 1/256). */
+ * an absent reference.  Coordinates are Q8 fixed point (units of 1/8). */
 #ifndef SG_RUNE_CX_H
 #define SG_RUNE_CX_H
 
 #include <stdint.h>
 
 #define SG_RUNE_CX_INDEX_NONE UINT32_MAX
-#define SG_RUNE_CX_Q8_ONE 256
+#define SG_RUNE_CX_Q8_ONE 8
 
 typedef struct sg_rune_cx_vec3_s
 {

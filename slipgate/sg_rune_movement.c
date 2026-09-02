@@ -7,6 +7,9 @@
 #include "sg_host_engine_pmove.h"
 #include "sg_host_rocket_jump_law.h"
 
+/* A rocket jump costs about 47 health; charged as seconds of route. */
+#define SG_RUNE_MOVE_ROCKET_HEALTH_COST_SECONDS 4.0f
+
 /* Profile slots, shared by every crossing of their kind under one law. */
 enum
 {
@@ -106,14 +109,15 @@ static int AddContactMotion(sg_rune_fn_store_t *store,
  * Cost and travel time are the time spent in the air, after the lead. */
 static int AddAirMotion(sg_rune_fn_store_t *store,
 	sg_rune_move_profile_t *profile, const sg_rune_move_law_t *law,
-	float vertical_impulse, float vertical_offset, float lead_seconds)
+	float vertical_impulse, float vertical_offset, float lead_seconds,
+	float cost_bias)
 {
 	const float substep_seconds = (float)law->substep_ms / 1000.0f;
 	uint32_t axis;
 
 	if (!(law->gravity >= 0.0f) || !isfinite(law->gravity) ||
-		!AddCostAndTime(store, profile, TIME_INPUT, 1.0f, lead_seconds, 1.0f,
-			lead_seconds))
+		!AddCostAndTime(store, profile, TIME_INPUT, 1.0f,
+			lead_seconds + cost_bias, 1.0f, lead_seconds))
 		return 0;
 	for (axis = 0U; axis < 3U; axis++)
 	{
@@ -189,9 +193,9 @@ static int BuildProfiles(sg_rune_move_store_t *store)
 		!AddContactMotion(&store->analytic, &store->profiles[PROFILE_WATER],
 			SG_HOST_ENGINE_WATER_SPEED) ||
 		!AddAirMotion(&store->analytic, &store->profiles[PROFILE_AIR], law,
-			0.0f, 0.0f, 0.0f) ||
+			0.0f, 0.0f, 0.0f, 0.0f) ||
 		!AddAirMotion(&store->analytic, &store->profiles[PROFILE_JUMP], law,
-			SG_HOST_ENGINE_JUMP_VELOCITY, 0.0f, 0.0f))
+			SG_HOST_ENGINE_JUMP_VELOCITY, 0.0f, 0.0f, 0.0f))
 		return 0;
 	store->jump_rise = law->gravity > 0.0f ?
 		(SG_HOST_ENGINE_JUMP_VELOCITY * SG_HOST_ENGINE_JUMP_VELOCITY) /
@@ -203,11 +207,18 @@ static int BuildProfiles(sg_rune_move_store_t *store)
 	if (SG_HostRocketJumpLaunch(law->gravity, law->frame_ms, law->substep_ms,
 		0, &launch))
 	{
+		/* The cost carries the health the blast takes: the seconds a body
+		 * would spend walking to earn that much back are not free. */
 		if (!AddAirMotion(&store->analytic, &store->profiles[PROFILE_ROCKET_JUMP],
 			law, launch.vertical_velocity, launch.pre_blast_rise,
-			(float)launch.lead_frames * (float)law->frame_ms / 1000.0f))
+			(float)launch.lead_frames * (float)law->frame_ms / 1000.0f,
+			SG_RUNE_MOVE_ROCKET_HEALTH_COST_SECONDS))
 			return 0;
 		store->rocket_rise = launch.rise;
+		store->rocket_velocity = launch.vertical_velocity;
+		store->rocket_lead_seconds = (float)launch.lead_frames *
+			(float)law->frame_ms / 1000.0f;
+		store->rocket_pre_blast_rise = launch.pre_blast_rise;
 	}
 	else
 	{
@@ -265,8 +276,9 @@ void SG_RuneMoveStoreView(const sg_rune_move_store_t *store,
 }
 
 static int Append(sg_rune_move_store_t *store, uint32_t cell,
-	uint32_t portal, sg_rune_move_kind_t kind, uint8_t source_stance,
-	uint8_t destination_stance, uint32_t profile)
+	uint32_t portal, uint32_t destination, sg_rune_move_kind_t kind,
+	uint8_t source_stance, uint8_t destination_stance, uint32_t profile,
+	const float launch_velocity[3], float seconds)
 {
 	sg_rune_move_capability_t *record;
 
@@ -286,7 +298,12 @@ static int Append(sg_rune_move_store_t *store, uint32_t cell,
 	memset(record, 0, sizeof(*record));
 	record->cell = cell;
 	record->portal = portal;
+	record->destination = destination;
 	record->kind = (uint8_t)kind;
+	if (launch_velocity)
+		memcpy(record->launch_velocity, launch_velocity,
+			sizeof(record->launch_velocity));
+	record->seconds = seconds;
 	record->source_stances = source_stance;
 	record->destination_stances = destination_stance;
 	record->profile = profile;
@@ -342,8 +359,10 @@ int SG_RuneMoveEmitCrossing(sg_rune_move_store_t *store,
 		target_stance = ExactOrOtherStance(source_stance, target_stances);
 		if (!target_stance)
 			continue;
-		if (crossing->source_water && crossing->target_water)
+		if (crossing->source_water &&
+			(crossing->target_water || crossing->target_supported))
 		{
+			/* Through water, or out of it onto a floor. */
 			kind = SG_RUNE_MOVE_SWIM;
 			profile = PROFILE_WATER;
 		}
@@ -368,31 +387,61 @@ int SG_RuneMoveEmitCrossing(sg_rune_move_store_t *store,
 					kind = SG_RUNE_MOVE_JUMP;
 					profile = PROFILE_JUMP;
 				}
+				/* A step up beyond a jump is a rocket jump when the blast
+				 * carries that high: the far floor is the landing. */
 				rocket = crossing->floor_delta <= store->rocket_rise;
 			}
 		}
-		else if (crossing->source_supported && !crossing->target_supported)
-		{
-			kind = crossing->vertical_facet ? SG_RUNE_MOVE_DROP :
-				SG_RUNE_MOVE_JUMP;
-			profile = crossing->vertical_facet ? PROFILE_AIR : PROFILE_JUMP;
-			rocket = !crossing->vertical_facet && store->rocket_rise > 0.0f;
-		}
-		else if (!crossing->source_supported)
-		{
-			kind = SG_RUNE_MOVE_AIR_CONTROL;
-			profile = PROFILE_AIR;
-		}
+		/* Off a floor into the air, and anything airborne, is not a
+		 * contact crossing: the builder traces those flights. */
 		if (kind != SG_RUNE_MOVE_KIND_COUNT &&
-			!Append(store, crossing->cell, crossing->portal, kind, source_stance,
-				target_stance, profile))
+			!Append(store, crossing->cell, crossing->portal,
+				crossing->other_cell, kind, source_stance, target_stance,
+				profile, NULL, 0.0f))
 			return 0;
 		if (rocket && !Append(store, crossing->cell, crossing->portal,
-			SG_RUNE_MOVE_ROCKET_JUMP, source_stance, target_stance,
-			PROFILE_ROCKET_JUMP))
+			crossing->other_cell, SG_RUNE_MOVE_ROCKET_JUMP, source_stance,
+			target_stance, PROFILE_ROCKET_JUMP, NULL, 0.0f))
 			return 0;
 	}
 	return 1;
+}
+
+int SG_RuneMoveAppendFlight(sg_rune_move_store_t *store, uint32_t cell,
+	uint32_t portal, sg_rune_move_kind_t kind, uint8_t source_stances,
+	uint8_t destination_stances, uint32_t destination,
+	const float launch_velocity[3], float seconds)
+{
+	uint32_t profile;
+
+	if (!store || !launch_velocity || !isfinite(seconds) || seconds < 0.0f ||
+		!source_stances || !destination_stances)
+		return 0;
+	switch (kind)
+	{
+	case SG_RUNE_MOVE_JUMP: profile = PROFILE_JUMP; break;
+	case SG_RUNE_MOVE_DROP: profile = PROFILE_AIR; break;
+	case SG_RUNE_MOVE_ROCKET_JUMP: profile = PROFILE_ROCKET_JUMP; break;
+	default: return 0;
+	}
+	return Append(store, cell, portal, destination, kind, source_stances,
+		destination_stances, profile, launch_velocity, seconds);
+}
+
+float SG_RuneMoveJumpVelocity(const sg_rune_move_store_t *store)
+{
+	(void)store;
+	return SG_HOST_ENGINE_JUMP_VELOCITY;
+}
+
+float SG_RuneMoveRocketVelocity(const sg_rune_move_store_t *store)
+{
+	return store ? store->rocket_velocity : 0.0f;
+}
+
+float SG_RuneMoveRocketLead(const sg_rune_move_store_t *store)
+{
+	return store ? store->rocket_lead_seconds : 0.0f;
 }
 
 const char *SG_RuneMoveKindString(sg_rune_move_kind_t kind)

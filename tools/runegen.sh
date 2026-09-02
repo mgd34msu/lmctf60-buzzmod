@@ -349,7 +349,7 @@ compact_failure_line() {
 generation_log_accepted() {
     local log="$1" map="$2" stage_game="$3" line prefix suffix publications=0
     log_has_complete_lines "$log" || return 1
-    prefix="rune: compact generation published map=$map path=$stage_game/maps/$map.rune bytes="
+    prefix="rune: generation published map=$map path=$stage_game/maps/$map.rune bytes="
     while IFS= read -r line; do
         line="${line%$'\r'}"
         if compact_failure_line "$line"; then

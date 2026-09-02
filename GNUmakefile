@@ -95,7 +95,6 @@ DEPEND_FILE = .depend
 HOST_TEST_BIN = sg_hooks_test.gnu
 HOST_TEST_OBJS = .sg_hooks_test.gnu.o .sg_hooks_under_test.gnu.o
 HOST_TEST_DEPS = $(HOST_TEST_OBJS:.o=.d)
-HOST_LAW_PUBLICATION_TEST = tests/run_sg_host_law_publication_test.sh
 HOST_LAW_RUNTIME_LINK_CHECK = tests/verify_sg_host_law_runtime_link.sh
 ACTION_TEST_BIN = sg_action_test.gnu
 ACTION_TEST_OBJS = .sg_action_test.gnu.o .sg_action_under_test.gnu.o
@@ -446,19 +445,9 @@ RUNE_BINDING_TEST_ALL_ARTIFACTS = \
 	.sg_rune_binding_under_test.make.o .sg_rune_binding_under_test.make.d \
 	.sg_train_station_plan_under_test.make.o .sg_train_station_plan_under_test.make.d \
 	.sg_rune_runtime_under_test.make.o .sg_rune_runtime_under_test.make.d
-RUNE_COMPACT_READER_BIN = runecompactread.gnu
-RUNE_COMPACT_READER_SOURCES = \
-	tools/runecompactread.c \
-	slipgate/sg_rune_compact_wire.c \
-	slipgate/sg_rune_compact_model.c \
-	slipgate/sg_rune_compact_source_surface_catalog.c \
-	slipgate/sg_rune_compact_weapon_catalog.c \
-	slipgate/sg_weapon_effect_profile.c \
-	slipgate/sg_rune_model.c \
-	slipgate/sg_rune_compact_analytic.c \
-	slipgate/sg_rune_compact_static.c
+RUNE_COMPACT_READER_SOURCES = tools/runecompactread.c \
+	slipgate/sg_weapon_effect_profile.c slipgate/sg_rune_model.c
 RUNE_COMPACT_READER_HEADERS = $(wildcard *.h slipgate/*.h)
-RUNE_COMPACT_READER_ALL_ARTIFACTS = runecompactread.gnu runecompactread.make
 RUNE_ACCEPT_OBSOLETE_ALL_ARTIFACTS = \
 	runeaccept.gnu runeaccept.make \
 	.runeaccept.gnu.o .runeaccept.gnu.d \
@@ -473,20 +462,6 @@ RUNE_ACCEPT_OBSOLETE_ALL_ARTIFACTS = \
 	.sg_rune_v2_content_identity_under_test.make.d \
 	.sg_rune_v2_exact_snapshot_under_test.make.o \
 	.sg_rune_v2_exact_snapshot_under_test.make.d
-SIDECAR_WIRE_TEST_BIN = sg_sidecar_wire_test.gnu
-SIDECAR_WIRE_TEST_OBJS = .sg_sidecar_wire_test.gnu.o \
-	.sg_sidecar_wire_under_test.gnu.o .sg_rune_crc_under_test.gnu.o
-SIDECAR_WIRE_TEST_DEPS = $(SIDECAR_WIRE_TEST_OBJS:.o=.d)
-SIDECAR_LOADER_TEST_BIN = sg_sidecar_loader_test.gnu
-SIDECAR_LOADER_TEST_OBJS = .sg_sidecar_loader_test.gnu.o \
-	.sg_sidecar_loader_under_test.gnu.o .sg_sidecar_wire_under_test.gnu.o \
-	.sg_rune_crc_under_test.gnu.o
-SIDECAR_LOADER_TEST_DEPS = $(SIDECAR_LOADER_TEST_OBJS:.o=.d)
-SIDECAR_STORE_TEST_BIN = sg_sidecar_store_test.gnu
-SIDECAR_STORE_TEST_OBJS = .sg_sidecar_store_test.gnu.o \
-	.sg_sidecar_store_under_test.gnu.o .sg_sidecar_loader_under_test.gnu.o \
-	.sg_sidecar_wire_under_test.gnu.o .sg_rune_crc_under_test.gnu.o
-SIDECAR_STORE_TEST_DEPS = $(SIDECAR_STORE_TEST_OBJS:.o=.d)
 DANGER_LEASE_TEST_BIN = sg_danger_lease_test.gnu
 DANGER_LEASE_TEST_OBJS = .sg_danger_lease_test.gnu.o \
 	.sg_danger_lease_under_test.gnu.o
@@ -499,19 +474,10 @@ DANGER_TEST_BIN = sg_danger_test.gnu
 DANGER_TEST_OBJS = .sg_danger_test.gnu.o .sg_danger_under_test.gnu.o \
 	.sg_rune_runtime_under_test.gnu.o
 DANGER_TEST_DEPS = $(DANGER_TEST_OBJS:.o=.d)
-FIELDS_CANDIDATE_TEST_BIN = sg_fields_candidate_test.gnu
-FIELDS_CANDIDATE_TEST_OBJS = .sg_fields_candidate_test.gnu.o \
-	.sg_caco_lifecycle_test.gnu.o .sg_game_utils_under_test.gnu.o \
-	.sg_q_shared_under_test.gnu.o .sg_fields_candidate_under_test.gnu.o \
-	.sg_action_under_test.gnu.o \
-	.sg_caco_projection_under_test.gnu.o \
-	.sg_belief_runtime_under_test.gnu.o \
-	.sg_compact_belief_perception_under_test.gnu.o \
-	.sg_goal_projection_under_test.gnu.o
+FIELDS_CANDIDATE_TEST_OBJS = .sg_game_utils_under_test.gnu.o \
+	.sg_q_shared_under_test.gnu.o .sg_action_under_test.gnu.o \
+	.sg_caco_projection_under_test.gnu.o .sg_goal_projection_under_test.gnu.o
 FIELDS_CANDIDATE_TEST_DEPS = $(FIELDS_CANDIDATE_TEST_OBJS:.o=.d)
-TACTIC_POLICY_TEST_BIN = sg_tactic_policy_test.gnu
-TACTIC_POLICY_TEST_OBJS = .sg_tactic_policy_test.gnu.o \
-	.sg_tactic_policy_under_test.gnu.o
 TACTIC_POLICY_TEST_DEPS = $(TACTIC_POLICY_TEST_OBJS:.o=.d)
 TACTIC_POLICY_TEST_ALL_ARTIFACTS = \
 	$(foreach flavor,gnu make,sg_tactic_policy_test.$(flavor) \
@@ -985,65 +951,38 @@ MAPLIST_ROTATION_TEST_ALL_ARTIFACTS = \
 	maplist_rotation_test.gnu maplist_rotation_test.make
 ENGINE_SNAPSHOT_TEST = tests/test_engine_snapshot_name.sh
 HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
-	.sg_hooks_test.gnu.o .sg_hooks_test.gnu.d \
-	.sg_hooks_under_test.gnu.o .sg_hooks_under_test.gnu.d \
-	.sg_hooks_test.make.o .sg_hooks_test.make.d \
-	.sg_hooks_under_test.make.o .sg_hooks_under_test.make.d \
-	sg_action_test sg_action_test.gnu sg_action_test.make \
-	.sg_action_test.gnu.o .sg_action_test.gnu.d \
-	.sg_action_under_test.gnu.o .sg_action_under_test.gnu.d \
-	.sg_action_test.make.o .sg_action_test.make.d \
-	.sg_action_under_test.make.o .sg_action_under_test.make.d \
-	sg_compound_test.gnu sg_compound_test.make \
-	.sg_compound_test.gnu.o .sg_compound_test.gnu.d \
-	.sg_compound_under_test.gnu.o .sg_compound_under_test.gnu.d \
-	.sg_compound_action_under_test.gnu.o \
-	.sg_compound_action_under_test.gnu.d \
-	.sg_compound_test.make.o .sg_compound_test.make.d \
-	.sg_compound_under_test.make.o .sg_compound_under_test.make.d \
-	.sg_compound_action_under_test.make.o \
-	.sg_compound_action_under_test.make.d \
-	sg_compound_world_test.gnu sg_compound_world_test.make \
-	.sg_compound_world_test.gnu.o .sg_compound_world_test.gnu.d \
-	.sg_compound_world_under_test.gnu.o \
+	.sg_hooks_test.gnu.o .sg_hooks_test.gnu.d .sg_hooks_under_test.gnu.o \
+	.sg_hooks_under_test.gnu.d .sg_hooks_test.make.o .sg_hooks_test.make.d \
+	.sg_hooks_under_test.make.o .sg_hooks_under_test.make.d sg_action_test \
+	sg_action_test.gnu sg_action_test.make .sg_action_test.gnu.o \
+	.sg_action_test.gnu.d .sg_action_under_test.gnu.o .sg_action_under_test.gnu.d \
+	.sg_action_test.make.o .sg_action_test.make.d .sg_action_under_test.make.o \
+	.sg_action_under_test.make.d sg_compound_test.gnu sg_compound_test.make \
+	.sg_compound_test.gnu.o .sg_compound_test.gnu.d .sg_compound_under_test.gnu.o \
+	.sg_compound_under_test.gnu.d .sg_compound_action_under_test.gnu.o \
+	.sg_compound_action_under_test.gnu.d .sg_compound_test.make.o \
+	.sg_compound_test.make.d .sg_compound_under_test.make.o \
+	.sg_compound_under_test.make.d .sg_compound_action_under_test.make.o \
+	.sg_compound_action_under_test.make.d sg_compound_world_test.gnu \
+	sg_compound_world_test.make .sg_compound_world_test.gnu.o \
+	.sg_compound_world_test.gnu.d .sg_compound_world_under_test.gnu.o \
 	.sg_compound_world_under_test.gnu.d \
 	.sg_compound_world_q_shared_under_test.gnu.o \
-	.sg_compound_world_q_shared_under_test.gnu.d \
-	.sg_compound_world_test.make.o .sg_compound_world_test.make.d \
-	.sg_compound_world_under_test.make.o \
+	.sg_compound_world_q_shared_under_test.gnu.d .sg_compound_world_test.make.o \
+	.sg_compound_world_test.make.d .sg_compound_world_under_test.make.o \
 	.sg_compound_world_under_test.make.d \
 	.sg_compound_world_q_shared_under_test.make.o \
-	.sg_compound_world_q_shared_under_test.make.d \
-	sg_identity_test sg_identity_test.gnu sg_identity_test.make \
-	.sg_identity_test.gnu.o .sg_identity_test.gnu.d \
-	.sg_identity_under_test.gnu.o .sg_identity_under_test.gnu.d \
-	.sg_crc32_under_test.gnu.o .sg_crc32_under_test.gnu.d \
-	.sg_identity_test.make.o .sg_identity_test.make.d \
+	.sg_compound_world_q_shared_under_test.make.d sg_identity_test \
+	sg_identity_test.gnu sg_identity_test.make .sg_identity_test.gnu.o \
+	.sg_identity_test.gnu.d .sg_identity_under_test.gnu.o \
+	.sg_identity_under_test.gnu.d .sg_crc32_under_test.gnu.o \
+	.sg_crc32_under_test.gnu.d .sg_identity_test.make.o .sg_identity_test.make.d \
 	.sg_identity_under_test.make.o .sg_identity_under_test.make.d \
 	.sg_crc32_under_test.make.o .sg_crc32_under_test.make.d \
-	.sg_rune_action_under_test.gnu.o \
-	.sg_rune_action_under_test.gnu.d \
-	.sg_rune_crc_under_test.gnu.o \
-	.sg_rune_crc_under_test.gnu.d \
-	.sg_rune_action_under_test.make.o \
-	.sg_rune_action_under_test.make.d \
-	.sg_rune_crc_under_test.make.o \
-	.sg_rune_crc_under_test.make.d \
-	sg_sidecar_wire_test.gnu sg_sidecar_wire_test.make \
-	.sg_sidecar_wire_test.gnu.o .sg_sidecar_wire_test.gnu.d \
-	.sg_sidecar_wire_under_test.gnu.o .sg_sidecar_wire_under_test.gnu.d \
-	.sg_sidecar_wire_test.make.o .sg_sidecar_wire_test.make.d \
-	.sg_sidecar_wire_under_test.make.o .sg_sidecar_wire_under_test.make.d \
-	sg_sidecar_loader_test.gnu sg_sidecar_loader_test.make \
-	.sg_sidecar_loader_test.gnu.o .sg_sidecar_loader_test.gnu.d \
-	.sg_sidecar_loader_under_test.gnu.o .sg_sidecar_loader_under_test.gnu.d \
-	.sg_sidecar_loader_test.make.o .sg_sidecar_loader_test.make.d \
-	.sg_sidecar_loader_under_test.make.o .sg_sidecar_loader_under_test.make.d \
-	sg_sidecar_store_test.gnu sg_sidecar_store_test.make \
-	.sg_sidecar_store_test.gnu.o .sg_sidecar_store_test.gnu.d \
-	.sg_sidecar_store_under_test.gnu.o .sg_sidecar_store_under_test.gnu.d \
-	.sg_sidecar_store_test.make.o .sg_sidecar_store_test.make.d \
-	.sg_sidecar_store_under_test.make.o .sg_sidecar_store_under_test.make.d \
+	.sg_rune_action_under_test.gnu.o .sg_rune_action_under_test.gnu.d \
+	.sg_rune_crc_under_test.gnu.o .sg_rune_crc_under_test.gnu.d \
+	.sg_rune_action_under_test.make.o .sg_rune_action_under_test.make.d \
+	.sg_rune_crc_under_test.make.o .sg_rune_crc_under_test.make.d \
 	sg_danger_lease_test.gnu sg_danger_lease_test.make \
 	.sg_danger_lease_test.gnu.o .sg_danger_lease_test.gnu.d \
 	.sg_danger_lease_under_test.gnu.o .sg_danger_lease_under_test.gnu.d \
@@ -1054,72 +993,55 @@ HOST_TEST_ALL_ARTIFACTS = sg_hooks_test sg_hooks_test.gnu sg_hooks_test.make \
 	.sg_danger_policy_under_test.gnu.o .sg_danger_policy_under_test.gnu.d \
 	.sg_danger_policy_test.make.o .sg_danger_policy_test.make.d \
 	.sg_danger_policy_under_test.make.o .sg_danger_policy_under_test.make.d \
-	sg_danger_test.gnu sg_danger_test.make \
-	.sg_danger_test.gnu.o .sg_danger_test.gnu.d \
-	.sg_danger_under_test.gnu.o .sg_danger_under_test.gnu.d \
+	sg_danger_test.gnu sg_danger_test.make .sg_danger_test.gnu.o \
+	.sg_danger_test.gnu.d .sg_danger_under_test.gnu.o .sg_danger_under_test.gnu.d \
 	.sg_rune_runtime_under_test.gnu.o .sg_rune_runtime_under_test.gnu.d \
-	.sg_danger_test.make.o .sg_danger_test.make.d \
-	.sg_danger_under_test.make.o .sg_danger_under_test.make.d \
-	sg_fields_candidate_test.gnu sg_fields_candidate_test.make \
-	.sg_fields_candidate_test.gnu.o .sg_fields_candidate_test.gnu.d \
-	.sg_caco_lifecycle_test.gnu.o .sg_caco_lifecycle_test.gnu.d \
-	.sg_fields_candidate_under_test.gnu.o .sg_fields_candidate_under_test.gnu.d \
-	.sg_caco_projection_under_test.gnu.o .sg_caco_projection_under_test.gnu.d \
-	.sg_belief_runtime_under_test.gnu.o .sg_belief_runtime_under_test.gnu.d \
-	.sg_compact_belief_perception_under_test.gnu.o .sg_compact_belief_perception_under_test.gnu.d \
-	.sg_goal_projection_under_test.gnu.o .sg_goal_projection_under_test.gnu.d \
-	.sg_fields_candidate_test.make.o .sg_fields_candidate_test.make.d \
-	.sg_caco_lifecycle_test.make.o .sg_caco_lifecycle_test.make.d \
-	.sg_fields_candidate_under_test.make.o .sg_fields_candidate_under_test.make.d \
-	.sg_caco_projection_under_test.make.o .sg_caco_projection_under_test.make.d \
-	.sg_belief_runtime_under_test.make.o .sg_belief_runtime_under_test.make.d \
-	.sg_compact_belief_perception_under_test.make.o .sg_compact_belief_perception_under_test.make.d \
-	.sg_goal_projection_under_test.make.o .sg_goal_projection_under_test.make.d \
-	sg_rune_install_test.gnu sg_rune_install_test.make \
-	.sg_rune_install_test.gnu.o .sg_rune_install_test.gnu.d \
-	.sg_rune_install_under_test.gnu.o .sg_rune_install_under_test.gnu.d \
-	.sg_rune_stream_under_test.gnu.o .sg_rune_stream_under_test.gnu.d \
-	.sg_rune_install_test.make.o .sg_rune_install_test.make.d \
-	.sg_rune_install_under_test.make.o .sg_rune_install_under_test.make.d \
-	.sg_rune_stream_under_test.make.o .sg_rune_stream_under_test.make.d \
-	sg_rune_proof_test.gnu sg_rune_proof_test.make \
-	.sg_rune_proof_test.gnu.o .sg_rune_proof_test.gnu.d \
+	.sg_danger_test.make.o .sg_danger_test.make.d .sg_danger_under_test.make.o \
+	.sg_danger_under_test.make.d .sg_caco_projection_under_test.gnu.o \
+	.sg_caco_projection_under_test.gnu.d .sg_goal_projection_under_test.gnu.o \
+	.sg_goal_projection_under_test.gnu.d .sg_caco_projection_under_test.make.o \
+	.sg_caco_projection_under_test.make.d .sg_goal_projection_under_test.make.o \
+	.sg_goal_projection_under_test.make.d sg_rune_install_test.gnu \
+	sg_rune_install_test.make .sg_rune_install_test.gnu.o \
+	.sg_rune_install_test.gnu.d .sg_rune_install_under_test.gnu.o \
+	.sg_rune_install_under_test.gnu.d .sg_rune_stream_under_test.gnu.o \
+	.sg_rune_stream_under_test.gnu.d .sg_rune_install_test.make.o \
+	.sg_rune_install_test.make.d .sg_rune_install_under_test.make.o \
+	.sg_rune_install_under_test.make.d .sg_rune_stream_under_test.make.o \
+	.sg_rune_stream_under_test.make.d sg_rune_proof_test.gnu \
+	sg_rune_proof_test.make .sg_rune_proof_test.gnu.o .sg_rune_proof_test.gnu.d \
 	.sg_rune_proof_under_test.gnu.o .sg_rune_proof_under_test.gnu.d \
 	.sg_rune_proof_test.make.o .sg_rune_proof_test.make.d \
 	.sg_rune_proof_under_test.make.o .sg_rune_proof_under_test.make.d \
-	sg_replay_test.gnu sg_replay_test.make \
-	.sg_replay_test.gnu.o .sg_replay_test.gnu.d \
-	.sg_replay_under_test.gnu.o .sg_replay_under_test.gnu.d \
-	.sg_replay_test.make.o .sg_replay_test.make.d \
-	.sg_replay_under_test.make.o .sg_replay_under_test.make.d \
-	sg_drop_live_test.gnu sg_drop_live_test.make \
+	sg_replay_test.gnu sg_replay_test.make .sg_replay_test.gnu.o \
+	.sg_replay_test.gnu.d .sg_replay_under_test.gnu.o .sg_replay_under_test.gnu.d \
+	.sg_replay_test.make.o .sg_replay_test.make.d .sg_replay_under_test.make.o \
+	.sg_replay_under_test.make.d sg_drop_live_test.gnu sg_drop_live_test.make \
 	.sg_drop_live_test.gnu.o .sg_drop_live_test.gnu.d \
 	.sg_drop_live_under_test.gnu.o .sg_drop_live_under_test.gnu.d \
-	.sg_drop_live_replay_under_test.gnu.o \
-	.sg_drop_live_replay_under_test.gnu.d \
+	.sg_drop_live_replay_under_test.gnu.o .sg_drop_live_replay_under_test.gnu.d \
 	.sg_drop_live_test.make.o .sg_drop_live_test.make.d \
 	.sg_drop_live_under_test.make.o .sg_drop_live_under_test.make.d \
-	.sg_drop_live_replay_under_test.make.o \
-	.sg_drop_live_replay_under_test.make.d \
-	sg_swim_live_test.gnu sg_swim_live_test.make \
-	.sg_swim_live_test.gnu.o .sg_swim_live_test.gnu.d \
-	.sg_swim_live_under_test.gnu.o .sg_swim_live_under_test.gnu.d \
-	.sg_swim_live_replay_under_test.gnu.o \
-	.sg_swim_live_replay_under_test.gnu.d \
-	.sg_swim_live_test.make.o .sg_swim_live_test.make.d \
-	.sg_swim_live_under_test.make.o .sg_swim_live_under_test.make.d \
-	.sg_swim_live_replay_under_test.make.o \
-	.sg_swim_live_replay_under_test.make.d \
-	sg_rotator_sweep_test.gnu sg_rotator_sweep_test.make \
-	.sg_rotator_sweep_test.gnu.o .sg_rotator_sweep_test.gnu.d \
-	.sg_rotator_sweep_under_test.gnu.o .sg_rotator_sweep_under_test.gnu.d \
-	.sg_rotator_sweep_q_shared_under_test.gnu.o .sg_rotator_sweep_q_shared_under_test.gnu.d \
-	.sg_rotator_sweep_test.make.o .sg_rotator_sweep_test.make.d \
-	.sg_rotator_sweep_under_test.make.o .sg_rotator_sweep_under_test.make.d \
-	.sg_rotator_sweep_q_shared_under_test.make.o .sg_rotator_sweep_q_shared_under_test.make.d \
-	g_entfile_path_test.gnu g_entfile_path_test.make \
-	.g_entfile_path_test.gnu.o .g_entfile_path_test.gnu.d \
-	.g_entfile_path_test.make.o .g_entfile_path_test.make.d
+	.sg_drop_live_replay_under_test.make.o .sg_drop_live_replay_under_test.make.d \
+	sg_swim_live_test.gnu sg_swim_live_test.make .sg_swim_live_test.gnu.o \
+	.sg_swim_live_test.gnu.d .sg_swim_live_under_test.gnu.o \
+	.sg_swim_live_under_test.gnu.d .sg_swim_live_replay_under_test.gnu.o \
+	.sg_swim_live_replay_under_test.gnu.d .sg_swim_live_test.make.o \
+	.sg_swim_live_test.make.d .sg_swim_live_under_test.make.o \
+	.sg_swim_live_under_test.make.d .sg_swim_live_replay_under_test.make.o \
+	.sg_swim_live_replay_under_test.make.d sg_rotator_sweep_test.gnu \
+	sg_rotator_sweep_test.make .sg_rotator_sweep_test.gnu.o \
+	.sg_rotator_sweep_test.gnu.d .sg_rotator_sweep_under_test.gnu.o \
+	.sg_rotator_sweep_under_test.gnu.d \
+	.sg_rotator_sweep_q_shared_under_test.gnu.o \
+	.sg_rotator_sweep_q_shared_under_test.gnu.d .sg_rotator_sweep_test.make.o \
+	.sg_rotator_sweep_test.make.d .sg_rotator_sweep_under_test.make.o \
+	.sg_rotator_sweep_under_test.make.d \
+	.sg_rotator_sweep_q_shared_under_test.make.o \
+	.sg_rotator_sweep_q_shared_under_test.make.d g_entfile_path_test.gnu \
+	g_entfile_path_test.make .g_entfile_path_test.gnu.o \
+	.g_entfile_path_test.gnu.d .g_entfile_path_test.make.o \
+	.g_entfile_path_test.make.d
 
 # This is for native build
 CFLAGS=-std=c11 -O3 -DARCH="$(ARCH)" -DSTDC_HEADERS -DVER='"$(VER)"'
@@ -1139,51 +1061,73 @@ endif
 #
 # Leave this empty if you just want to build id's default gamei386.so.
 ######################################################################
-C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o \
-         g_skins.o g_tourney.o plasma.o ui_text.o ui_layout.o ui_boards.o \
-		 p_observer.o g_chase.o p_stats.o \
-		 stdlog.o gslog.o bat.o g_vote.o \
-		 ctf_file_io.o ctf_sqlite_core.o ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o \
-		 sg_action.o sg_crc32.o sg_identity.o slipgate/sg_rune_source_authority.o slipgate/sg_rune_codec.o slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o slipgate/sg_rune_v2_content_identity.o slipgate/sg_rune_v2_exact_snapshot.o slipgate/sg_rune_file.o slipgate/sg_rune_stream.o slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o slipgate/sg_train_station_plan.o slipgate/sg_train_station_candidate.o slipgate/sg_train_station_candidate_game.o slipgate/sg_train_station_board_path.o slipgate/sg_train_station_transaction.o slipgate/sg_train_station_game.o slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o slipgate/sg_rune_authority_game.o slipgate/sg_rune_update_source.o slipgate/sg_water_forest.o sg_sidecar_wire.o sg_sidecar_loader.o sg_sidecar_store.o sg_rune_install.o sg_rune_proof.o sg_replay.o slipgate/sg_chain_hook_replay.o slipgate/sg_hook_oracle.o slipgate/sg_rune_hook_frontier.o slipgate/sg_rune_topology.o slipgate/sg_rune_topology_game.o slipgate/sg_rune_reverse_boundary.o slipgate/sg_rune_seed_game.o slipgate/sg_hook_game.o sg_compound.o slipgate/sg_mover_lease.o slipgate/sg_button_live.o slipgate/sg_mechanism_timeline.o slipgate/sg_relay_wall_transaction.o slipgate/sg_delayed_use_ticket.o slipgate/sg_relay_wall_live.o slipgate/sg_relay_wall_game.o slipgate/sg_timed_vault_transaction.o slipgate/sg_timed_vault_game.o slipgate/sg_timed_vault_game_runtime.o slipgate/sg_timed_vault_egress.o slipgate/sg_timed_vault_egress_game.o slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o slipgate/sg_compound_swim_live.o slipgate/sg_compound_swim_game.o slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o slipgate/sg_compound_gen.o slipgate/sg_compound_gen_game.o slipgate/sg_compound_action_gen.o slipgate/sg_compound_publication.o slipgate/sg_compound_publication_build.o slipgate/sg_compound_action_publication.o slipgate/sg_compound_drop_live.o slipgate/sg_compound_drop_live_finish.o slipgate/sg_compound_drop_game.o slipgate/sg_compound_hook_live.o slipgate/sg_compound_hook_live_finish.o slipgate/sg_compound_hook_game.o slipgate/sg_compound_hook_game_lifecycle.o slipgate/sg_compound_hook_game_events.o slipgate/sg_rune_door_scope.o slipgate/sg_rune_door_scope_game.o slipgate/sg_rune_door_frontier.o sg_drop_live.o sg_swim_live.o sg_hook_live.o slipgate/sg_rocketjump_live.o slipgate/sg_rocketjump_cadence.o slipgate/sg_rocketjump_game.o slipgate/sg_push_live.o slipgate/sg_push_game.o slipgate/sg_train_gate_live.o slipgate/sg_train_gate_game.o slipgate/sg_shoot_door_live.o slipgate/sg_shoot_door_game.o sg_oracle.o slipgate/sg_oracle_rotator.o sg_rune.o sg_arach.o slipgate/sg_localization.o slipgate/sg_pickup_target.o sg_fields.o sg_caco.o sg_combat.o slipgate/sg_combat_land_lead.o \
-		 slipgate/sg_relay_wall_objective.o slipgate/sg_relay_wall_objective_game.o \
-		 sg_cvars.o sg_hooks.o sg_util.o sg_client.o slipgate/sg_client_ownership.o slipgate/sg_pov_identity.o slipgate/sg_human_speed.o slipgate/sg_human_trace.o slipgate/sg_door_approach.o slipgate/sg_defense_shift.o slipgate/sg_defense_supply.o slipgate/sg_strike.o slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o sg_clock.o sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o sg_lead.o sg_move.o slipgate/sg_feeler_probe.o sg_price.o sg_descend.o slipgate/sg_traversal_transition.o sg_goal.o slipgate/sg_authority_entropy.o slipgate/sg_tactic_policy.o slipgate/sg_tactic_execution.o slipgate/sg_tactic_controller.o slipgate/sg_tactic_runtime.o slipgate/sg_tactic_pmove_control_runtime.o \
-		 slipgate/sg_belief.o slipgate/sg_perception_evidence.o \
-		 slipgate/sg_belief_runtime.o slipgate/sg_compact_belief_perception.o \
-		 slipgate/sg_destination.o \
-		 slipgate/sg_compact_localization.o slipgate/sg_rune_compact_localize.o \
-		 slipgate/sg_rune_compact_analytic.o slipgate/sg_rune_compact_eval.o \
-		 slipgate/sg_rune_compact_static.o \
-		 slipgate/sg_rune_compact_source_surface_catalog.o \
-		 slipgate/sg_rune_compact_weapon_catalog.o slipgate/sg_rune_compact_model.o \
-		 slipgate/sg_rune_compact_pmove_control_build.o \
-		 slipgate/sg_rune_compact_pmove_control.o \
-		 slipgate/sg_rune_compact_pmove_control_wire.o \
-		 slipgate/sg_rune_compact_field.o slipgate/sg_rune_compact_field_region_hierarchy.o slipgate/sg_rune_compact_field_service.o slipgate/sg_rune_compact_spatial_index.o \
-		 slipgate/sg_rune_compact_portal_snapshot.o \
-		 slipgate/sg_rune_compact_portal_snapshot_source.o \
-		 slipgate/sg_rune_compact_artifact.o slipgate/sg_rune_compact_wire.o \
-		 slipgate/sg_rune_compact_game.o \
-		 slipgate/sg_rune_compact_production.o \
-		 slipgate/sg_rune_compact_learning.o \
-		 slipgate/sg_rune_compact_learning_consumer.o \
-		 slipgate/sg_rune_compact_learning_game.o \
-		 slipgate/sg_bot_localization.o \
-		 slipgate/sg_compact_runtime_level.o \
-		 \
-		 \
-		 \
-		 slipgate/sg_bsp_world.o slipgate/sg_host_collision.o \
-		 slipgate/sg_bsp_entity_semantics.o \
-		 slipgate/sg_bsp_entity_semantics_audit_expected.o \
-		 slipgate/sg_bsp_entity_semantics_publication.o \
-		 slipgate/sg_rune_model.o slipgate/sg_strategy.o \
-		 slipgate/sg_strategy_caller.o slipgate/sg_strategy_runtime_bridge.o \
-		 slipgate/sg_host_pmove.o slipgate/sg_host_engine_pmove.o \
-		 slipgate/sg_host_engine_runtime.o \
-		 slipgate/sg_host_engine_parity.o slipgate/sg_host_hook_law.o \
-		 slipgate/sg_host_mechanism_law.o slipgate/sg_host_law_owner.o \
-		 slipgate/sg_host_law_publication.o \
-		 slipgate/sg_weapon_effect_profile.o sg_chat.o sg_net.o sg_persona.o
+C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o g_skins.o g_tourney.o \
+	plasma.o ui_text.o ui_layout.o ui_boards.o p_observer.o g_chase.o p_stats.o \
+	stdlog.o gslog.o bat.o g_vote.o ctf_file_io.o ctf_sqlite_core.o \
+	ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o sg_action.o sg_crc32.o \
+	sg_identity.o slipgate/sg_rune_source_authority.o slipgate/sg_rune_codec.o \
+	slipgate/sg_rune_artifact_loader.o slipgate/sg_rune_artifact_writer.o \
+	slipgate/sg_rune_v2_content_identity.o slipgate/sg_rune_v2_exact_snapshot.o \
+	slipgate/sg_rune_file.o slipgate/sg_rune_stream.o \
+	slipgate/sg_rune_mechanism_catalog.o slipgate/sg_rune_mechanism_plan.o \
+	slipgate/sg_train_station_plan.o slipgate/sg_train_station_candidate.o \
+	slipgate/sg_train_station_candidate_game.o \
+	slipgate/sg_train_station_board_path.o \
+	slipgate/sg_train_station_transaction.o slipgate/sg_train_station_game.o \
+	slipgate/sg_rune_runtime.o slipgate/sg_rune_binding.o \
+	slipgate/sg_rune_authority_game.o slipgate/sg_rune_update_source.o \
+	slipgate/sg_water_forest.o sg_rune_install.o sg_rune_proof.o sg_replay.o \
+	slipgate/sg_chain_hook_replay.o slipgate/sg_hook_oracle.o \
+	slipgate/sg_rune_hook_frontier.o slipgate/sg_rune_topology.o \
+	slipgate/sg_rune_topology_game.o slipgate/sg_rune_reverse_boundary.o \
+	slipgate/sg_rune_seed_game.o slipgate/sg_hook_game.o sg_compound.o \
+	slipgate/sg_mover_lease.o slipgate/sg_button_live.o \
+	slipgate/sg_mechanism_timeline.o slipgate/sg_relay_wall_transaction.o \
+	slipgate/sg_delayed_use_ticket.o slipgate/sg_relay_wall_live.o \
+	slipgate/sg_relay_wall_game.o slipgate/sg_timed_vault_transaction.o \
+	slipgate/sg_timed_vault_game.o slipgate/sg_timed_vault_game_runtime.o \
+	slipgate/sg_timed_vault_egress.o slipgate/sg_timed_vault_egress_game.o \
+	slipgate/sg_compound_guard.o slipgate/sg_compound_guard_game.o \
+	slipgate/sg_compound_swim_live.o slipgate/sg_compound_swim_game.o \
+	slipgate/sg_declared_door_guard.o slipgate/sg_compound_world.o \
+	slipgate/sg_compound_gen.o slipgate/sg_compound_gen_game.o \
+	slipgate/sg_compound_action_gen.o slipgate/sg_compound_publication.o \
+	slipgate/sg_compound_publication_build.o \
+	slipgate/sg_compound_action_publication.o slipgate/sg_compound_drop_live.o \
+	slipgate/sg_compound_drop_live_finish.o slipgate/sg_compound_drop_game.o \
+	slipgate/sg_compound_hook_live.o slipgate/sg_compound_hook_live_finish.o \
+	slipgate/sg_compound_hook_game.o slipgate/sg_compound_hook_game_lifecycle.o \
+	slipgate/sg_compound_hook_game_events.o slipgate/sg_rune_door_scope.o \
+	slipgate/sg_rune_door_scope_game.o slipgate/sg_rune_door_frontier.o \
+	sg_drop_live.o sg_swim_live.o sg_hook_live.o slipgate/sg_rocketjump_live.o \
+	slipgate/sg_rocketjump_cadence.o slipgate/sg_rocketjump_game.o \
+	slipgate/sg_push_live.o slipgate/sg_push_game.o slipgate/sg_train_gate_live.o \
+	slipgate/sg_train_gate_game.o slipgate/sg_shoot_door_live.o \
+	slipgate/sg_shoot_door_game.o sg_oracle.o slipgate/sg_oracle_rotator.o \
+	sg_rune.o sg_arach.o slipgate/sg_pickup_target.o sg_fields.o sg_caco.o \
+	sg_combat.o slipgate/sg_combat_land_lead.o slipgate/sg_relay_wall_objective.o \
+	slipgate/sg_relay_wall_objective_game.o sg_cvars.o sg_hooks.o sg_util.o \
+	sg_client.o slipgate/sg_client_ownership.o slipgate/sg_pov_identity.o \
+	slipgate/sg_human_speed.o slipgate/sg_human_trace.o \
+	slipgate/sg_door_approach.o slipgate/sg_defense_shift.o \
+	slipgate/sg_defense_supply.o slipgate/sg_strike.o \
+	slipgate/sg_strike_adapter.o slipgate/sg_hook_diagnostics.o sg_clock.o \
+	sg_danger.o sg_danger_lease.o sg_danger_policy.o sg_weights.o sg_tilt.o \
+	sg_lead.o sg_move.o slipgate/sg_feeler_probe.o sg_price.o sg_descend.o \
+	slipgate/sg_traversal_transition.o sg_goal.o slipgate/sg_authority_entropy.o \
+	slipgate/sg_tactic_controller.o slipgate/sg_belief.o \
+	slipgate/sg_perception_evidence.o slipgate/sg_destination.o \
+	slipgate/sg_rune_game.o slipgate/sg_rune_cx.o slipgate/sg_rune_analytic.o \
+	slipgate/sg_rune_movement.o slipgate/sg_rune_artifact.o \
+	slipgate/sg_bsp_world.o slipgate/sg_host_collision.o \
+	slipgate/sg_bsp_entity_semantics.o \
+	slipgate/sg_bsp_entity_semantics_audit_expected.o \
+	slipgate/sg_bsp_entity_semantics_publication.o slipgate/sg_rune_model.o \
+	slipgate/sg_host_pmove.o slipgate/sg_host_engine_pmove.o \
+	slipgate/sg_host_engine_runtime.o slipgate/sg_host_engine_parity.o \
+	slipgate/sg_host_hook_law.o slipgate/sg_host_mechanism_law.o \
+	slipgate/sg_host_law_owner.o slipgate/sg_host_law_publication.o \
+	slipgate/sg_weapon_effect_profile.o sg_chat.o sg_net.o sg_persona.o
 
 ######################################################################
 # End of user-customizable section - you shouldn't have to touch
@@ -1278,26 +1222,14 @@ SHLIBLDFLAGS = -shared
 # Exact configuration construction is an offline game-module concern. The
 # shipped module retains the compact artifact reader/runtime service only.
 RUNE_COMPACT_GENERATOR_OFFLINE_OBJS = \
-	slipgate/sg_configuration_semantics.o \
 	slipgate/sg_configuration_cells.o \
-	slipgate/sg_static_visibility.o \
-	slipgate/sg_rune_compact_builder.o \
-	slipgate/sg_rune_compact_geometry.o slipgate/sg_rune_compact_geometry_builder.o \
-	slipgate/sg_rune_compact_geometry_partition.o \
-	slipgate/sg_rune_compact_response_partition.o \
-	slipgate/sg_rune_compact_mechanisms.o \
-	slipgate/sg_rune_compact_mechanisms_build.o \
-	slipgate/sg_rune_compact_mechanisms_entities.o \
-	slipgate/sg_rune_compact_mechanisms_transitions.o \
-	slipgate/sg_rune_compact_static_materializer.o \
-	slipgate/sg_rune_compact_movement_fields.o \
-	slipgate/sg_rune_compact_weapon_relations.o \
-	slipgate/sg_rune_compact_weapon_field.o \
-	slipgate/sg_rune_compact_composer.o \
-	slipgate/sg_rune_compact_generation.o \
-	slipgate/sg_rune_compact_game_offline.o
+	slipgate/sg_configuration_semantics.o \
+	slipgate/sg_rune_cx_build.o \
+	slipgate/sg_rune_movement_build.o \
+	slipgate/sg_rune_generate.o \
+	slipgate/sg_rune_game_generate.o
 RUNE_COMPACT_GENERATOR_RUNTIME_OBJS = $(filter-out \
-	slipgate/sg_rune_compact_game.o,$(OBJS))
+	slipgate/sg_rune_game.o,$(OBJS))
 RUNE_COMPACT_GENERATOR_OBJS = $(RUNE_COMPACT_GENERATOR_RUNTIME_OBJS) \
 	$(RUNE_COMPACT_GENERATOR_OFFLINE_OBJS)
 
@@ -1347,15 +1279,6 @@ POV_SUPERVISOR_TEST_BIN = pov_supervisor_unit.gnu
 POV_SUPERVISOR_ALL_ARTIFACTS = tools/pov-supervisor pov_supervisor_unit.gnu \
 	pov_supervisor_unit.make
 
-.PHONY: era4-portal-movement-test
-era4-portal-movement-test: tests/run_era4_portal_movement_test.sh \
-		tests/sg_era4_portal_movement_test.c \
-		tests/sg_rune_compact_movement_fields_test.c \
-		slipgate/sg_rune_compact_movement_fields.c \
-		slipgate/sg_rune_compact_movement_fields.h \
-		slipgate/sg_host_engine_pmove.h \
-		slipgate/sg_host_rocket_jump_law.h
-	sh tests/run_era4_portal_movement_test.sh
 
 .PHONY: tactic-controller-test
 tactic-controller-test: tests/run_sg_tactic_controller_test.sh \
@@ -1372,69 +1295,6 @@ host-rocket-jump-law-test: tests/run_sg_host_rocket_jump_law_test.sh \
 		slipgate/sg_weapon_host_constants.h
 	sh tests/run_sg_host_rocket_jump_law_test.sh
 
-.PHONY: all dep runtime-module-path host-test host-law-runtime-link-check action-test \
-	compound-test mover-lease-test \
-	water-forest-test \
-	povlock-test pov-session-production-test pov-supervisor-test \
-	button-live-test mechanism-timeline-test relay-wall-transaction-test \
-	relay-wall-objective-test \
-	delayed-use-ticket-test relay-wall-live-test \
-	timed-vault-transaction-test timed-vault-game-test \
-	timed-vault-runtime-test timed-vault-egress-test train-station-plan-test \
-	train-station-candidate-test train-station-candidate-game-test \
-	train-station-board-path-test \
-	train-station-transaction-test train-station-game-test \
-	button-game-test \
-	compound-guard-test compound-guard-game-test declared-door-guard-test \
-	compound-world-test \
-	compound-gen-test compound-publication-test \
-	identity-test rune-codec-test rune-artifact-loader-test \
-	rune-artifact-writer-test rune-mechanism-plan-test \
-	rune-mechanism-catalog-test rune-mechanism-execution-test rune-binding-test \
-	rune-v2-contract-test \
-	rune-compact-test rune-source-authority-test \
-	rune-compact-model-test rune-compact-pmove-control-test \
-	rune-compact-analytic-test rune-compact-static-test \
-	rune-compact-eval-test rune-compact-localize-test rune-compact-wire-test \
-	rune-compact-tagged-transition-wire-test \
-	rune-compact-field-region-hierarchy-test \
-	rune-compact-field-service-test rune-compact-portal-snapshot-test \
-	rune-compact-runtime-level-test \
-	rune-compact-production-test rune-compact-production-host-authority-test \
-	rune-compact-game-test \
-	rune-compact-production-callers-test \
-	rune-compact-learning-test rune-compact-learning-consumer-test \
-	rune-compact-learning-production-link-test \
-	rune-compact-builder-test rune-compact-generation-test \
-	rune-compact-spatial-index-test rune-compact-reader-test \
-	build-ownership-test runegen-test \
-	rune-v2-belief-test \
-	rune-v2-perception-evidence-test rune-v2-belief-runtime-test \
-	compact-belief-runtime-test \
-	bot-localization-test \
-	water-capability-real-bsp-test \
-	weapon-effect-profile-test hook-visibility-catalog-test \
-	bsp-entity-semantics-publication-test \
-	host-law-publication-test \
-	sidecar-wire-test sidecar-loader-test sidecar-store-test \
-	danger-lease-test danger-policy-test danger-test fields-candidate-test \
-	tactic-policy-test \
-	spectator-sound-test human-speed-test defense-shift-test \
-	door-approach-test \
-	item-commitment-test hook-diagnostics-test \
-	run-handoff-test \
-	rune-install-test rune-proof-test rune-objective-diagnostics-test \
-	rune-topology-test rune-reverse-boundary-test \
-		human-hook-ownership-test human-hook-release-test \
-	replay-test hook-discipline-test \
-	drop-live-test swim-live-test compound-swim-live-test \
-	compound-swim-game-test rotator-sweep-test \
-	compound-drop-live-test compound-drop-game-test \
-	compound-drop-transition-test compound-hook-live-test \
-	compound-hook-game-test compound-hook-game-events-test rotator-sweep-test \
-	mover-subject-sweep-test entfile-test maplist-rotation-test \
-	compound-swim-oracle-test compound-hook-oracle-test rune-door-scope-test \
-	snapshot-test stripcr clean distclean FORCE
 all: dep $(TARGET)
 runtime-module-path:
 	@printf '%s\n' "$(TARGET)"
@@ -1605,26 +1465,6 @@ slipgate/sg_host_law_publication.o: slipgate/sg_host_law_publication.c \
 		slipgate/sg_host_engine_parity.h slipgate/sg_host_hook_law.h \
 		slipgate/sg_host_mechanism_law.h slipgate/sg_weapon_host_constants.h \
 		game.h q_shared.h
-slipgate/sg_compact_localization.o: slipgate/sg_compact_localization.c \
-		slipgate/sg_compact_localization.h slipgate/sg_localization_runtime.h \
-		slipgate/sg_rune_compact_localize.h slipgate/sg_rune_compact_model.h \
-		slipgate/sg_host_law_owner.h slipgate/sg_host_law_publication.h \
-		slipgate/sg_host_collision.h slipgate/sg_host_pmove.h \
-		slipgate/sg_host_engine_pmove.h slipgate/sg_host_engine_runtime.h \
-		slipgate/sg_rune_model.h game.h q_shared.h
-slipgate/sg_rune_compact_localize.o: slipgate/sg_rune_compact_localize.c \
-		slipgate/sg_rune_compact_localize.h slipgate/sg_rune_compact_model.h \
-		slipgate/sg_rune_compact_analytic.h
-slipgate/sg_bot_localization.o: slipgate/sg_bot_localization.c \
-		slipgate/sg_bot_localization.h slipgate/sg_bot.h \
-		slipgate/sg_compact_localization.h \
-		slipgate/sg_host_law_owner.h slipgate/sg_host_pmove.h \
-		g_local.h game.h q_shared.h
-slipgate/sg_compact_runtime_level.o: slipgate/sg_compact_runtime_level.c \
-		slipgate/sg_compact_runtime_level.h slipgate/sg_bot_localization.h \
-		slipgate/sg_compact_localization.h slipgate/sg_host_law_owner.h \
-		slipgate/sg_rune_compact_field_service.h \
-		slipgate/sg_strategy_runtime_bridge.h
 slipgate/sg_rune_door_scope.o: slipgate/sg_rune_door_scope.c \
 		slipgate/sg_rune_door_scope.h
 
@@ -1681,14 +1521,8 @@ $(RUNE_COMPACT_READER_BIN): $(RUNE_COMPACT_READER_SOURCES) \
 		-Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align -I. \
 		-o $@ $(RUNE_COMPACT_READER_SOURCES) $(LDFLAGS) -lm
 
-$(SIDECAR_WIRE_TEST_BIN): $(SIDECAR_WIRE_TEST_OBJS)
-	$(CC) -o $@ $(SIDECAR_WIRE_TEST_OBJS) $(LDFLAGS)
 
-$(SIDECAR_LOADER_TEST_BIN): $(SIDECAR_LOADER_TEST_OBJS)
-	$(CC) -o $@ $(SIDECAR_LOADER_TEST_OBJS) $(LDFLAGS)
 
-$(SIDECAR_STORE_TEST_BIN): $(SIDECAR_STORE_TEST_OBJS)
-	$(CC) -o $@ $(SIDECAR_STORE_TEST_OBJS) $(LDFLAGS)
 
 $(DANGER_LEASE_TEST_BIN): $(DANGER_LEASE_TEST_OBJS)
 	$(CC) -o $@ $(DANGER_LEASE_TEST_OBJS) $(LDFLAGS)
@@ -2459,41 +2293,11 @@ $(COMPOUND_PUBLICATION_CASE_GNU_OBJS): .sg_%.gnu.o: tests/sg_%.c \
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_sidecar_wire_test.gnu.o: tests/sg_sidecar_wire_test.c $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_sidecar_wire_under_test.gnu.o: slipgate/sg_sidecar_wire.c \
-		slipgate/sg_sidecar_wire.h \
-		$(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_sidecar_loader_test.gnu.o: tests/sg_sidecar_loader_test.c $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_sidecar_loader_under_test.gnu.o: slipgate/sg_sidecar_loader.c \
-		slipgate/sg_sidecar_loader.h \
-		$(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_sidecar_store_test.gnu.o: tests/sg_sidecar_store_test.c $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_sidecar_store_under_test.gnu.o: slipgate/sg_sidecar_store.c \
-		slipgate/sg_sidecar_store.h \
-		$(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_danger_lease_test.gnu.o: tests/sg_danger_lease_test.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
@@ -2525,27 +2329,9 @@ $(COMPOUND_PUBLICATION_CASE_GNU_OBJS): .sg_%.gnu.o: tests/sg_%.c \
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
 		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_fields_candidate_test.gnu.o: tests/sg_fields_candidate_test.c $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_tactic_policy_test.gnu.o: tests/sg_tactic_policy_test.c \
-		slipgate/sg_tactic_policy.h slipgate/sg_tactic_contract.h \
-		$(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_tactic_policy_under_test.gnu.o: slipgate/sg_tactic_policy.c \
-		slipgate/sg_tactic_policy.h slipgate/sg_tactic_contract.h \
-		$(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_fields_candidate_under_test.gnu.o: slipgate/sg_fields.c $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -Wno-strict-prototypes -DSG_FIELDS_TEST -ffunction-sections -fdata-sections -I. \
-		-MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_caco_projection_under_test.gnu.o: slipgate/sg_caco.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
@@ -2553,23 +2339,8 @@ $(COMPOUND_PUBLICATION_CASE_GNU_OBJS): .sg_%.gnu.o: tests/sg_%.c \
 		-fdata-sections -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_belief_runtime_under_test.gnu.o: slipgate/sg_belief_runtime.c $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
-		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_compact_belief_perception_under_test.gnu.o: \
-		slipgate/sg_compact_belief_perception.c $(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -Wno-strict-prototypes -ffunction-sections -fdata-sections \
-		-I. -MMD -MP -MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-.sg_caco_lifecycle_test.gnu.o: tests/sg_caco_lifecycle_test.c \
-		$(REVISION_HEADER)
-	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
-		-Wpedantic -Wno-strict-prototypes -ffunction-sections \
-		-fdata-sections -I. -MMD -MP \
-		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
 .sg_goal_projection_under_test.gnu.o: slipgate/sg_goal.c $(REVISION_HEADER)
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) -std=c11 -Wall -Wextra -Werror \
@@ -3254,151 +3025,6 @@ $(POV_SESSION_TEST_BIN): $(POV_SESSION_TEST_OBJS)
 		-Wpedantic -ffunction-sections -fdata-sections -I. -MMD -MP \
 		-MF $(patsubst %.o,%.d,$@) -c -o $@ $<
 
-host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
-		rune-v2-contract-test \
-		rune-source-authority-test \
-		rune-compact-pmove-control-test \
-		build-ownership-test \
-		human-hook-release-test \
-		$(MOVER_LEASE_TEST_BIN) $(WATER_FOREST_TEST_BIN) \
-		train-station-candidate-test train-station-candidate-game-test \
-		train-station-board-path-test \
-		train-station-transaction-test train-station-game-test \
-		$(BUTTON_LIVE_TEST_BIN) $(SHOOT_DOOR_LIVE_TEST_BIN) \
-		$(BUTTON_GAME_TEST_BIN) $(COMPOUND_GUARD_TEST_BIN) \
-		$(COMPOUND_GUARD_GAME_TEST_BIN) \
-		$(DECLARED_DOOR_GUARD_TEST_BIN) \
-		$(COMPOUND_WORLD_TEST_BIN) $(COMPOUND_GEN_TEST_BIN) \
-		$(COMPOUND_PUBLICATION_TEST_BIN) \
-		$(IDENTITY_TEST_BIN) \
-		$(RUNE_CODEC_TEST_BIN) \
-		$(RUNE_ARTIFACT_LOADER_TEST_BIN) $(RUNE_ARTIFACT_WRITER_TEST_BIN) \
-		$(RUNE_MECHANISM_PLAN_TEST_BIN) \
-		$(RUNE_MECHANISM_CATALOG_TEST_BIN) \
-		$(RUNE_MECHANISM_EXECUTION_TEST_BIN) $(RUNE_BINDING_TEST_BIN) \
-		$(RUNE_INSTALL_TEST_BIN) \
-		$(SIDECAR_WIRE_TEST_BIN) $(SIDECAR_LOADER_TEST_BIN) \
-		$(SIDECAR_STORE_TEST_BIN) \
-		$(DANGER_LEASE_TEST_BIN) $(DANGER_POLICY_TEST_BIN) \
-		$(DANGER_TEST_BIN) $(FIELDS_CANDIDATE_TEST_BIN) \
-		$(TACTIC_POLICY_TEST_BIN) \
-		$(SPECTATOR_SOUND_TEST_BIN) \
-		$(HUMAN_SPEED_TEST_BIN)  \
-		 $(HUMAN_TRACE_HOOK_TEST_BIN) \
-		$(DOOR_APPROACH_TEST_BIN)  \
-		$(DEFENSE_SHIFT_TEST_BIN)  \
-		$(DEFENSE_SUPPLY_TEST_BIN)  \
-		$(STRIKE_ADAPTER_TEST_BIN)  \
-		$(ITEM_COMMITMENT_TEST_BIN)  \
-		$(HOOK_DIAGNOSTICS_TEST_BIN) \
-		$(RUN_HANDOFF_TEST_BIN)  \
-		$(RUNE_PROOF_TEST_BIN) \
-		$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN) \
-		$(REPLAY_TEST_BIN) $(CHAIN_HOOK_REPLAY_TEST_BIN) \
-		$(DROP_LIVE_TEST_BIN) $(SWIM_LIVE_TEST_BIN) \
-		$(COMPOUND_SWIM_LIVE_TEST_BIN) \
-		$(ROCKETJUMP_LIVE_TEST_BIN) $(ROCKETJUMP_CADENCE_TEST_BIN) \
-		$(PUSH_LIVE_TEST_BIN) \
-		$(ROCKETJUMP_GAME_TEST_BIN) \
-		$(COMPOUND_SWIM_GAME_TEST_BIN) \
-		$(COMPOUND_DROP_LIVE_TEST_BIN) $(COMPOUND_DROP_GAME_TEST_BIN) \
-		$(COMPOUND_DROP_FANOUT_TEST_BIN) \
-		$(COMPOUND_DROP_TRANSITION_TEST_BIN) \
-		$(COMPOUND_HOOK_LIVE_TEST_BIN) \
-		$(COMPOUND_HOOK_GAME_TEST_BIN) \
-		$(COMPOUND_HOOK_GAME_EVENTS_TEST_BIN) \
-		$(HOOK_LIVE_TEST_BIN) $(HOOK_DISCIPLINE_TEST_BIN) \
-		$(ROTATOR_SWEEP_TEST_BIN) $(MOVER_SUBJECT_SWEEP_TEST_BIN) \
-		$(COMPOUND_SWIM_ORACLE_TEST_BIN) \
-		$(COMPOUND_HOOK_ORACLE_TEST_BIN) \
-		$(RUNE_DOOR_SCOPE_TEST_BIN) $(ENTFILE_TEST_BIN) \
-		$(MAPLIST_ROTATION_TEST_BIN) \
-		$(POVLOCK_TEST_BIN) $(POV_SESSION_TEST_BIN) \
-		 $(POV_SUPERVISOR_TEST_BIN) \
-		$(POV_SUPERVISOR_BIN) \
-		era4-portal-movement-test \
-		host-rocket-jump-law-test \
-		tactic-controller-test \
-		rune-analytic-test \
-		rune-movement-test \
-		rune-artifact-test
-	./$(HOST_TEST_BIN)
-	./$(ACTION_TEST_BIN)
-	./$(COMPOUND_TEST_BIN)
-	./$(MOVER_LEASE_TEST_BIN)
-	./$(WATER_FOREST_TEST_BIN)
-	./$(BUTTON_LIVE_TEST_BIN)
-	./$(SHOOT_DOOR_LIVE_TEST_BIN)
-	./$(BUTTON_GAME_TEST_BIN)
-	./$(COMPOUND_GUARD_TEST_BIN)
-	./$(COMPOUND_GUARD_GAME_TEST_BIN)
-	./$(DECLARED_DOOR_GUARD_TEST_BIN)
-	./$(COMPOUND_WORLD_TEST_BIN)
-	./$(COMPOUND_GEN_TEST_BIN)
-	./$(COMPOUND_PUBLICATION_TEST_BIN)
-	./$(IDENTITY_TEST_BIN)
-	./$(RUNE_CODEC_TEST_BIN)
-	./$(RUNE_ARTIFACT_LOADER_TEST_BIN)
-	./$(RUNE_ARTIFACT_WRITER_TEST_BIN)
-	./$(RUNE_MECHANISM_PLAN_TEST_BIN)
-	./$(RUNE_MECHANISM_CATALOG_TEST_BIN)
-	./$(RUNE_MECHANISM_EXECUTION_TEST_BIN)
-	./$(RUNE_BINDING_TEST_BIN)
-	./$(RUNE_INSTALL_TEST_BIN)
-	./$(SIDECAR_WIRE_TEST_BIN)
-	./$(SIDECAR_LOADER_TEST_BIN)
-	./$(SIDECAR_STORE_TEST_BIN)
-	./$(DANGER_LEASE_TEST_BIN)
-	./$(DANGER_POLICY_TEST_BIN)
-	./$(DANGER_TEST_BIN)
-	./$(FIELDS_CANDIDATE_TEST_BIN)
-	./$(TACTIC_POLICY_TEST_BIN)
-	./$(SPECTATOR_SOUND_TEST_BIN)
-	./$(HUMAN_SPEED_TEST_BIN)
-	tmp=$$(mktemp -d); \
-		trap 'rm -f "$$tmp/humantrace-tracehook.jsonl"; rmdir "$$tmp"' \
-			EXIT HUP INT TERM; \
-		./$(HUMAN_TRACE_HOOK_TEST_BIN) "$$tmp"
-	./$(DOOR_APPROACH_TEST_BIN)
-	./$(DEFENSE_SHIFT_TEST_BIN)
-	./$(DEFENSE_SUPPLY_TEST_BIN)
-	./$(STRIKE_ADAPTER_TEST_BIN)
-	./$(ITEM_COMMITMENT_TEST_BIN)
-	./$(HOOK_DIAGNOSTICS_TEST_BIN)
-	./$(RUN_HANDOFF_TEST_BIN)
-	./$(RUNE_PROOF_TEST_BIN)
-	./$(RUNE_OBJECTIVE_DIAGNOSTICS_TEST_BIN)
-	./$(REPLAY_TEST_BIN)
-	./$(CHAIN_HOOK_REPLAY_TEST_BIN)
-	./$(DROP_LIVE_TEST_BIN)
-	sh tests/sg_drop_begin_wiring_test.sh
-	./$(SWIM_LIVE_TEST_BIN)
-	./$(COMPOUND_SWIM_LIVE_TEST_BIN)
-	./$(ROCKETJUMP_LIVE_TEST_BIN)
-	./$(PUSH_LIVE_TEST_BIN)
-	./$(ROCKETJUMP_CADENCE_TEST_BIN)
-	./$(ROCKETJUMP_GAME_TEST_BIN)
-	./$(COMPOUND_SWIM_GAME_TEST_BIN)
-	./$(COMPOUND_DROP_LIVE_TEST_BIN)
-	./$(COMPOUND_DROP_GAME_TEST_BIN)
-	./$(COMPOUND_DROP_FANOUT_TEST_BIN)
-	./$(COMPOUND_DROP_TRANSITION_TEST_BIN)
-	./$(COMPOUND_HOOK_LIVE_TEST_BIN)
-	./$(COMPOUND_HOOK_GAME_TEST_BIN)
-	./$(COMPOUND_HOOK_GAME_EVENTS_TEST_BIN)
-	./$(HOOK_LIVE_TEST_BIN)
-	./$(HOOK_DISCIPLINE_TEST_BIN)
-	./$(ROTATOR_SWEEP_TEST_BIN)
-	./$(MOVER_SUBJECT_SWEEP_TEST_BIN)
-	./$(COMPOUND_SWIM_ORACLE_TEST_BIN)
-	./$(COMPOUND_HOOK_ORACLE_TEST_BIN)
-	./$(RUNE_DOOR_SCOPE_TEST_BIN)
-	./$(ENTFILE_TEST_BIN)
-	./$(MAPLIST_ROTATION_TEST_BIN)
-	./$(POVLOCK_TEST_BIN)
-	./$(POV_SESSION_TEST_BIN)
-	./$(POV_SUPERVISOR_TEST_BIN)
-	./$(ENGINE_SNAPSHOT_TEST)
 
 weapon-effect-profile-test: tests/run_sg_weapon_effect_profile_test.sh \
 		tests/sg_weapon_effect_profile_test.c \
@@ -3409,26 +3035,6 @@ weapon-effect-profile-test: tests/run_sg_weapon_effect_profile_test.sh \
 		g_combat.c g_weapon.c p_weapon.c plasma.c plasma.h
 	sh tests/run_sg_weapon_effect_profile_test.sh
 
-host-law-publication-test: $(HOST_LAW_PUBLICATION_TEST) \
-		tests/sg_host_law_publication_test.c \
-		slipgate/sg_host_law_publication.c \
-		slipgate/sg_host_law_publication.h \
-		slipgate/sg_host_law_publication_private.h \
-		slipgate/sg_host_law_owner.c slipgate/sg_host_law_owner.h \
-		slipgate/sg_host_engine_pmove.c slipgate/sg_host_engine_pmove.h \
-		slipgate/sg_host_engine_runtime.c \
-		slipgate/sg_host_engine_runtime.h \
-		slipgate/sg_host_engine_runtime_private.h \
-		slipgate/sg_host_engine_parity.c slipgate/sg_host_engine_parity.h \
-		slipgate/sg_host_hook_law.c slipgate/sg_host_hook_law.h \
-		slipgate/sg_host_mechanism_law.c slipgate/sg_host_mechanism_law.h \
-		slipgate/sg_host_pmove.c \
-		slipgate/sg_host_collision.c slipgate/sg_bsp_world.c \
-		slipgate/sg_rune_model.c tests/support/yq2_pmove.c q_shared.c \
-		slipgate/sg_host_collision.h slipgate/sg_host_pmove.h \
-		slipgate/sg_weapon_host_constants.h
-	@echo [TEST] host law publication
-	@sh $(HOST_LAW_PUBLICATION_TEST)
 
 hook-visibility-catalog-test: \
 		tests/run_sg_hook_visibility_catalog_test.sh \
@@ -3465,214 +3071,29 @@ bsp-entity-semantics-publication-test: \
 		slipgate/sg_bsp_world.c slipgate/sg_bsp_world.h
 	sh tests/run_sg_bsp_entity_semantics_publication_test.sh
 
-rune-compact-model-test: tests/run_sg_rune_compact_model_test.sh \
-		tests/sg_rune_compact_model_test.c \
-		slipgate/sg_rune_compact_model.c slipgate/sg_rune_compact_model.h \
-		slipgate/sg_rune_compact_weapon_catalog.c \
-		slipgate/sg_rune_compact_analytic.c slipgate/sg_rune_compact_analytic.h \
-		slipgate/sg_rune_compact_static.c slipgate/sg_rune_compact_static.h
-	sh tests/run_sg_rune_compact_model_test.sh
 
-rune-compact-pmove-control-test: \
-		tests/run_sg_rune_compact_pmove_control_test.sh \
-		tests/sg_rune_compact_pmove_control_test.c \
-		tests/sg_tactic_pmove_control_runtime_test.c \
-		tests/support/yq2_pmove.c \
-		slipgate/sg_rune_compact_pmove_control.c \
-		slipgate/sg_rune_compact_pmove_control.h \
-		slipgate/sg_rune_compact_pmove_control_build.c \
-		slipgate/sg_rune_compact_pmove_control_build_private.h \
-		slipgate/sg_rune_compact_pmove_control_wire.c \
-		slipgate/sg_rune_compact_pmove_control_wire.h \
-		slipgate/sg_tactic_pmove_control_runtime.c \
-		slipgate/sg_tactic_pmove_control_runtime_private.h
-	sh tests/run_sg_rune_compact_pmove_control_test.sh
 
-rune-compact-analytic-test: tests/run_sg_rune_compact_analytic_test.sh \
-		tests/sg_rune_compact_analytic_test.c \
-		slipgate/sg_rune_compact_analytic.c slipgate/sg_rune_compact_analytic.h
-	sh tests/run_sg_rune_compact_analytic_test.sh
 
-rune-compact-static-test: tests/run_sg_rune_compact_static_test.sh \
-		tests/sg_rune_compact_static_test.c \
-		slipgate/sg_rune_compact_static.c slipgate/sg_rune_compact_static.h \
-		slipgate/sg_rune_compact_model.h
-	sh tests/run_sg_rune_compact_static_test.sh
 
-rune-compact-eval-test: tests/run_sg_rune_compact_eval_test.sh \
-		tests/sg_rune_compact_eval_test.c \
-		slipgate/sg_rune_compact_eval.c slipgate/sg_rune_compact_eval.h \
-		slipgate/sg_rune_compact_analytic.c slipgate/sg_rune_compact_analytic.h
-	sh tests/run_sg_rune_compact_eval_test.sh
 
-rune-compact-localize-test: tests/run_sg_rune_compact_localize_test.sh \
-		tests/sg_rune_compact_localize_test.c \
-		 slipgate/sg_rune_compact_localize.c slipgate/sg_rune_compact_localize.h \
-		 slipgate/sg_rune_compact_model.h
-	sh tests/run_sg_rune_compact_localize_test.sh
 
-rune-compact-field-region-hierarchy-test: \
-		tests/run_sg_rune_compact_field_region_hierarchy_test.sh \
-		tests/sg_rune_compact_field_region_hierarchy_test.c \
-		slipgate/sg_rune_compact_field_region_hierarchy.c \
-		slipgate/sg_rune_compact_field_region_hierarchy.h
-	sh tests/run_sg_rune_compact_field_region_hierarchy_test.sh
 
-rune-compact-field-service-test: \
-		tests/run_sg_rune_compact_field_service_test.sh \
-		tests/sg_rune_compact_field_service_test.c \
-		slipgate/sg_rune_compact_field_service.c \
-		slipgate/sg_rune_compact_field_service.h \
-		slipgate/sg_rune_compact_field.c slipgate/sg_rune_compact_field.h \
-		slipgate/sg_rune_compact_field_plan_private.h \
-		slipgate/sg_rune_compact_field_region_hierarchy.c \
-		slipgate/sg_rune_compact_field_region_hierarchy.h \
-		slipgate/sg_rune_compact_analytic.c slipgate/sg_rune_compact_eval.c
-	sh tests/run_sg_rune_compact_field_service_test.sh
 
-rune-compact-portal-snapshot-test: \
-		tests/run_sg_rune_compact_portal_snapshot_test.sh \
-		tests/sg_rune_compact_portal_snapshot_test.c \
-		slipgate/sg_rune_compact_portal_snapshot.c \
-		slipgate/sg_rune_compact_portal_snapshot.h
-	sh tests/run_sg_rune_compact_portal_snapshot_test.sh
 
-rune-compact-runtime-level-test: tests/run_sg_compact_runtime_level_test.sh \
-		tests/sg_compact_runtime_level_test.c \
-		slipgate/sg_compact_runtime_level.c \
-		slipgate/sg_compact_runtime_level.h
-	sh tests/run_sg_compact_runtime_level_test.sh
 
-rune-compact-production-test: tests/run_sg_rune_compact_production_test.sh \
-		tests/sg_rune_compact_production_test.c \
-		slipgate/sg_rune_compact_production.c \
-		slipgate/sg_rune_compact_production.h \
-		slipgate/sg_rune_compact_portal_snapshot.c \
-		slipgate/sg_rune_compact_portal_snapshot.h
-	sh tests/run_sg_rune_compact_production_test.sh
 
-rune-compact-production-host-authority-test: \
-		tests/run_sg_rune_compact_production_host_authority_test.sh \
-		tests/sg_rune_compact_production_test.c \
-		slipgate/sg_rune_compact_production.c \
-		slipgate/sg_rune_compact_production.h \
-		slipgate/sg_rune_source_authority.c \
-		slipgate/sg_rune_source_authority.h \
-		slipgate/sg_rune_source_authority_owner.h \
-		slipgate/sg_crc32.c slipgate/sg_crc32.h \
-		slipgate/sg_rune_compact_portal_snapshot.c \
-		slipgate/sg_rune_compact_portal_snapshot.h
-	sh tests/run_sg_rune_compact_production_host_authority_test.sh
 
-rune-compact-game-test: tests/run_sg_rune_compact_game_test.sh \
-		tests/sg_rune_compact_game_test.c \
-		slipgate/sg_rune_compact_game.c \
-		slipgate/sg_rune_compact_game_offline.c \
-		slipgate/sg_rune_compact_game.h
-	sh tests/run_sg_rune_compact_game_test.sh
 
-rune-compact-production-callers-test: \
-	tests/run_rune_compact_production_callers_test.sh \
-	g_svcmds.c slipgate/sg_arach.c
-	sh tests/run_rune_compact_production_callers_test.sh
 
-rune-compact-learning-test: tests/run_sg_rune_compact_learning_test.sh \
-	tests/sg_rune_compact_learning_test.c \
-	slipgate/sg_rune_compact_learning.c \
-	slipgate/sg_rune_compact_learning.h \
-	slipgate/sg_rune_compact_learning_owner.h
-	sh tests/run_sg_rune_compact_learning_test.sh
 
-rune-compact-learning-consumer-test: \
-	tests/run_sg_rune_compact_learning_consumer_test.sh \
-	tests/sg_rune_compact_learning_consumer_test.c \
-	tests/sg_rune_compact_learning_consumer_fixture.c \
-	slipgate/sg_rune_compact_learning_game.c \
-	slipgate/sg_rune_compact_learning_game.h \
-	slipgate/sg_rune_compact_learning_consumer.c \
-	slipgate/sg_rune_compact_learning_consumer.h \
-	slipgate/sg_rune_compact_learning.c \
-	slipgate/sg_rune_compact_learning.h \
-	slipgate/sg_rune_compact_learning_owner.h
-	sh tests/run_sg_rune_compact_learning_consumer_test.sh
 
-rune-compact-learning-production-link-test: \
-		tests/run_sg_rune_compact_learning_production_link_test.sh \
-		tests/run_sg_rune_compact_production_host_authority_test.sh \
-		tests/run_sg_rune_compact_learning_consumer_test.sh \
-		tests/run_sg_rune_compact_learning_host_lifecycle_test.sh \
-	tests/sg_rune_compact_production_test.c \
-	tests/sg_rune_compact_learning_consumer_test.c \
-	tests/sg_rune_compact_learning_consumer_fixture.c \
-	slipgate/sg_human_trace.c \
-	slipgate/sg_rune_compact_learning.c \
-	slipgate/sg_rune_compact_learning_consumer.c \
-	slipgate/sg_rune_compact_learning_consumer.h \
-	slipgate/sg_rune_compact_learning_game.c \
-	slipgate/sg_rune_compact_learning_game.h \
-		slipgate/sg_rune_compact_production.c \
-		slipgate/sg_rune_compact_production.h \
-		slipgate/sg_rune_source_authority.c \
-		slipgate/sg_rune_source_authority.h \
-		slipgate/sg_rune_source_authority_owner.h \
-		slipgate/sg_crc32.c slipgate/sg_crc32.h \
-		slipgate/sg_tactic_controller.c \
-		slipgate/sg_tactic_controller.h \
-		slipgate/sg_tactic_runtime.c slipgate/sg_tactic_runtime.h \
-		slipgate/sg_tactic_runtime_private.h \
-		slipgate/sg_strategy_runtime_bridge.c \
-		slipgate/sg_strategy_runtime_bridge.h \
-		slipgate/sg_strategy_runtime_bridge_private.h \
-		slipgate/sg_strategy_caller.c slipgate/sg_strategy_caller.h \
-		slipgate/sg_strategy_caller_private.h \
-		slipgate/sg_arach.c p_hud.c g_spawn.c
-	sh tests/run_sg_rune_compact_learning_production_link_test.sh
 
-rune-compact-localization-test: tests/run_sg_compact_localization_test.sh \
-		tests/sg_compact_localization_test.c \
-		slipgate/sg_compact_localization.c slipgate/sg_compact_localization.h \
-		slipgate/sg_rune_compact_localize.c \
-		slipgate/sg_rune_compact_localize.h \
-		slipgate/sg_rune_compact_model.h
-	sh tests/run_sg_compact_localization_test.sh
 
-rune-compact-wire-test: tests/run_sg_rune_compact_wire_test.sh \
-		tests/sg_rune_compact_wire_test.c \
-		slipgate/sg_rune_compact_wire.c slipgate/sg_rune_compact_wire.h \
-		slipgate/sg_rune_compact_weapon_catalog.c \
-		slipgate/sg_rune_compact_static.h
-	sh tests/run_sg_rune_compact_wire_test.sh
 
-rune-compact-tagged-transition-wire-test: \
-		tests/run_sg_rune_compact_tagged_transition_wire_test.sh \
-		tests/sg_rune_compact_tagged_transition_wire_test.c \
-		slipgate/sg_rune_compact_wire.c slipgate/sg_rune_compact_wire.h \
-		slipgate/sg_rune_compact_model.c slipgate/sg_rune_compact_model.h
-	sh tests/run_sg_rune_compact_tagged_transition_wire_test.sh
 
-rune-compact-builder-test: tests/run_sg_rune_compact_builder_test.sh \
-		tests/sg_rune_compact_builder_test.c \
-		slipgate/sg_rune_compact_builder.c slipgate/sg_rune_compact_builder.h \
-		slipgate/sg_rune_compact_weapon_catalog.c
-	sh tests/run_sg_rune_compact_builder_test.sh
 
-rune-compact-generation-test: tests/run_sg_rune_compact_generation_test.sh \
-		tests/sg_rune_compact_generation_test.c \
-		slipgate/sg_rune_compact_generation.c \
-		slipgate/sg_rune_compact_generation.h
-	sh tests/run_sg_rune_compact_generation_test.sh
 
-rune-compact-spatial-index-test: tests/run_sg_rune_compact_spatial_index_test.sh \
-		tests/sg_rune_compact_spatial_index_test.c \
-		slipgate/sg_rune_compact_spatial_index.c \
-		slipgate/sg_rune_compact_spatial_index.h \
-		slipgate/sg_bsp_world.c slipgate/sg_bsp_world.h
-	sh tests/run_sg_rune_compact_spatial_index_test.sh
 
-rune-compact-reader-test: $(RUNE_COMPACT_READER_BIN) tests/run_runecompactread_test.sh \
-		$(RUNE_COMPACT_READER_SOURCES) $(RUNE_COMPACT_READER_HEADERS) \
-		tests/runecompactread_fixture.c tests/sg_rune_compact_wire_test.c
-	sh tests/run_runecompactread_test.sh
 
 build-ownership-test: tests/run_c_build_ownership_test.sh Makefile GNUmakefile \
 		gravity.vcxproj gravity.vcxproj.filters .github/workflows/build.yml
@@ -3689,87 +3110,8 @@ rune-source-authority-test: tests/run_sg_rune_source_authority_test.sh \
 		slipgate/sg_rune_source_authority_owner.h
 	sh tests/run_sg_rune_source_authority_test.sh
 
-rune-compact-test: rune-source-authority-test rune-compact-model-test \
-		rune-compact-analytic-test rune-compact-static-test \
-		rune-compact-eval-test rune-compact-localize-test \
-		rune-compact-localization-test \
-	rune-compact-field-region-hierarchy-test \
-	rune-compact-field-service-test \
-	rune-compact-runtime-level-test \
-		rune-compact-production-test \
-		rune-compact-production-host-authority-test rune-compact-game-test \
-		rune-compact-production-callers-test \
-		rune-compact-learning-test rune-compact-learning-consumer-test \
-		rune-compact-learning-production-link-test \
-		rune-compact-wire-test rune-compact-tagged-transition-wire-test \
-		rune-compact-builder-test \
-		rune-compact-generation-test \
-		rune-compact-spatial-index-test rune-compact-reader-test runegen-test
+rune-compact-test: rune-source-authority-test runegen-test
 
-rune-v2-contract-test: rune-v2-belief-test \
-		rune-v2-perception-evidence-test rune-v2-belief-runtime-test \
-		weapon-effect-profile-test \
-		hook-visibility-catalog-test \
-		bsp-entity-semantics-publication-test \
-		host-law-publication-test \
-		tests/sg_rune_runtime_contract_test.c \
-		tests/sg_rune_model_contract_test.c slipgate/sg_rune_model.c \
-		tests/sg_bsp_world_test.c slipgate/sg_bsp_world.c \
-		tests/run_sg_bsp_entity_semantics_test.sh \
-		tests/sg_bsp_entity_semantics_test.c \
-		slipgate/sg_bsp_entity_semantics.c \
-		slipgate/sg_bsp_entity_semantics.h \
-		slipgate/sg_static_visibility.c \
-		slipgate/sg_static_visibility.h \
-		tests/run_sg_host_collision_test.sh \
-		tests/sg_host_collision_test.c slipgate/sg_host_collision.c \
-		slipgate/sg_host_pmove.c \
-		tests/sg_rune_v2_codec_test.c slipgate/sg_rune_v2_codec.c \
-		tests/sg_rune_v2_artifact_loader_test.c \
-		slipgate/sg_rune_v2_artifact_loader.c \
-		tests/run_sg_strategy_test.sh tests/sg_strategy_test.c \
-		slipgate/sg_strategy.c slipgate/sg_strategy_contract.h \
-		tests/run_sg_destination_test.sh tests/sg_destination_test.c \
-		slipgate/sg_destination.c slipgate/sg_destination.h \
-		tests/run_sg_strategy_caller_test.sh \
-		tests/sg_strategy_caller_test.c \
-		slipgate/sg_strategy_caller.c slipgate/sg_strategy_caller.h \
-		slipgate/sg_strategy_runtime_bridge.c slipgate/sg_strategy_runtime_bridge.h \
-		slipgate/sg_rune_compact_field_service.c \
-		slipgate/sg_rune_compact_field_service.h \
-		slipgate/sg_rune_compact_field_plan_private.h \
-		tests/support/yq2_pmove.c q_shared.c
-	@set -e; \
-	tmp=$$(mktemp -d); \
-	trap 'rm -r "$$tmp"' EXIT HUP INT TERM; \
-	strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion -Wsign-conversion -Wshadow -Wstrict-prototypes'; \
-	$(CC) $$strict -I. tests/sg_rune_runtime_contract_test.c \
-		slipgate/sg_weapon_effect_profile.c slipgate/sg_rune_model.c -lm \
-		-o "$$tmp/runtime"; \
-	"$$tmp/runtime"; \
-	$(CC) $$strict -Wcast-align -I. tests/sg_rune_model_contract_test.c \
-		slipgate/sg_rune_model.c -lm -o "$$tmp/model"; \
-	"$$tmp/model"; \
-	$(CC) $$strict -Wcast-align -I. tests/sg_bsp_world_test.c \
-		slipgate/sg_bsp_world.c -lm -o "$$tmp/bsp"; \
-	"$$tmp/bsp"; \
-	sh tests/run_sg_bsp_entity_semantics_test.sh; \
-	sh tests/run_sg_host_collision_test.sh; \
-	$(CC) $$strict -Wcast-align -I. tests/sg_rune_v2_codec_test.c \
-		slipgate/sg_rune_v2_codec.c slipgate/sg_rune_model.c -lm \
-		-o "$$tmp/codec"; \
-	"$$tmp/codec"; \
-	$(CC) $$strict -Wcast-align -I. \
-		tests/sg_rune_v2_artifact_loader_test.c \
-		slipgate/sg_rune_v2_artifact_loader.c \
-		slipgate/sg_rune_v2_codec.c slipgate/sg_rune_model.c -lm \
-		-o "$$tmp/loader"; \
-	"$$tmp/loader"; \
-	sh tests/run_sg_strategy_test.sh; \
-	sh tests/run_sg_strategy_caller_test.sh; \
-	sh tests/run_sg_destination_test.sh; \
-	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_destination.c \
-		-o "$$tmp/destination.o"
 
 rune-v2-belief-test: tests/run_sg_belief_test.sh \
 		tests/sg_belief_test.c \
@@ -3788,23 +3130,7 @@ rune-v2-perception-evidence-test: \
 		slipgate/sg_rune_v2_content_identity.h
 	sh tests/run_sg_perception_evidence_test.sh
 
-rune-v2-belief-runtime-test: tests/run_sg_belief_runtime_test.sh \
-		tests/sg_belief_runtime_test.c slipgate/sg_belief_runtime.c \
-		slipgate/sg_belief_runtime.h slipgate/sg_perception_evidence.c \
-		slipgate/sg_perception_evidence.h slipgate/sg_belief.c \
-		slipgate/sg_belief_contract.h slipgate/sg_rune_v2_content_identity.c \
-		slipgate/sg_rune_v2_content_identity.h
-	sh tests/run_sg_belief_runtime_test.sh
 
-compact-belief-runtime-test: tests/run_sg_belief_runtime_test.sh \
-		tests/run_sg_compact_belief_perception_test.sh \
-		tests/sg_belief_runtime_test.c \
-		tests/sg_compact_belief_perception_test.c \
-		slipgate/sg_belief_runtime.c slipgate/sg_belief_runtime.h \
-		slipgate/sg_compact_belief_perception.c \
-		slipgate/sg_compact_belief_perception.h
-	sh tests/run_sg_belief_runtime_test.sh
-	sh tests/run_sg_compact_belief_perception_test.sh
 
 water-capability-real-bsp-test: tests/run_sg_water_real_bsp_test.sh \
 		tests/sg_water_real_bsp_test.c \
@@ -3832,7 +3158,8 @@ $(POV_SUPERVISOR_BIN): tools/pov-supervisor.c tools/pov-spawn-linux.c tools/pov-
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror -Wpedantic -Itools -o $@ \
 		tools/pov-supervisor.c tools/pov-spawn-linux.c
 
-$(POV_SUPERVISOR_TEST_BIN): tests/pov_supervisor_unit.c tools/pov-spawn-linux.c tools/pov-spawn-linux.h
+$(POV_SUPERVISOR_TEST_BIN): tests/pov_supervisor_unit.c \
+	tools/pov-spawn-linux.c tools/pov-spawn-linux.h
 	$(CC) -std=c11 -O1 -g -Wall -Wextra -Werror -Wpedantic -DPOV_TESTING \
 		-Itools -o $@ tests/pov_supervisor_unit.c tools/pov-spawn-linux.c
 
@@ -4007,14 +3334,8 @@ rune-mechanism-execution-test: $(RUNE_MECHANISM_EXECUTION_TEST_BIN)
 rune-binding-test: $(RUNE_BINDING_TEST_BIN)
 	./$(RUNE_BINDING_TEST_BIN)
 
-sidecar-wire-test: $(SIDECAR_WIRE_TEST_BIN)
-	./$(SIDECAR_WIRE_TEST_BIN)
 
-sidecar-loader-test: $(SIDECAR_LOADER_TEST_BIN)
-	./$(SIDECAR_LOADER_TEST_BIN)
 
-sidecar-store-test: $(SIDECAR_STORE_TEST_BIN)
-	./$(SIDECAR_STORE_TEST_BIN)
 
 danger-lease-test: $(DANGER_LEASE_TEST_BIN)
 	./$(DANGER_LEASE_TEST_BIN)
@@ -4100,10 +3421,6 @@ human-hook-release-test: tests/run_sg_human_hook_release_regression_test.sh \
 		tests/sg_human_hook_release_regression_test.c g_cmds.c p_weapon.c
 	sh tests/run_sg_human_hook_release_regression_test.sh
 
-bot-localization-test: tests/run_sg_bot_localization_test.sh \
-		tests/sg_bot_localization_test.c \
-		slipgate/sg_bot_localization.c slipgate/sg_bot_localization.h
-	sh tests/run_sg_bot_localization_test.sh
 replay-test: $(REPLAY_TEST_BIN)
 	./$(REPLAY_TEST_BIN)
 chain-hook-replay-test: $(CHAIN_HOOK_REPLAY_TEST_BIN)
@@ -4321,9 +3638,6 @@ endif
 -include $(RUNE_MECHANISM_CATALOG_TEST_DEPS)
 -include $(RUNE_MECHANISM_EXECUTION_TEST_DEPS)
 -include $(RUNE_BINDING_TEST_DEPS)
--include $(SIDECAR_WIRE_TEST_DEPS)
--include $(SIDECAR_LOADER_TEST_DEPS)
--include $(SIDECAR_STORE_TEST_DEPS)
 -include $(DANGER_LEASE_TEST_DEPS)
 -include $(DANGER_POLICY_TEST_DEPS)
 -include $(DANGER_TEST_DEPS)
@@ -4379,12 +3693,18 @@ sqlite3.o: sqlite3.c
 # The era-4 cell builder on one map: counts and timing.
 CELLSDUMP_BIN = cellsdump.gnu
 $(CELLSDUMP_BIN): tools/cellsdump.c slipgate/sg_configuration_cells.c \
-		slipgate/sg_configuration_semantics.c slipgate/sg_configuration_space.h \
-		slipgate/sg_configuration_semantics.h
+		slipgate/sg_configuration_semantics.c slipgate/sg_rune_cx.c \
+		slipgate/sg_rune_cx_build.c slipgate/sg_rune_movement.c \
+		slipgate/sg_rune_movement_build.c slipgate/sg_rune_flight.c \
+		slipgate/sg_rune_analytic.c slipgate/sg_rune_artifact.c
 	$(CC) -std=c11 -O2 -g -Wall -Wextra -I. tools/cellsdump.c \
 		slipgate/sg_configuration_cells.c slipgate/sg_configuration_semantics.c \
-		slipgate/sg_host_collision.c slipgate/sg_bsp_world.c \
-		slipgate/sg_rune_model.c slipgate/sg_crc32.c -lm -o $@
+		slipgate/sg_rune_cx.c slipgate/sg_rune_cx_build.c \
+		slipgate/sg_rune_movement.c slipgate/sg_rune_movement_build.c \
+		slipgate/sg_rune_flight.c slipgate/sg_rune_analytic.c \
+		slipgate/sg_rune_artifact.c slipgate/sg_host_collision.c \
+		slipgate/sg_bsp_world.c slipgate/sg_rune_model.c slipgate/sg_crc32.c \
+		-lm -o $@
 .PHONY: cellsdump
 cellsdump: $(CELLSDUMP_BIN)
 
@@ -4405,3 +3725,17 @@ rune-artifact-test: tests/run_sg_rune_artifact_test.sh tests/sg_rune_artifact_te
 		slipgate/sg_rune_cx.c slipgate/sg_rune_cx.h \
 		slipgate/sg_rune_movement.c slipgate/sg_rune_analytic.c slipgate/sg_crc32.c
 	sh tests/run_sg_rune_artifact_test.sh
+
+# Era-4 field check: load an artifact, locate two points, walk the route.
+FIELDCHECK_BIN = fieldcheck
+.PHONY: fieldcheck
+fieldcheck: $(FIELDCHECK_BIN)
+$(FIELDCHECK_BIN): tools/fieldcheck.c slipgate/sg_rune_locate.c \
+		slipgate/sg_rune_field.c slipgate/sg_rune_artifact.c \
+		slipgate/sg_rune_cx.c slipgate/sg_rune_movement.c \
+		slipgate/sg_rune_analytic.c slipgate/sg_crc32.c
+	$(CC) -std=c11 -O2 -g -Wall -Wextra -I. tools/fieldcheck.c \
+		slipgate/sg_rune_locate.c slipgate/sg_rune_field.c \
+		slipgate/sg_rune_artifact.c slipgate/sg_rune_cx.c \
+		slipgate/sg_rune_movement.c slipgate/sg_rune_analytic.c \
+		slipgate/sg_crc32.c -lm -o $@

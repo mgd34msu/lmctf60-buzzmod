@@ -50,15 +50,22 @@ typedef struct sg_rune_move_profile_s
 	float lead_seconds;       /* command to launch, for rocket jump */
 } sg_rune_move_profile_t;
 
+/* One way of leaving cell through portal and arriving in destination.  A
+ * contact crossing arrives in the portal's other cell with no launch; a
+ * flight (jump, drop, rocket jump) arrives wherever its traced arc landed,
+ * carrying the launch velocity that got it there and the time it took. */
 typedef struct sg_rune_move_capability_s
 {
 	uint32_t cell;
 	uint32_t portal;
+	uint32_t destination;
 	uint8_t kind;             /* sg_rune_move_kind_t */
 	uint8_t source_stances;
 	uint8_t destination_stances;
 	uint8_t reserved;
 	uint32_t profile;
+	float launch_velocity[3];
+	float seconds;
 } sg_rune_move_capability_t;
 
 typedef struct sg_rune_move_table_s
@@ -106,6 +113,9 @@ typedef struct sg_rune_move_store_s
 	sg_rune_move_law_t law;
 	float jump_rise;
 	float rocket_rise;
+	float rocket_velocity;
+	float rocket_lead_seconds;
+	float rocket_pre_blast_rise;
 } sg_rune_move_store_t;
 
 /* Derives the shared profiles under the law. */
@@ -115,16 +125,31 @@ void SG_RuneMoveStoreFree(sg_rune_move_store_t *store);
 void SG_RuneMoveStoreView(const sg_rune_move_store_t *store,
 	sg_rune_move_table_t *table_out);
 
-/* Emits every capability admissible for one directed crossing. */
+/* Emits every contact capability admissible for one directed crossing:
+ * walks, crouches, swims, and steps between floors.  Launches off a floor
+ * into the air are the builder's business through SG_RuneMoveAppendFlight,
+ * because where they land is a trace through the complex. */
 int SG_RuneMoveEmitCrossing(sg_rune_move_store_t *store,
 	const sg_rune_move_crossing_t *crossing);
+
+/* A traced flight: kind is JUMP, DROP, or ROCKET_JUMP. */
+int SG_RuneMoveAppendFlight(sg_rune_move_store_t *store, uint32_t cell,
+	uint32_t portal, sg_rune_move_kind_t kind, uint8_t source_stances,
+	uint8_t destination_stances, uint32_t destination,
+	const float launch_velocity[3], float seconds);
+
+/* Launch speeds the flights are traced with. */
+float SG_RuneMoveJumpVelocity(const sg_rune_move_store_t *store);
+float SG_RuneMoveRocketVelocity(const sg_rune_move_store_t *store);
+float SG_RuneMoveRocketLead(const sg_rune_move_store_t *store);
 
 const char *SG_RuneMoveKindString(sg_rune_move_kind_t kind);
 
 /* Every directed portal of a cell complex, with its crossing facts read
  * from the cells and the shared facet. */
 struct sg_rune_cx_view_s;
+struct sg_rune_law_s;
 int SG_RuneMoveEmitComplex(sg_rune_move_store_t *store,
-	const struct sg_rune_cx_view_s *complex);
+	const struct sg_rune_cx_view_s *complex, const struct sg_rune_law_s *law);
 
 #endif /* SG_RUNE_MOVE_H */
