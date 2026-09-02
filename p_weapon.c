@@ -26,7 +26,6 @@ extern void Weapon_PLASMA_Generic (edict_t *,int,int,int,int,int *,int *,void(*f
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_action_contract.generated.h"
 
-void SG_NoteRailShot(edict_t *shooter);
 
 #define GRAPPLE_FIRE_HOOK_SPEED        SG_HOST_HOOK_FIRE_SPEED
 #define GRAPPLE_PULL_SPEED             SG_HOST_HOOK_PULL_SPEED
@@ -1729,7 +1728,6 @@ void weapon_railgun_fire (edict_t *ent)
 	// and the trail are on the wire, which is the whole of what a player in
 	// the room perceives; every test about who could have perceived it, and
 	// what a bot is allowed to do with it, is on the slipgate side
-	SG_NoteRailShot(ent);
 
 	ent->client->ps.gunframe++;
 	PlayerNoise(ent, start, PNOISE_WEAPON);
