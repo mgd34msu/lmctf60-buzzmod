@@ -10,6 +10,7 @@
 #include "slipgate/sg_host_collision.h"
 #include "slipgate/sg_configuration_space.h"
 #include "slipgate/sg_configuration_semantics.h"
+#include "slipgate/sg_rune_compact_geometry.h"
 
 static double Now(void)
 {
@@ -129,6 +130,31 @@ int main(int argc, char **argv)
 		"[%.2fs]\n", (unsigned)semantics->region_count, (unsigned)supported,
 		(unsigned)semantics->boundary_count,
 		(unsigned)semantics->hook_surface_count, t2 - t1);
+	{
+		sg_rune_compact_geometry_t *geometry = NULL;
+		sg_rune_compact_geometry_error_t geometry_error;
+		sg_rune_compact_geometry_view_t view;
+		sg_rune_compact_identity_t compact_identity;
+		double t3;
+
+		memset(&compact_identity, 0, sizeof(compact_identity));
+		if (!SG_RuneCompactGeometryFromSpace(world, space, semantics,
+			&compact_identity, NULL, &geometry, &geometry_error))
+		{
+			fprintf(stderr, "geometry failed: %s (domain %d record %u)\n",
+				SG_RuneCompactGeometryErrorString(geometry_error.code),
+				(int)geometry_error.domain, (unsigned)geometry_error.record);
+			return 1;
+		}
+		t3 = Now();
+		SG_RuneCompactGeometryRead(geometry, &view);
+		printf("geometry: cells %u, facets %u, incidences %u, vertices %u, "
+			"portals %u, source surfaces %u  [%.2fs]\n", (unsigned)view.cell_count,
+			(unsigned)view.facet_count, (unsigned)view.incidence_count,
+			(unsigned)view.vertex_count, (unsigned)view.portal_count,
+			(unsigned)view.source_surface_count, t3 - t2);
+		SG_RuneCompactGeometryDestroy(geometry);
+	}
 	SG_ConfigurationSemanticsDestroy(semantics);
 	SG_ConfigurationDestroy(space);
 	SG_BspWorldDestroy(world);

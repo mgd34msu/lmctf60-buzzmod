@@ -111,6 +111,19 @@ int SG_RuneCompactGeometryMaterialize(
 	sg_rune_compact_geometry_t **geometry_out,
 	sg_rune_compact_geometry_error_t *error_out);
 
+/* Geometry straight from a configuration space and its regions, without the
+ * builder: what the builder path calls, and what the map driver calls. */
+struct sg_bsp_world_s;
+struct sg_configuration_space_s;
+struct sg_configuration_semantics_s;
+int SG_RuneCompactGeometryFromSpace(const struct sg_bsp_world_s *world,
+	const struct sg_configuration_space_s *configuration,
+	const struct sg_configuration_semantics_s *semantics,
+	const sg_rune_compact_identity_t *identity,
+	const sg_rune_compact_geometry_allocator_t *allocator,
+	sg_rune_compact_geometry_t **geometry_out,
+	sg_rune_compact_geometry_error_t *error_out);
+
 int SG_RuneCompactGeometryRead(const sg_rune_compact_geometry_t *geometry,
 	sg_rune_compact_geometry_view_t *view_out);
 void SG_RuneCompactGeometryDestroy(sg_rune_compact_geometry_t *geometry);

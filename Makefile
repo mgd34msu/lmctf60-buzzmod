@@ -1309,7 +1309,7 @@ RUNE_COMPACT_GENERATOR_OFFLINE_OBJS := \
 	slipgate/sg_configuration_cells.o \
 	slipgate/sg_static_visibility.o \
 	slipgate/sg_rune_compact_builder.o \
-	slipgate/sg_rune_compact_geometry.o \
+	slipgate/sg_rune_compact_geometry.o slipgate/sg_rune_compact_geometry_builder.o \
 	slipgate/sg_rune_compact_geometry_partition.o \
 	slipgate/sg_rune_compact_response_partition.o \
 	slipgate/sg_rune_compact_mechanisms.o \

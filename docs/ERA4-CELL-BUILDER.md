@@ -104,3 +104,11 @@ compact geometry, response, mechanisms, static, movement fields, weapon
 fields, composer, wire, publication; then the runtime loader, localizer,
 field service, and tactic units. Their tests go with them. The cell builder
 and the regions are done and are the first era-4 units in the pipeline.
+
+## Stage status (2026-09-01, late)
+
+- cells: era 4 (`sg_configuration_cells.c`). bctf01: 113,616 cells, 679,582 directed portals, 19 s.
+- regions: era 4 (`sg_configuration_semantics.c`). 0.2 s.
+- compact geometry: era 4 (`sg_rune_compact_geometry.c`, builder adapter in `_builder.c`). 469,829 facets, 809,620 incidences, 0.3 s. `sg_rune_compact_geometry_partition.c` stays only until the response partition is replaced; it is era 3.
+- response, mechanisms, static, movement, weapon, composer, wire, publication, runtime: era 3, next in that order.
+- `tools/cellsdump MAP.bsp` runs cells, regions, and geometry on one map with counts and timing.
