@@ -14,6 +14,10 @@ readonly HARD_REGRESSION_MAPS=(
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 Q2DED="${Q2DED:-$HOME/Games/Quake2/engines/yquake2/release/q2ded}"
+# Engine-specific startup flags.  Yamagi takes -portable; the q2pro family
+# wants +set basedir <root> +set homedir "" so reads and writes stay in the
+# game root.  Word-split on purpose.
+Q2DED_FLAGS="${Q2DED_FLAGS:--portable}"
 GAMEDIR_ROOT="${GAMEDIR_ROOT:-$HOME/Games/Quake2}"
 GAME="${GAME:-lmctf-hooktest}"
 CFG="${CFG:-rune.cfg}"
@@ -172,7 +176,7 @@ owned_process_matches() {
 remove_owned_stage() {
     local stage_dir="$1"
     case "$stage_dir" in
-        "$GAMEDIR_ROOT"/.runegen-stage.*)
+        "$GAMEDIR_ROOT"/runegen-stage-*)
             rm -rf -- "$stage_dir"
             ;;
         *)
@@ -392,7 +396,7 @@ run_engine() {
             cd "$GAMEDIR_ROOT" || exit 1
             printf '%s\t%s\t%s\n' "$BASHPID" "$stage_game" "$stage_dir" \
                 > "$record" || exit 1
-            exec "$Q2DED_REAL" -portable +set game "$stage_game" +set dedicated 1 \
+            exec "$Q2DED_REAL" $Q2DED_FLAGS +set game "$stage_game" +set dedicated 1 \
                 +set maxclients "$MAXCLIENTS" +set port "$port" +set net_port "$port" \
                 +exec "$CFG" +map "$map"
         ) > "$logfile" 2>&1 &
@@ -404,7 +408,7 @@ run_engine() {
             cd "$GAMEDIR_ROOT" || exit 1
             printf '%s\t%s\t%s\n' "$BASHPID" "$stage_game" "$stage_dir" \
                 > "$record" || exit 1
-            exec "$Q2DED_REAL" -portable +set game "$stage_game" +set dedicated 1 \
+            exec "$Q2DED_REAL" $Q2DED_FLAGS +set game "$stage_game" +set dedicated 1 \
                 +set maxclients "$MAXCLIENTS" +set port "$port" +set net_port "$port" \
                 +exec "$CFG" +map "$map"
         ) > "$logfile" 2>&1 &
@@ -418,7 +422,7 @@ run_engine() {
 
 stage_path_for() {
     local worker="$1" map="$2"
-    mktemp -d "$GAMEDIR_ROOT/.runegen-stage.$RUN_ID.w$worker.$map.XXXXXX"
+    mktemp -d "$GAMEDIR_ROOT/runegen-stage-$RUN_ID-w$worker-$map-XXXXXX"
 }
 
 canonical_reader_accepts() {
