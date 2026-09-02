@@ -346,9 +346,14 @@ static qboolean DestinationFor(sg_bot_t *bot, int role, vec3_t out)
 			VectorCopy(target->s.origin, out);
 			if (speed > 50.0f)
 			{
+				vec3_t point;
+
 				VectorScale(target->velocity, ESCORT_AHEAD / speed, ahead);
 				ahead[2] = 0.0f;
-				VectorAdd(out, ahead, out);
+				VectorAdd(out, ahead, point);
+				/* Only where there is floor to stand on. */
+				if (StandingCellNear(point) != SG_RUNE_CX_INDEX_NONE)
+					VectorCopy(point, out);
 			}
 			return true;
 		}
