@@ -402,3 +402,52 @@ bctf01 (108 MB, 27.6 s as bmap1, the same geometry) plus:
 | smap33 | 64 | 69,918 | 414,855 | 152,017 | 2 | 47,944 | 972,096 | 17.3 |
 | tomb05 | 5 | 3,947 | 20,708 | 24,231 | 8 | 7,605 | 83,828 | 0.4 |
 | xmap20 | 12 | 12,728 | 66,790 | 52,031 | 2 | 18,730 | 72,782 | 1.7 |
+
+## 2026-09-02 afternoon: what the owner's play and the demos exposed, and the fixes
+
+Measured against the players' standard (docs/ERA4-PLAYERS-STANDARD.txt) the
+bots were slow on the rope and stuck in places the owner runs through.  The
+causes, each found against the BSP with the tools below:
+
+- Flags that float at their spawn point (lmctf09) drop to the floor in the
+  game; the flag's own dropped origin is the stand when it is at home, and
+  StandingCellNear drops a trace to the floor when no probe finds a
+  supported cell.
+- Locate (sg_rune_locate.c) tested a point against a cell's facets only; a
+  two-facet sliver is an unbounded slab and swallowed points a hundred units
+  away, parking bots with a walk toward a target above them.  The cell's
+  box now bounds the test.
+- The carve (sg_configuration_cells.c) cut every piece of a leaf by every
+  side plane of every brush the leaf held, so a floor slab's wall plane split
+  the free space above the slab into a sliver and a cell.  A brush that lies
+  wholly outside one side of a piece leaves it uncut (PieceClearOfBrush).
+  lmctf09 went from 77k cells (25k thinner than four units) to 24k (3k).
+- The portal pass keyed faces by the hull variant that expanded the plane;
+  a wall expanded for the crouch hull and for the standing hull is the same
+  plane, and the faces on it never met: the red base of lmctf09 was an
+  island of 5,600 states.  The key leaves the variant out and SameKey
+  accepts equal distances.  The owner's trace, bisected for reachability
+  flips from the blue base, went from 37 flips to 16, all airborne.
+- Rides let go one frame after the bite (attached 0.1 s, released at running
+  speed) because the release rule fired the moment the bite was within the
+  record's release distance.  A ride lets go only once the pull carries the
+  body (480 along the pull) unless it is already inside the pull's slow band.
+- The ride builder kept the nearest bites and none beyond 48 units; the
+  players fire far.  It keeps the farthest bites in view and none inside the
+  pull's slow band plus 48; rides carry a momentum credit (0.7) when they
+  release at 400 forward, and bites need only be 4 above the eye.
+- A jump stalled against its ledge (within 40 of the portal, under 60 speed)
+  is pressed from a stand.
+- A body hanging over harm holds on: it lets go only where the drop is safe
+  or where another rescue rope can catch the fall; a fall may fire up to
+  three rescue ropes.
+- A crossing the body is stuck on for two seconds is avoided, not retried.
+
+Tools: fieldcheck `n x y z r` lists every cell near a point, `stats` reports
+cell shapes, the `d` dump names each facet's brush side or BSP plane;
+bsppoint names the brush a hull starts inside and prints its sides;
+cellsdump.gnu regenerates a map in seconds (lmctf09 6 s, bctf01 26 s);
+SG_CFG_WATCH_D=<distance> makes the carve print the portal pass on one
+plane; tools/dm2trace.py reads demos.  The bot log line carries the command
+(cmd=status(direction)xspeed up=), the rope log names held and taken
+releases.
