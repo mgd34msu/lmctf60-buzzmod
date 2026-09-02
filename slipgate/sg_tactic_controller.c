@@ -434,13 +434,18 @@ int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 			float speed = sqrtf(body->velocity[0] * body->velocity[0] +
 				body->velocity[1] * body->velocity[1]);
 			float frame = (float)(body->frame_ms ? body->frame_ms : 100U) / 1000.0f;
+			/* The portal's centre may sit well above the floor (a tall face
+			 * between two tall cells): the run reaches it in the flat. */
+			float fx = step->target[0] - body->origin[0];
+			float fy = step->target[1] - body->origin[1];
+			float flat_distance = sqrtf(fx * fx + fy * fy);
 
 			/* Stalled at the portal: a ledge stops the body there, and a
 			 * standing jump against it is the only way up. */
 			if (!have_direction ||
-				(distance <= speed * frame + JUMP_PRESS_SLACK &&
+				(flat_distance <= speed * frame + JUMP_PRESS_SLACK &&
 				 speed >= JUMP_PRESS_SPEED * (body->law ? body->law->max_velocity : 300.0f)) ||
-				(distance <= JUMP_PRESS_STALL_DISTANCE && speed < JUMP_PRESS_STALL_SPEED))
+				(flat_distance <= JUMP_PRESS_STALL_DISTANCE && speed < JUMP_PRESS_STALL_SPEED))
 			{
 				command.up = 1.0f;
 				command.status = SG_TACTIC_COMMAND_MOVE;
