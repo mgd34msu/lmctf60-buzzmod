@@ -2126,6 +2126,16 @@ static qboolean Stuck(sg_bot_t *bot, edict_t *e)
 		return false;
 	bot->stuck_since = level.time;
 	bot->destination_cell = SG_RUNE_CX_INDEX_NONE;
+	/* The crossing the body cannot make is not offered again for a while:
+	 * the field finds another way round. */
+	if (bot->step.kind == SG_RUNE_STEP_CROSS &&
+		bot->step.capability != SG_RUNE_CX_INDEX_NONE)
+	{
+		Avoid(bot, bot->step.capability);
+		if (sg_cv.debug && sg_cv.debug->value)
+			gi.dprintf("SGBOT %s stuck on crossing %u: avoided\n",
+				e->client->pers.netname, (unsigned)bot->step.capability);
+	}
 	return true;
 }
 
