@@ -1,4 +1,4 @@
-# Era-4 host-side rewrite: the units that were still pre-era-4 (2026-09-02)
+# Era-4 host-side rewrite: the units that were still pre-era-4 (2026-09-02) -- done; see ERA4-REVIEW.md for the outcome per unit
 
 The bot (carve, complex, movement, flights, artifact, locator, router, fire,
 hook, mechanisms, generation, level owner, controller, driver, roster,
