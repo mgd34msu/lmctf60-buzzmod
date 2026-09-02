@@ -194,6 +194,7 @@ int main(void)
 	sg_rune_field_t field;
 	sg_rune_step_t step;
 	sg_rune_flight_t flight;
+	sg_rune_mech_t mech;
 	uint32_t a, b, c, air, low, cell;
 	float point[3], violation;
 	const float NONE = 0.0f;
@@ -246,6 +247,17 @@ int main(void)
 	 * a jump off c into the air that land in the lower floor. */
 	CHECK(SG_RuneMoveStoreInit(&store, &movement_law));
 	CHECK(SG_RuneMoveEmitComplex(&store, &artifact.complex, &artifact.law));
+	/* A mechanism crossing has no portal: a teleporter from low back to a. */
+	{
+		memset(&mech, 0, sizeof(mech));
+		mech.kind = SG_RUNE_MECH_TELEPORTER;
+		mech.activator = SG_RUNE_CX_INDEX_NONE;
+		mech.bmodel = -1;
+		artifact.mechanisms.records = &mech;
+		artifact.mechanisms.record_count = 1U;
+		CHECK(SG_RuneMoveAppendMechanism(&store, low, a, SG_RUNE_MOVE_TELEPORT,
+			SG_RUNE_MOVE_STANDING | SG_RUNE_MOVE_CROUCHING, 0U, NULL, 0.5f));
+	}
 	SG_RuneMoveStoreView(&store, &artifact.movement);
 	CHECK(SG_RuneArtifactValid(&artifact, NULL));
 	{
@@ -332,11 +344,14 @@ int main(void)
 		CHECK(kinds[2] == SG_RUNE_MOVE_DROP);
 		CHECK(fabsf(step.target[0] - 256.0f) < 0.01f);
 	}
-	/* From low, nothing leads back up: unreachable.  The field's arrays
-	 * are reused for the new destination. */
+	/* From low, only the teleporter leads back up.  The field's arrays are
+	 * reused for the new destination. */
 	CHECK(SG_RuneFieldBuild(&field, &router, a));
 	CHECK(SG_RuneStepSelect(&router, &field, low, 0, point, &step));
-	CHECK(step.kind == SG_RUNE_STEP_UNREACHABLE);
+	CHECK(step.kind == SG_RUNE_STEP_CROSS);
+	CHECK(step.move_kind == SG_RUNE_MOVE_TELEPORT);
+	CHECK(step.portal == SG_RUNE_CX_INDEX_NONE);
+	CHECK(fabsf(step.target[0] - 32.0f) < 0.01f);
 
 	SG_RuneFieldFree(&field);
 	SG_RuneRouterFree(&router);

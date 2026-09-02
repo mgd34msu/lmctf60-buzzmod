@@ -174,10 +174,14 @@ int SG_RuneRouterBuild(sg_rune_router_t *router,
 
 		router->destination[capability] = destination;
 		router->arrival_first[destination + 1U]++;
-		horizontal = Horizontal(&router->cell_center[record->cell * 3U],
-				&router->portal_center[record->portal * 3U]) +
-			Horizontal(&router->portal_center[record->portal * 3U],
+		if (record->portal == SG_RUNE_CX_INDEX_NONE)
+			horizontal = Horizontal(&router->cell_center[record->cell * 3U],
 				&router->cell_center[destination * 3U]);
+		else
+			horizontal = Horizontal(&router->cell_center[record->cell * 3U],
+					&router->portal_center[record->portal * 3U]) +
+				Horizontal(&router->portal_center[record->portal * 3U],
+					&router->cell_center[destination * 3U]);
 		dz = router->cell_center[destination * 3U + 2U] -
 			router->cell_center[record->cell * 3U + 2U];
 		router->edge_cost[capability] = EdgeCost(artifact, capability,
