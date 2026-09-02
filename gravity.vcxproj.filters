@@ -230,6 +230,21 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="slipgate\sg_crc32.c">
+    <ClCompile Include="slipgate\sg_configuration_semantics.c" />
+    <ClCompile Include="slipgate\sg_configuration_cells.c" />
+    <ClCompile Include="slipgate\sg_bot_frame.c" />
+    <ClCompile Include="slipgate\sg_rune_movement_build.c" />
+    <ClCompile Include="slipgate\sg_rune_movement.c" />
+    <ClCompile Include="slipgate\sg_rune_locate.c" />
+    <ClCompile Include="slipgate\sg_rune_level.c" />
+    <ClCompile Include="slipgate\sg_rune_generate.c" />
+    <ClCompile Include="slipgate\sg_rune_game.c" />
+    <ClCompile Include="slipgate\sg_rune_flight.c" />
+    <ClCompile Include="slipgate\sg_rune_field.c" />
+    <ClCompile Include="slipgate\sg_rune_cx_build.c" />
+    <ClCompile Include="slipgate\sg_rune_cx.c" />
+    <ClCompile Include="slipgate\sg_rune_artifact.c" />
+    <ClCompile Include="slipgate\sg_rune_analytic.c" />
       <Filter>Source Files</Filter>
     </ClCompile>
       <Filter>Source Files</Filter>
@@ -758,6 +773,19 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="slipgate\sg_crc32.h">
+    <ClInclude Include="slipgate\sg_configuration_semantics.h" />
+    <ClInclude Include="slipgate\sg_configuration_space.h" />
+    <ClInclude Include="slipgate\sg_rune_movement.h" />
+    <ClInclude Include="slipgate\sg_rune_locate.h" />
+    <ClInclude Include="slipgate\sg_rune_level.h" />
+    <ClInclude Include="slipgate\sg_rune_generate.h" />
+    <ClInclude Include="slipgate\sg_rune_game.h" />
+    <ClInclude Include="slipgate\sg_rune_flight.h" />
+    <ClInclude Include="slipgate\sg_rune_field.h" />
+    <ClInclude Include="slipgate\sg_rune_cx_build.h" />
+    <ClInclude Include="slipgate\sg_rune_cx.h" />
+    <ClInclude Include="slipgate\sg_rune_artifact.h" />
+    <ClInclude Include="slipgate\sg_rune_analytic.h" />
       <Filter>Header Files</Filter>
     </ClInclude>
       <Filter>Header Files</Filter>
