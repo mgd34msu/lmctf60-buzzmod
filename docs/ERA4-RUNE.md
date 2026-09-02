@@ -34,20 +34,40 @@ replacement runs on a real map.
 4. **Analytic functions** (era 4, done). Constants, affines, polynomials,
    ballistics, piecewise with clauses, over named input dimensions with
    named output meanings. Flat coefficient store. One evaluator.
-5. **Hook reach** (era 4, after movement). No per-target fibers. The runtime
-   asks the engine's PVS (`gi.inPVS`) and traces exactly at tactic time. The
-   RUNE stores per cluster the source surfaces in that cluster, so a cell
-   (which carries its cluster) can list candidate attach surfaces in
-   potentially visible clusters within hook range without a search. bctf01
-   has 2,442 clusters and 25,203 surfaces.
-6. **Mechanisms** (era 3 now). Doors, lifts, buttons, teleports, pushes as
-   mechanism records with controllers and transitions bound to the portals
-   they gate. Rewritten after movement.
-7. **Weapons** (era 3 now). Profiles from the host weapon law; per-cell
-   kernels as analytic functions over the same visibility as the hook.
-   Rewritten after mechanisms.
-8. **Wire** (era 4, done). `sg_rune_artifact`: one image, a header with
-   identity and law, thirteen sections of fixed-layout records behind a
+5. **Hook reach** (era 4, done). `sg_rune_hook`: from every floor cell,
+   the hookable world surfaces (centroid, two units off the face) in the
+   clusters the map's own visibility says are in view, within rope range
+   and above the eye, facing it: each survives an exact bolt trace from
+   the eye, then the pull is traced with the crouch hull toward the bite,
+   and letting go at half, three quarters and the whole of the clear pull
+   is traced as a flight to a landing.  Each distinct landing is one HOOK
+   record: fire at this bite from this cell, ride, let go, land there. The
+   runtime keeps the hook step while the rope is out and lets go once the
+   body is at the landing's height, over it, or about to meet the bite.
+   bctf01: 6,575 bites, 165k records from 23.6k floor cells, 5.6 s.
+6. **Mechanisms** (era 4, done). `sg_rune_mechanisms`: doors, lifts,
+   buttons, teleporters, pushes, trains read from the host's entity
+   semantics into records {kind, activation, bmodel, entity, activator,
+   rest bounds, travel, speed, wait, gate cells}.  Before movement a lift
+   or train rest top is stamped floor; after movement the records add
+   their own crossings (ride, teleport, push flight, train legs) and gate
+   the crossings into doors.  The runtime binds each record to its live
+   edict and reads state from it.  bctf01: 12 pushes, 1 train.
+7. **Fire relations** (era 4, done). `sg_rune_fire`: between the floor
+   cells with standing room (32 units each way), in the clusters the map
+   says may see each other, within 1,536 units: a clear line eye to eye
+   (rays), a clear corridor for a projectile body to the other body, a
+   rocket at the feet whose burst reaches them (blast), and when no line
+   exists a grenade arc at four pitches that lands within its burst (lob).
+   Every other floor cell borrows the row of the nearest representative;
+   a target resolves the same way.  The runtime scales each weapon
+   family's expected damage by the relation for the pair of cells the
+   fight is in, and places defenders on the cells whose lines cover the
+   most of the flag's approaches (the second where the first leaves gaps),
+   facing the approaches they cover.  bctf01: 3,365 representatives, 1.56M
+   pairs, 698k records, 7 s, 5.3 MB.
+8. **Wire** (era 4, done). `sg_rune_artifact` v3: one image, a header with
+   identity and law, seventeen sections of fixed-layout records behind a
    CRC, every reference validated on load with the failing record named,
    arrays borrowed from the image. bctf01: 110 MB, 0.9 s to load. Too big:
    portal and facet provenance and the vertex arrays dominate; stripping

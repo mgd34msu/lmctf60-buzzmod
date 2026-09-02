@@ -231,3 +231,16 @@ sg_traversal_transition.h
 sg_water_forest.c
 sg_water_forest.h
 sg_weave_policy.h
+
+# orphan headers removed 2026-09-02 (no includer left):
+slipgate/sg_bot_ping.h
+slipgate/sg_callout_policy.h
+slipgate/sg_callout_random.h
+slipgate/sg_chat_random.h
+slipgate/sg_ear_random.h
+slipgate/sg_escape_random.h
+slipgate/sg_escort_dose.h
+slipgate/sg_lead_random.h
+slipgate/sg_ribbon_random.h
+slipgate/sg_role_skew_random.h
+slipgate/sg_route_jitter.h
