@@ -72,6 +72,10 @@ static void Layouts(const sg_rune_artifact_t *source,
 		move->analytic.term_count);
 	LAYOUT(SG_RUNE_SECTION_FN_CLAUSES, move->analytic.clauses,
 		move->analytic.clause_count);
+	LAYOUT(SG_RUNE_SECTION_MECHANISMS, source->mechanisms.records,
+		source->mechanisms.record_count);
+	LAYOUT(SG_RUNE_SECTION_MECHANISM_CELLS, source->mechanisms.cells,
+		source->mechanisms.cell_count);
 #undef LAYOUT
 }
 
@@ -148,7 +152,7 @@ static const size_t ELEMENT_SIZES[SG_RUNE_SECTION_COUNT] = {
 	sizeof(sg_rune_cx_surface_t), sizeof(sg_rune_cx_vec3_t),
 	sizeof(sg_rune_move_capability_t), sizeof(sg_rune_move_profile_t),
 	sizeof(sg_rune_fn_function_t), sizeof(sg_rune_fn_term_t),
-	sizeof(sg_rune_fn_clause_t)
+	sizeof(sg_rune_fn_clause_t), sizeof(sg_rune_mech_t), sizeof(uint32_t)
 };
 
 sg_rune_artifact_status_t SG_RuneArtifactDecode(const unsigned char *image,
@@ -230,6 +234,10 @@ sg_rune_artifact_status_t SG_RuneArtifactDecode(const unsigned char *image,
 	move->analytic.term_count = counts[SG_RUNE_SECTION_FN_TERMS];
 	move->analytic.clauses = arrays[SG_RUNE_SECTION_FN_CLAUSES];
 	move->analytic.clause_count = counts[SG_RUNE_SECTION_FN_CLAUSES];
+	artifact_out->mechanisms.records = arrays[SG_RUNE_SECTION_MECHANISMS];
+	artifact_out->mechanisms.record_count = counts[SG_RUNE_SECTION_MECHANISMS];
+	artifact_out->mechanisms.cells = arrays[SG_RUNE_SECTION_MECHANISM_CELLS];
+	artifact_out->mechanisms.cell_count = counts[SG_RUNE_SECTION_MECHANISM_CELLS];
 	artifact_out->image = image;
 	artifact_out->image_size = image_size;
 	if (!SG_RuneArtifactValid(artifact_out, fault_out))
@@ -339,10 +347,39 @@ int SG_RuneArtifactValid(const sg_rune_artifact_t *artifact,
 			!Finite(profile->lead_seconds) || profile->lead_seconds < 0.0f)
 			return Fault(fault_out, "profiles", index, "function");
 	}
+	for (index = 0U; index < artifact->mechanisms.record_count; index++)
+	{
+		const sg_rune_mech_t *record = &artifact->mechanisms.records[index];
+		uint32_t axis;
+
+		if (record->kind >= SG_RUNE_MECH_KIND_COUNT ||
+			record->activation >= SG_RUNE_MECH_ACTIVATE_COUNT ||
+			record->reserved[0] || record->reserved[1])
+			return Fault(fault_out, "mechanisms", index, "kind");
+		if (record->activator != SG_RUNE_CX_INDEX_NONE &&
+			record->activator >= artifact->mechanisms.record_count)
+			return Fault(fault_out, "mechanisms", index, "activator");
+		if (record->first_cell > artifact->mechanisms.cell_count ||
+			record->cell_count > artifact->mechanisms.cell_count - record->first_cell)
+			return Fault(fault_out, "mechanisms", index, "cell span");
+		for (axis = 0U; axis < 3U; axis++)
+			if (!Finite(record->origin[axis]) || !Finite(record->mins[axis]) ||
+				!Finite(record->maxs[axis]) || !Finite(record->travel[axis]))
+				return Fault(fault_out, "mechanisms", index, "value");
+		if (!Finite(record->speed) || !Finite(record->wait))
+			return Fault(fault_out, "mechanisms", index, "value");
+	}
+	for (index = 0U; index < artifact->mechanisms.cell_count; index++)
+		if (artifact->mechanisms.cells[index] >= cx->cell_count)
+			return Fault(fault_out, "mechanism cells", index, "cell");
 	for (index = 0U; index < move->capability_count; index++)
 	{
 		const sg_rune_move_capability_t *capability = &move->capabilities[index];
 		const sg_rune_cx_portal_t *portal;
+
+		if (capability->mechanism != SG_RUNE_CX_INDEX_NONE &&
+			capability->mechanism >= artifact->mechanisms.record_count)
+			return Fault(fault_out, "capabilities", index, "mechanism");
 
 		if (capability->cell >= cx->cell_count ||
 			(capability->portal >= cx->portal_count &&

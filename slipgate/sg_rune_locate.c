@@ -242,3 +242,70 @@ uint32_t SG_RuneLocate(const sg_rune_locator_t *locator,
 		*violation_out = best_violation;
 	return best;
 }
+
+uint32_t SG_RuneLocateNearestFloor(const sg_rune_locator_t *locator,
+	const float point[3], float radius, float rise)
+{
+	const sg_rune_cx_view_t *cx;
+	uint32_t best = SG_RUNE_CX_INDEX_NONE;
+	float best_distance = INFINITY;
+	int32_t low[3], high[3], x, y, z;
+	uint32_t axis;
+
+	if (!locator || !locator->artifact || !point)
+		return SG_RUNE_CX_INDEX_NONE;
+	cx = &locator->artifact->complex;
+	for (axis = 0U; axis < 3U; axis++)
+	{
+		float reach = axis == 2U ? rise : radius;
+		int32_t lo = (int32_t)((point[axis] - reach) * (float)SG_RUNE_CX_Q8_ONE);
+		int32_t hi = (int32_t)((point[axis] + reach) * (float)SG_RUNE_CX_Q8_ONE);
+
+		low[axis] = (lo - locator->origin_q8[axis]) / locator->bucket_q8;
+		high[axis] = (hi - locator->origin_q8[axis]) / locator->bucket_q8;
+		if (low[axis] < 0)
+			low[axis] = 0;
+		if (high[axis] >= (int32_t)locator->dims[axis])
+			high[axis] = (int32_t)locator->dims[axis] - 1;
+		if (low[axis] > high[axis])
+			return SG_RUNE_CX_INDEX_NONE;
+	}
+	for (z = low[2]; z <= high[2]; z++)
+		for (y = low[1]; y <= high[1]; y++)
+			for (x = low[0]; x <= high[0]; x++)
+			{
+				uint32_t bucket = ((uint32_t)z * locator->dims[1] + (uint32_t)y) *
+					locator->dims[0] + (uint32_t)x;
+				uint32_t slot;
+
+				for (slot = locator->first[bucket]; slot < locator->first[bucket + 1U];
+					slot++)
+				{
+					uint32_t cell = locator->entries[slot];
+					const sg_rune_cx_cell_t *record = &cx->cells[cell];
+					float cx0, cy0, cz0, dx, dy, dz, distance;
+
+					if (!(record->semantics & SG_RUNE_CX_CELL_SUPPORTED))
+						continue;
+					cx0 = (float)((double)record->bounds.mins.value[0] +
+						(double)record->bounds.maxs.value[0]) /
+						(2.0f * (float)SG_RUNE_CX_Q8_ONE);
+					cy0 = (float)((double)record->bounds.mins.value[1] +
+						(double)record->bounds.maxs.value[1]) /
+						(2.0f * (float)SG_RUNE_CX_Q8_ONE);
+					cz0 = (float)record->bounds.mins.value[2] /
+						(float)SG_RUNE_CX_Q8_ONE;
+					dx = cx0 - point[0];
+					dy = cy0 - point[1];
+					dz = cz0 - point[2];
+					if (fabsf(dz) > rise)
+						continue;
+					distance = sqrtf(dx * dx + dy * dy) + fabsf(dz) * 0.5f;
+					if (distance > radius || distance >= best_distance)
+						continue;
+					best_distance = distance;
+					best = cell;
+				}
+			}
+	return best;
+}

@@ -14,9 +14,10 @@
 
 #include "sg_rune_analytic.h"
 #include "sg_rune_cx.h"
+#include "sg_rune_mechanisms.h"
 #include "sg_rune_movement.h"
 
-#define SG_RUNE_ARTIFACT_VERSION UINT32_C(1)
+#define SG_RUNE_ARTIFACT_VERSION UINT32_C(2)
 #define SG_RUNE_ARTIFACT_SCHEMA_ID UINT64_C(0x52554E4534000001)
 
 typedef struct sg_rune_identity_s
@@ -69,6 +70,8 @@ typedef enum sg_rune_section_kind_e
 	SG_RUNE_SECTION_FN_FUNCTIONS,
 	SG_RUNE_SECTION_FN_TERMS,
 	SG_RUNE_SECTION_FN_CLAUSES,
+	SG_RUNE_SECTION_MECHANISMS,
+	SG_RUNE_SECTION_MECHANISM_CELLS,
 	SG_RUNE_SECTION_COUNT
 } sg_rune_section_kind_t;
 
@@ -78,6 +81,7 @@ typedef struct sg_rune_artifact_s
 	sg_rune_law_t law;
 	sg_rune_cx_view_t complex;
 	sg_rune_move_table_t movement;
+	sg_rune_mech_table_t mechanisms;
 	const unsigned char *image;
 	size_t image_size;
 	unsigned char *owned;      /* the image when this artifact loaded it */

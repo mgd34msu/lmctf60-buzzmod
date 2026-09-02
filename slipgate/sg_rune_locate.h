@@ -34,6 +34,11 @@ void SG_RuneLocatorFree(sg_rune_locator_t *locator);
 uint32_t SG_RuneLocate(const sg_rune_locator_t *locator,
 	const float origin[3], uint8_t stance, float slack, float *violation_out);
 
+/* The supported (floor) cell whose floor point is nearest to point within
+ * radius horizontally and rise vertically, or INDEX_NONE. */
+uint32_t SG_RuneLocateNearestFloor(const sg_rune_locator_t *locator,
+	const float point[3], float radius, float rise);
+
 /* How far outside cell the point lies (0 inside); INFINITY when the cell is
  * out of range. */
 float SG_RuneCellViolation(const sg_rune_artifact_t *artifact, uint32_t cell,

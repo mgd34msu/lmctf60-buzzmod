@@ -13,6 +13,7 @@
 #include "slipgate/sg_configuration_semantics.h"
 #include "slipgate/sg_rune_cx_build.h"
 #include "slipgate/sg_rune_artifact.h"
+#include "slipgate/sg_rune_mechanisms.h"
 #include "slipgate/sg_rune_movement.h"
 
 static double Now(void)
@@ -146,6 +147,11 @@ int main(int argc, char **argv)
 				(int)geometry_error.domain, (unsigned)geometry_error.record);
 			return 1;
 		}
+		if (!SG_RuneMechMarkCells(world, geometry))
+		{
+			fprintf(stderr, "mechanism marking failed\n");
+			return 1;
+		}
 		t3 = Now();
 		SG_RuneCxRead(geometry, &view);
 		printf("geometry: cells %u, facets %u, incidences %u, vertices %u, "
@@ -155,6 +161,7 @@ int main(int argc, char **argv)
 			(unsigned)view.surface_count, t3 - t2);
 		{
 			sg_rune_move_store_t movement;
+			sg_rune_mech_store_t mechanisms;
 			sg_rune_move_law_t law;
 			sg_rune_law_t law4;
 			uint32_t counts[SG_RUNE_MOVE_KIND_COUNT];
@@ -173,6 +180,25 @@ int main(int argc, char **argv)
 			{
 				fprintf(stderr, "movement failed\n");
 				return 1;
+			}
+			SG_RuneMechStoreInit(&mechanisms);
+			if (!SG_RuneMechEmit(world, geometry, &law4, &movement,
+				&mechanisms))
+			{
+				fprintf(stderr, "mechanisms failed\n");
+				return 1;
+			}
+			printf("mechanisms: %u records, %u gate cells\n",
+				(unsigned)mechanisms.record_count, (unsigned)mechanisms.cell_count);
+			{
+				uint32_t m, kinds[SG_RUNE_MECH_KIND_COUNT] = { 0 };
+
+				for (m = 0U; m < mechanisms.record_count; m++)
+					kinds[mechanisms.records[m].kind]++;
+				for (m = 0U; m < SG_RUNE_MECH_KIND_COUNT; m++)
+					if (kinds[m])
+						printf("  %-12s %u\n", SG_RuneMechKindString(
+							(sg_rune_mech_kind_t)m), kinds[m]);
 			}
 			t4 = Now();
 			memset(counts, 0, sizeof(counts));
@@ -217,6 +243,7 @@ int main(int argc, char **argv)
 				source.law.substep_ms = identity.physics.substep_ms;
 				source.complex = view;
 				SG_RuneMoveStoreView(&movement, &source.movement);
+				SG_RuneMechStoreView(&mechanisms, &source.mechanisms);
 				t5 = Now();
 				status = SG_RuneArtifactEncode(&source, &image, &image_size);
 				t6 = Now();
@@ -250,6 +277,7 @@ int main(int argc, char **argv)
 				SG_RuneArtifactRelease(&loaded);
 				free(image);
 			}
+			SG_RuneMechStoreFree(&mechanisms);
 			SG_RuneMoveStoreFree(&movement);
 		}
 		SG_RuneCxDestroy(geometry);

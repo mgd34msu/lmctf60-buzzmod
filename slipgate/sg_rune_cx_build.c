@@ -1056,6 +1056,11 @@ done:
 	return ok;
 }
 
+sg_rune_cx_cell_t *SG_RuneCxCellsMutable(sg_rune_cx_t *geometry)
+{
+	return geometry ? geometry->cells : NULL;
+}
+
 int SG_RuneCxRead(const sg_rune_cx_t *geometry,
 	sg_rune_cx_view_t *view_out)
 {

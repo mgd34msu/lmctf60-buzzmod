@@ -80,6 +80,9 @@ int SG_RuneCxFromSpace(const struct sg_bsp_world_s *world,
 	sg_rune_cx_t **geometry_out,
 	sg_rune_cx_error_t *error_out);
 
+/* The cells, writable: the mechanisms pass stamps support and gates. */
+sg_rune_cx_cell_t *SG_RuneCxCellsMutable(sg_rune_cx_t *geometry);
+
 int SG_RuneCxRead(const sg_rune_cx_t *geometry,
 	sg_rune_cx_view_t *view_out);
 void SG_RuneCxDestroy(sg_rune_cx_t *geometry);

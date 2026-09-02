@@ -624,7 +624,8 @@ static qboolean Stuck(sg_bot_t *bot, edict_t *e)
 	float dz = e->s.origin[2] - bot->stuck_origin[2];
 
 	if (dx * dx + dy * dy + dz * dz > 32.0f * 32.0f ||
-		bot->step.kind != SG_RUNE_STEP_CROSS)
+		(bot->step.kind != SG_RUNE_STEP_CROSS &&
+		 bot->step.kind != SG_RUNE_STEP_ARRIVED))
 	{
 		VectorCopy(e->s.origin, bot->stuck_origin);
 		bot->stuck_since = level.time;

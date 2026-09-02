@@ -22,6 +22,7 @@ typedef struct sg_rune_generate_report_s
 	uint32_t portals;
 	uint32_t capabilities;
 	uint32_t surfaces;
+	uint32_t mechanisms;
 	size_t image_bytes;
 	double seconds;
 } sg_rune_generate_report_t;

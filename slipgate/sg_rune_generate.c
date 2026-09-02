@@ -10,6 +10,7 @@
 #include "sg_configuration_space.h"
 #include "sg_host_collision.h"
 #include "sg_rune_cx_build.h"
+#include "sg_rune_mechanisms.h"
 #include "sg_rune_movement.h"
 
 typedef struct progress_link_s
@@ -66,6 +67,7 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 	sg_rune_cx_error_t complex_error;
 	sg_rune_move_store_t movement;
 	sg_rune_move_law_t movement_law;
+	sg_rune_mech_store_t mechanisms;
 	sg_rune_artifact_t source;
 	sg_rune_artifact_status_t status;
 	double started = Now();
@@ -73,6 +75,7 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 
 	memset(&report, 0, sizeof(report));
 	memset(&movement, 0, sizeof(movement));
+	SG_RuneMechStoreInit(&mechanisms);
 	if (image_out)
 		*image_out = NULL;
 	if (image_size_out)
@@ -112,6 +115,12 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 		Fail(&report, SG_RuneCxErrorString(complex_error.code));
 		goto done;
 	}
+	Begin(&link, "mechanisms", &report);
+	if (!SG_RuneMechMarkCells(world, complex))
+	{
+		Fail(&report, "mechanism marking failed");
+		goto done;
+	}
 	memset(&source, 0, sizeof(source));
 	source.identity = *identity;
 	source.law = *law;
@@ -129,8 +138,15 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 		Fail(&report, "movement emission failed");
 		goto done;
 	}
+	if (!SG_RuneMechEmit(world, complex, law, &movement, &mechanisms))
+	{
+		Fail(&report, "mechanism emission failed");
+		goto done;
+	}
 	SG_RuneMoveStoreView(&movement, &source.movement);
+	SG_RuneMechStoreView(&mechanisms, &source.mechanisms);
 	report.capabilities = source.movement.capability_count;
+	report.mechanisms = source.mechanisms.record_count;
 
 	Begin(&link, "encode", &report);
 	status = SG_RuneArtifactEncode(&source, image_out, image_size_out);
@@ -144,6 +160,7 @@ int SG_RuneGenerate(const sg_bsp_world_t *world,
 
 done:
 	report.seconds = Now() - started;
+	SG_RuneMechStoreFree(&mechanisms);
 	SG_RuneMoveStoreFree(&movement);
 	SG_RuneCxDestroy(complex);
 	SG_ConfigurationSemanticsDestroy(semantics);
