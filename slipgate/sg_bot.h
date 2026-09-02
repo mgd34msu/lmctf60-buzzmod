@@ -68,7 +68,7 @@ typedef struct sg_bot_s
 	uint8_t fired_bit;          /* that rope bit */
 	uint32_t flight_from;       /* the floor cell the current flight left */
 	uint8_t rescue;             /* the rope is out to save a fall into harm */
-	uint8_t rescue_spent;       /* one rope per fall: after it, the fall is the fall */
+	uint8_t rescue_spent;       /* ropes fired on this fall, up to RESCUE_TRIES */
 	float rescue_anchor[3];
 	float rescue_failed[3];     /* the last bite a rescue rope stalled on */
 	const struct edict_s *detour_logged; /* the last item detour written to the log */

@@ -940,6 +940,18 @@ static qboolean RescueAnchor(const sg_bot_t *bot, const edict_t *e, vec3_t ancho
 	return found;
 }
 
+#define RESCUE_TRIES 3            /* ropes a single fall may fire */
+
+/* Whether a body hanging on a rescue rope could catch itself again on
+ * another bite: the bite it hangs from is not offered twice. */
+static qboolean AnotherRescue(sg_bot_t *bot, const edict_t *e)
+{
+	vec3_t probe;
+
+	VectorCopy(bot->rescue_anchor, bot->rescue_failed);
+	return RescueAnchor(bot, e, probe);
+}
+
 /* Any recorded bite above the body within rope range, the highest of the
  * nearest few cells' rides: for a body with no floor it left to remember. */
 static qboolean NearbyAnchor(const sg_bot_t *bot, const edict_t *e, vec3_t anchor_out)
@@ -1139,8 +1151,10 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 			else if ((level.time - bot->ride_since > RIDE_STALL_SECONDS ||
 				(bot->hang_since > 0.0f && level.time - bot->hang_since > RIDE_STALL_SECONDS)) &&
 				(HangDropSafe(bot, e) ||
-				 (bot->hang_since > 0.0f && level.time - bot->hang_since > HANG_PATIENCE) ||
-				 (bot->hang_since <= 0.0f)))
+				 ((bot->hang_since <= 0.0f ||
+				   level.time - bot->hang_since > HANG_PATIENCE) &&
+				  bot->rescue_spent < RESCUE_TRIES &&
+				  AnotherRescue(bot, e))))
 			{
 				ctf_hook_abort(e);
 				bot->hook_phase = 3;
@@ -1247,9 +1261,19 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 					VectorSubtract(record->anchor, e->s.origin, to_bite);
 					to_bite[2] -= (float)e->viewheight;
 					hanging = VectorLength(to_bite) <= SG_FACT_HOOK_HOLD + 8.0f;
-					if (hanging && !HangDropSafe(bot, e) &&
-						level.time - bot->hang_since < HANG_PATIENCE)
-						goto ride_on;
+					/* Hanging over harm: hold on.  Let go only once patience
+					 * runs out and another rope can catch the fall. */
+					if (hanging && !HangDropSafe(bot, e))
+					{
+						vec3_t probe;
+
+						if (level.time - bot->hang_since < HANG_PATIENCE ||
+							bot->rescue_spent >= RESCUE_TRIES)
+							goto ride_on;
+						VectorCopy(record->anchor, bot->rescue_failed);
+						if (!RescueAnchor(bot, e, probe))
+							goto ride_on;
+					}
 					{
 						/* Let go at the bite, the body drops where it hangs.
 						 * Unless that drop is the ride's own landing, the ride
@@ -1335,11 +1359,11 @@ grounded:
 		}
 		/* Falling into lava or slime, or out of the world: the rope. */
 		if (traced && live.outcome == SG_RUNE_FLIGHT_HARM &&
-			e->client->hookstate == 0 && !bot->rescue && !bot->rescue_spent &&
+			e->client->hookstate == 0 && !bot->rescue && bot->rescue_spent < RESCUE_TRIES &&
 			SG_BotHookReady(e) && RescueAnchor(bot, e, bot->rescue_anchor))
 		{
 			bot->rescue = 1U;
-			bot->rescue_spent = 1U;
+			bot->rescue_spent++;
 			/* The launch that led here is not to be trusted for a while. */
 			if (bot->flight_capability != SG_RUNE_CX_INDEX_NONE)
 				Avoid(bot, bot->flight_capability);
