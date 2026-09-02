@@ -13,7 +13,7 @@
 #include <stdint.h>
 
 #include "sg_bsp_world.h"
-#include "sg_rune_mechanism_catalog.h"
+#include "sg_mechanism_kinds.h"
 #include "sg_rune_model.h"
 #include "sg_rune_source_authority.h"
 
