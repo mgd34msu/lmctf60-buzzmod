@@ -1,1 +1,0 @@
-slipgate/sg_price.c

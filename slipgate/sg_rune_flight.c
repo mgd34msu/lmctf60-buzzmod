@@ -34,19 +34,22 @@ static void OutwardPlane(const sg_rune_cx_facet_t *facet, uint32_t side,
 	}
 }
 
-/* Earliest t > 0 where a t^2 + b t + c becomes positive (the body leaves
- * the half-space), or INFINITY. */
+/* Earliest t >= 0 at which a t^2 + b t + c is positive and increasing:
+ * the moment the body leaves the half-space.  A body already on the plane
+ * and moving out leaves now.  INFINITY when it never leaves. */
 static float ExitTime(float a, float b, float c)
 {
 	float best = INFINITY;
 
+	if (c > 0.0f)
+		return 0.0f;
 	if (fabsf(a) < 1e-9f)
 	{
 		if (b > 0.0f)
 		{
 			float t = -c / b;
 
-			return t > 0.0f ? t : (c > 0.0f ? 0.0f : INFINITY);
+			return t > 0.0f ? t : 0.0f;
 		}
 		return INFINITY;
 	}
@@ -56,7 +59,7 @@ static float ExitTime(float a, float b, float c)
 		uint32_t index;
 
 		if (discriminant < 0.0f)
-			return a > 0.0f && c <= 0.0f ? INFINITY : (c > 0.0f ? 0.0f : INFINITY);
+			return INFINITY;
 		discriminant = sqrtf(discriminant);
 		roots[0] = (-b - discriminant) / (2.0f * a);
 		roots[1] = (-b + discriminant) / (2.0f * a);
@@ -65,7 +68,7 @@ static float ExitTime(float a, float b, float c)
 			float t = roots[index];
 			float slope;
 
-			if (!(t > 0.0f) || t >= best)
+			if (!(t >= 0.0f) || t >= best)
 				continue;
 			slope = 2.0f * a * t + b;
 			if (slope > 0.0f)

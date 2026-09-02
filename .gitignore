@@ -36,3 +36,5 @@ tools/waveloop-stop
 /tools/rune-logs-*/
 __pycache__/
 *.py[cod]
+fieldcheck
+cellsdump

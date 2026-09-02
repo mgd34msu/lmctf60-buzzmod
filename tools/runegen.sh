@@ -370,7 +370,7 @@ generation_log_accepted() {
 cold_log_accepted() {
     local log="$1" map="$2" line ready publications=0
     log_has_complete_lines "$log" || return 1
-    ready="slipgate: compact rune ready $map"
+    ready="slipgate: rune ready $map"
     while IFS= read -r line; do
         line="${line%$'\r'}"
         if compact_failure_line "$line"; then

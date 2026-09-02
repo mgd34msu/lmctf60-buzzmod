@@ -1,1 +1,0 @@
-slipgate/sg_drop_live.c
