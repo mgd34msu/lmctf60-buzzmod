@@ -566,6 +566,7 @@ CFLAGS += -g -Wall
 # Windows / MinGW (incl. MSYS2 MinGW)
 ifeq ($(PLATFORM),Windows)
 TARGET = game$(ARCH)-lmctf-$(VER).dll
+LIBTOOL = true
 endif
 
 # MSYS2 / Cygwin
@@ -580,7 +581,9 @@ ifeq ($(shell uname),Linux)
 CFLAGS += -DLINUX
 LDFLAGS = -ldl -lm
 ifeq ("$(wildcard /etc/alpine-release)","")
+ifneq ($(PLATFORM),Windows)
 LIBTOOL = ldd -r
+endif
 endif
 endif
 

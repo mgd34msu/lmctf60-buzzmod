@@ -23,7 +23,7 @@
 
 #define FIRE_RANGE 1536.0f          /* beyond this nothing is recorded */
 #define LOB_RANGE 1200.0f
-#define FLOOR_MIN_EXTENT 32.0f      /* slivers are not posts or targets */
+#define FLOOR_MIN_EXTENT 24.0f      /* slivers are not posts or targets */
 #define EYE_HEIGHT 22.0f
 #define BODY_HEIGHT 24.0f
 #define FEET_HEIGHT 8.0f            /* where a rocket at the feet bursts */
@@ -212,7 +212,7 @@ static int CollectFloors(fire_build_t *build)
 
 /* Every floor cell borrows the nearest representative's row: the nearest
  * by floor point within reach, at nearly the same height. */
-#define BORROW_REACH 128.0f
+#define BORROW_REACH 256.0f
 #define BORROW_RISE 40.0f
 
 static void Borrow(fire_build_t *build)

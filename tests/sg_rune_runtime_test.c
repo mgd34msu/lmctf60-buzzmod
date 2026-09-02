@@ -276,7 +276,7 @@ int main(void)
 			}
 		}
 		CHECK(walks == 4U);
-		CHECK(drops == 1U);
+		CHECK(drops == 2U);   /* at a run and at half a run */
 		CHECK(jumps == 1U);
 	}
 

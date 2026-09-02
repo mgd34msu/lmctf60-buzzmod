@@ -28,6 +28,7 @@ void SG_RuneLawEngine(sg_rune_law_t *law, float gravity)
 	law->water_drag = SG_FACT_WATER_FRICTION;
 	law->max_velocity = SG_FACT_MAX_SPEED;
 	law->water_velocity = SG_FACT_WATER_SPEED;
+	law->duck_velocity = SG_FACT_DUCK_SPEED;
 	law->jump_velocity = SG_FACT_JUMP_VELOCITY;
 	law->step_size = SG_FACT_STEP_SIZE;
 	law->hook_fire_speed = SG_FACT_HOOK_FIRE_SPEED;

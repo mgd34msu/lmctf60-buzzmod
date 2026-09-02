@@ -12,6 +12,7 @@
 #define OVERCLIP 1.001f
 #define TIME_EPSILON 1e-4f
 #define FLOOR_NORMAL 0.7f
+#define LATERAL_TOLERANCE 8.0f    /* a robust landing survives this much to either side */
 
 static float FloatBits(uint32_t bits)
 {
@@ -309,12 +310,30 @@ int SG_RuneFlightLandsRobustly(const sg_rune_cx_view_t *cx,
 		return 0;
 	for (index = 0U; index < 2U && tolerance > 0.0f; index++)
 	{
-		float scaled[3];
+		float scaled[3], shifted[3], across[3];
+		float flat = sqrtf(velocity[0] * velocity[0] + velocity[1] * velocity[1]);
 
 		scaled[0] = velocity[0] * (1.0f + signs[index] * tolerance);
 		scaled[1] = velocity[1] * (1.0f + signs[index] * tolerance);
 		scaled[2] = velocity[2];
 		if (!SG_RuneFlightTrace(cx, law, start_cell, origin, scaled, &other) ||
+			!LandsWell(cx, &other))
+			return 0;
+		/* And a body length's fraction to either side of the line. */
+		if (flat > 1.0f)
+		{
+			across[0] = -velocity[1] / flat;
+			across[1] = velocity[0] / flat;
+		}
+		else
+		{
+			across[0] = index ? 0.0f : 1.0f;
+			across[1] = index ? 1.0f : 0.0f;
+		}
+		shifted[0] = origin[0] + across[0] * signs[index] * LATERAL_TOLERANCE;
+		shifted[1] = origin[1] + across[1] * signs[index] * LATERAL_TOLERANCE;
+		shifted[2] = origin[2];
+		if (!SG_RuneFlightTrace(cx, law, start_cell, shifted, velocity, &other) ||
 			!LandsWell(cx, &other))
 			return 0;
 	}

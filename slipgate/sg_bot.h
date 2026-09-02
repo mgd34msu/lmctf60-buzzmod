@@ -54,9 +54,15 @@ typedef struct sg_bot_s
 	uint32_t avoid[SG_BOT_AVOID];
 	float avoid_until[SG_BOT_AVOID];
 	float ride_since;           /* level.time the rope attached */
+	float ride_nearest;         /* the closest the body has come to the bite this ride */
+	float hang_since;           /* level.time the rope first held the body at the bite */
+	uint32_t fired_capability;  /* the ride the rope was last fired for */
+	uint8_t fired_bit;          /* that rope bit */
 	uint32_t flight_from;       /* the floor cell the current flight left */
 	uint8_t rescue;             /* the rope is out to save a fall into harm */
 	float rescue_anchor[3];
+	float rescue_failed[3];     /* the last bite a rescue rope stalled on */
+	const struct edict_s *detour_logged; /* the last item detour written to the log */
 	uint8_t logged_kind, logged_move; /* the last decision written to the log */
 	uint32_t logged_capability;
 	float logged_target[3];

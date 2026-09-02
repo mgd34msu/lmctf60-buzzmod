@@ -138,30 +138,109 @@ static int HostLeafAtPoint(const sg_rune_bsp_t *world, const float point[3],
  * place to stand although its centre is in the air.  Probe the host at the
  * cell's lowest origin height under the witness, stepping up a few Q8 steps
  * when the lowest corner is only valid elsewhere on a slope. */
-static int CellHasFloor(const semantic_build_t *build,
-	const sg_configuration_cell_t *cell, const float witness[3],
-	int witness_supported)
+/* Whether a point is inside the cell's polytope: every face's plane has
+ * its inside on n.p <= d. */
+static int InsideCell(const sg_configuration_space_t *configuration,
+	const sg_configuration_cell_t *cell, const float point[3])
 {
-	static const float rises[] = { 0.125f, 8.0f, 16.0f, 24.0f, 32.0f };
+	uint32_t face;
+
+	for (face = 0U; face < cell->face_count; face++)
+	{
+		const sg_configuration_plane_t *plane =
+			&configuration->faces[cell->first_face + face].plane;
+
+		if (Dot(point, plane->normal) - plane->distance > 0.25f)
+			return 0;
+	}
+	return 1;
+}
+
+/* Whether one column of the cell stands on a floor: the host probed at the
+ * cell's lowest origin height there, stepping up a few Q8 steps when the
+ * lowest corner is only valid elsewhere on a slope. */
+static int ColumnHasFloor(const semantic_build_t *build,
+	const sg_configuration_cell_t *cell, float x, float y, float top)
+{
+	static const float rises[] = { 0.125f, 4.0f, 8.0f, 12.0f, 16.0f, 20.0f, 24.0f,
+		28.0f, 32.0f };
 	uint32_t index;
 
-	if (witness_supported)
-		return 1;
 	for (index = 0; index < sizeof(rises) / sizeof(rises[0]); index++)
 	{
 		sg_rune_pose_t pose;
 		float point[3];
 
-		point[0] = witness[0];
-		point[1] = witness[1];
+		point[0] = x;
+		point[1] = y;
 		point[2] = cell->bounds.mins.value[2] + rises[index];
-		if (point[2] > witness[2])
+		if (point[2] > top)
 			return 0;
+		/* The lowest origin of the cell in this column: under a sloped
+		 * bottom the cell starts higher here than at its lowest corner. */
+		if (!InsideCell(build->configuration, cell, point))
+			continue;
 		if (!Pose(build, point, cell->stance, &pose) || !pose.valid)
 			continue;
 		return pose.supported ? 1 : 0;
 	}
 	return 0;
+}
+
+/* Support is the cell's, not the witness's, and it must hold over the
+ * whole cell: a body walks anywhere in it.  The witness column and the
+ * four corners of the footprint (a little in) that lie inside the cell are
+ * probed; every one must stand on a floor.  A cell floored on one side
+ * only (a wedge over a slope, a piece bounded below by a split plane) is
+ * not a place to stand, and the field will not send a body across it. */
+static int CellHasFloor(const semantic_build_t *build,
+	const sg_configuration_cell_t *cell, const float witness[3],
+	int witness_supported)
+{
+	const sg_configuration_space_t *configuration = build->configuration;
+	const float inset = 0.5f;
+	float xs[2], ys[2];
+	uint32_t i, j, probed = 0U;
+
+	if (!witness_supported && !ColumnHasFloor(build, cell, witness[0], witness[1],
+		witness[2]))
+		return 0;
+	xs[0] = cell->bounds.mins.value[0] + inset;
+	xs[1] = cell->bounds.maxs.value[0] - inset;
+	ys[0] = cell->bounds.mins.value[1] + inset;
+	ys[1] = cell->bounds.maxs.value[1] - inset;
+	for (i = 0U; i < 2U; i++)
+		for (j = 0U; j < 2U; j++)
+		{
+			float corner[3];
+
+			corner[0] = xs[i];
+			corner[1] = ys[j];
+			corner[2] = cell->bounds.mins.value[2] + 0.125f;
+			if (fabsf(corner[0] - witness[0]) < 1.0f && fabsf(corner[1] - witness[1]) < 1.0f)
+				continue;
+			/* A corner of the box outside the polytope at every height is
+			 * not the cell's; one inside somewhere up the column is. */
+			{
+				int inside = 0;
+				float z;
+
+				for (z = corner[2]; z <= cell->bounds.maxs.value[2] && !inside; z += 4.0f)
+				{
+					float probe[3] = { corner[0], corner[1], z };
+
+					inside = InsideCell(configuration, cell, probe);
+				}
+				if (!inside)
+					continue;
+			}
+			probed++;
+			if (!ColumnHasFloor(build, cell, corner[0], corner[1],
+				cell->bounds.maxs.value[2]))
+				return 0;
+		}
+	(void)probed;
+	return 1;
 }
 
 /* ---- regions ------------------------------------------------------------ */

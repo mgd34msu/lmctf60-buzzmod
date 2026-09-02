@@ -15,7 +15,8 @@
 #include "sg_rune_cx.h"
 #include "sg_rune_flight.h"
 
-#define LAUNCH_TOLERANCE 0.15f    /* the run speed a flight is checked against, either way */
+#define LAUNCH_TOLERANCE 0.10f    /* the run speed a flight is checked against, either way */
+#define MIN_FLIGHT_SECONDS 0.15f  /* shorter is a step onto the floor beside, not a flight */
 
 static float FloatBits(uint32_t bits)
 {
@@ -82,6 +83,7 @@ typedef struct flight_launch_s
 	float vertical;           /* impulse */
 	float lead_seconds;
 	float rise_before;        /* rocket jump: rise before the blast */
+	float run;                /* fraction of run speed the body leaves at */
 } flight_launch_t;
 
 static int EmitFlights(sg_rune_move_store_t *store,
@@ -91,7 +93,7 @@ static int EmitFlights(sg_rune_move_store_t *store,
 {
 	const sg_rune_cx_facet_t *facet = &cx->facets[portal->facet];
 	const sg_rune_cx_cell_t *source = &cx->cells[source_cell];
-	flight_launch_t launches[3];
+	flight_launch_t launches[4];
 	uint32_t launch_count = 0U, index;
 	float foot[3], origin[3], direction[3], normal[3], length;
 	float floor_z = (float)source->bounds.mins.value[2] /
@@ -127,15 +129,25 @@ static int EmitFlights(sg_rune_move_store_t *store,
 		return 1;
 	direction[0] /= length;
 	direction[1] /= length;
+	/* A drop at a run and a drop at half a run: a walkway below a ledge
+	 * is reached by the short arc where the long one overshoots it. */
 	launches[launch_count].kind = SG_RUNE_MOVE_DROP;
 	launches[launch_count].vertical = 0.0f;
 	launches[launch_count].lead_seconds = 0.0f;
 	launches[launch_count].rise_before = 0.0f;
+	launches[launch_count].run = 1.0f;
+	launch_count++;
+	launches[launch_count].kind = SG_RUNE_MOVE_DROP;
+	launches[launch_count].vertical = 0.0f;
+	launches[launch_count].lead_seconds = 0.0f;
+	launches[launch_count].rise_before = 0.0f;
+	launches[launch_count].run = 0.5f;
 	launch_count++;
 	launches[launch_count].kind = SG_RUNE_MOVE_JUMP;
 	launches[launch_count].vertical = SG_RuneMoveJumpVelocity(store);
 	launches[launch_count].lead_seconds = 0.0f;
 	launches[launch_count].rise_before = 0.0f;
+	launches[launch_count].run = 1.0f;
 	launch_count++;
 	if (SG_RuneMoveRocketVelocity(store) > 0.0f)
 	{
@@ -143,6 +155,7 @@ static int EmitFlights(sg_rune_move_store_t *store,
 		launches[launch_count].vertical = SG_RuneMoveRocketVelocity(store);
 		launches[launch_count].lead_seconds = SG_RuneMoveRocketLead(store);
 		launches[launch_count].rise_before = store->rocket_pre_blast_rise;
+		launches[launch_count].run = 1.0f;
 		launch_count++;
 	}
 	for (index = 0U; index < launch_count; index++)
@@ -152,8 +165,8 @@ static int EmitFlights(sg_rune_move_store_t *store,
 		sg_rune_flight_t flight;
 		const sg_rune_cx_cell_t *landing;
 
-		velocity[0] = direction[0] * store->law.max_velocity;
-		velocity[1] = direction[1] * store->law.max_velocity;
+		velocity[0] = direction[0] * store->law.max_velocity * launch->run;
+		velocity[1] = direction[1] * store->law.max_velocity * launch->run;
 		velocity[2] = launch->vertical;
 		start[0] = origin[0];
 		start[1] = origin[1];
@@ -165,6 +178,11 @@ static int EmitFlights(sg_rune_move_store_t *store,
 			continue;
 		if (flight.landing_cell == source_cell ||
 			flight.landing_cell >= cx->cell_count)
+			continue;
+		/* A flight over in a frame or two is a step, not a flight: the
+		 * portal's foot sits a little above the floor beside it and the
+		 * contact crossing already goes there. */
+		if (flight.seconds < MIN_FLIGHT_SECONDS)
 			continue;
 		landing = &cx->cells[flight.landing_cell];
 		if (!SG_RuneMoveAppendFlight(store, source_cell, portal_index,

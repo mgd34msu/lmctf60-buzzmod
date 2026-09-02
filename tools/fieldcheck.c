@@ -20,6 +20,59 @@ static double Now(void)
 	return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
+static float Bits(uint32_t bits)
+{
+	float value;
+
+	memcpy(&value, &bits, sizeof(value));
+	return value;
+}
+
+/* Whether cell a's vertex centroid lies inside cell b, half a unit in. */
+static int CentreInside(const sg_rune_cx_view_t *cx, uint32_t a, uint32_t b)
+{
+	const sg_rune_cx_cell_t *ca = &cx->cells[a], *cb = &cx->cells[b];
+	double centre[3] = { 0.0, 0.0, 0.0 };
+	uint32_t slot, n = 0U;
+
+	for (slot = 0U; slot < ca->incidences.count; slot++)
+	{
+		const sg_rune_cx_incidence_t *inc = &cx->incidences[
+			cx->cell_incidences[ca->incidences.first + slot]];
+		const sg_rune_cx_facet_t *facet = &cx->facets[inc->facet];
+		uint32_t v;
+
+		for (v = 0U; v < facet->vertices.count; v++)
+		{
+			const sg_rune_cx_vec3_t *q = &cx->vertices[facet->vertices.first + v];
+
+			centre[0] += q->value[0] / 8.0;
+			centre[1] += q->value[1] / 8.0;
+			centre[2] += q->value[2] / 8.0;
+			n++;
+		}
+	}
+	if (!n)
+		return 0;
+	centre[0] /= n; centre[1] /= n; centre[2] /= n;
+	for (slot = 0U; slot < cb->incidences.count; slot++)
+	{
+		const sg_rune_cx_incidence_t *inc = &cx->incidences[
+			cx->cell_incidences[cb->incidences.first + slot]];
+		const sg_rune_cx_facet_t *facet = &cx->facets[inc->facet];
+		double nx = Bits(facet->plane.normal_bits[0]), ny = Bits(facet->plane.normal_bits[1]);
+		double nz = Bits(facet->plane.normal_bits[2]), d = Bits(facet->plane.distance_bits);
+
+		if (inc->side == SG_RUNE_CX_POSITIVE_SIDE)
+		{
+			nx = -nx; ny = -ny; nz = -nz; d = -d;
+		}
+		if (nx * centre[0] + ny * centre[1] + nz * centre[2] - d > -0.5)
+			return 0;
+	}
+	return 1;
+}
+
 int main(int argc, char **argv)
 {
 	sg_rune_artifact_t artifact;
@@ -118,6 +171,29 @@ int main(int argc, char **argv)
 				router.cell_center[cell_index * 3U], router.cell_center[cell_index * 3U + 1U],
 				router.cell_center[cell_index * 3U + 2U]);
 		}
+		{
+			const sg_rune_cx_view_t *cx = &artifact.complex;
+			const sg_rune_cx_cell_t *c = &cx->cells[cell_index];
+			uint32_t k;
+
+			for (k = 0U; k < c->incidences.count; k++)
+			{
+				const sg_rune_cx_incidence_t *inc = &cx->incidences[
+					cx->cell_incidences[c->incidences.first + k]];
+				const sg_rune_cx_facet_t *facet = &cx->facets[inc->facet];
+				float nx = Bits(facet->plane.normal_bits[0]), ny = Bits(facet->plane.normal_bits[1]);
+				float nz = Bits(facet->plane.normal_bits[2]), d = Bits(facet->plane.distance_bits);
+
+				if (inc->side == SG_RUNE_CX_POSITIVE_SIDE)
+				{
+					nx = -nx; ny = -ny; nz = -nz; d = -d;
+				}
+				printf("  facet %u out (%.2f %.2f %.2f) d %.1f %s source %u\n", inc->facet,
+					nx, ny, nz, d, facet->incidences.count == 1U ? "closed" :
+					(facet->portal != SG_RUNE_CX_INDEX_NONE ? "portal" : "shared"),
+					facet->source.kind);
+			}
+		}
 		for (slot = router.departure_first[cell_index];
 			slot < router.departure_first[cell_index + 1U]; slot++)
 		{
@@ -141,6 +217,81 @@ int main(int argc, char **argv)
 			printf("\n");
 		}
 		SG_RuneRouterFree(&router);
+		SG_RuneArtifactRelease(&artifact);
+		return 0;
+	}
+	/* "o": cells whose boxes overlap another's by a body's width or more
+	 * and whose centre lies inside the other; the complex is meant to
+	 * partition free space, so these are defects. */
+	if (argc == 3 && !strcmp(argv[2], "o"))
+	{
+		const sg_rune_cx_cell_t *cells;
+		uint32_t count, a, b, found = 0U, shown = 0U;
+		uint32_t *order;
+
+		status = SG_RuneArtifactLoadFile(argv[1], &artifact, &os_error, &fault);
+		if (status != SG_RUNE_ARTIFACT_OK)
+		{
+			fprintf(stderr, "load: %s\n", SG_RuneArtifactStatusString(status));
+			return 1;
+		}
+		cells = artifact.complex.cells;
+		count = artifact.complex.cell_count;
+		order = malloc((size_t)count * sizeof(*order));
+		for (a = 0U; a < count; a++)
+			order[a] = a;
+		/* Sorted by min x so the scan stops early. */
+		{
+			uint32_t i, j;
+
+			for (i = 1U; i < count; i++)
+			{
+				uint32_t key = order[i];
+				int32_t kx = cells[key].bounds.mins.value[0];
+
+				for (j = i; j > 0U && cells[order[j - 1U]].bounds.mins.value[0] > kx; j--)
+					order[j] = order[j - 1U];
+				order[j] = key;
+			}
+		}
+		for (a = 0U; a < count; a++)
+		{
+			const sg_rune_cx_cell_t *ca = &cells[order[a]];
+
+			for (b = a + 1U; b < count; b++)
+			{
+				const sg_rune_cx_cell_t *cb = &cells[order[b]];
+				int32_t ox, oy, oz;
+
+				if (cb->bounds.mins.value[0] >= ca->bounds.maxs.value[0] - 8 * 4)
+					break;
+				ox = (ca->bounds.maxs.value[0] < cb->bounds.maxs.value[0] ? ca->bounds.maxs.value[0] : cb->bounds.maxs.value[0]) -
+					(ca->bounds.mins.value[0] > cb->bounds.mins.value[0] ? ca->bounds.mins.value[0] : cb->bounds.mins.value[0]);
+				oy = (ca->bounds.maxs.value[1] < cb->bounds.maxs.value[1] ? ca->bounds.maxs.value[1] : cb->bounds.maxs.value[1]) -
+					(ca->bounds.mins.value[1] > cb->bounds.mins.value[1] ? ca->bounds.mins.value[1] : cb->bounds.mins.value[1]);
+				oz = (ca->bounds.maxs.value[2] < cb->bounds.maxs.value[2] ? ca->bounds.maxs.value[2] : cb->bounds.maxs.value[2]) -
+					(ca->bounds.mins.value[2] > cb->bounds.mins.value[2] ? ca->bounds.mins.value[2] : cb->bounds.mins.value[2]);
+				if (ox < 8 * 4 || oy < 8 * 4 || oz < 8 * 4)
+					continue;
+				if (!CentreInside(&artifact.complex, order[a], order[b]) &&
+					!CentreInside(&artifact.complex, order[b], order[a]))
+					continue;
+				found++;
+				if (shown < 12U)
+				{
+					shown++;
+					printf("overlap %u (z %g..%g xy %g..%g %g..%g st %u) and %u (z %g..%g xy %g..%g %g..%g st %u)\n",
+						order[a], ca->bounds.mins.value[2] / 8.0, ca->bounds.maxs.value[2] / 8.0,
+						ca->bounds.mins.value[0] / 8.0, ca->bounds.maxs.value[0] / 8.0,
+						ca->bounds.mins.value[1] / 8.0, ca->bounds.maxs.value[1] / 8.0, ca->valid_stances,
+						order[b], cb->bounds.mins.value[2] / 8.0, cb->bounds.maxs.value[2] / 8.0,
+						cb->bounds.mins.value[0] / 8.0, cb->bounds.maxs.value[0] / 8.0,
+						cb->bounds.mins.value[1] / 8.0, cb->bounds.maxs.value[1] / 8.0, cb->valid_stances);
+				}
+			}
+		}
+		printf("overlapping pairs (box overlap >= 4 on every axis): %u of %u cells\n", found, count);
+		free(order);
 		SG_RuneArtifactRelease(&artifact);
 		return 0;
 	}

@@ -63,7 +63,7 @@ int main(void)
 	float value;
 
 	CHECK(SG_RuneMoveStoreInit(&store, &law));
-	CHECK(store.profile_count == 5U);
+	CHECK(store.profile_count == 6U);
 	CHECK(fabsf(store.jump_rise - 45.5625f) < 1e-3f);
 	CHECK(store.rocket_rise > 200.0f && store.rocket_rise < 240.0f);
 
@@ -177,6 +177,10 @@ int main(void)
 	CHECK(SG_RuneFnEvaluate(&table.analytic,
 		table.profiles[3].velocity[2], inputs, &value));
 	CHECK(fabsf(value - 190.0f) < 1e-3f);
+	/* Crouching covers 300 units in three seconds: the engine's duck speed. */
+	inputs[SG_RUNE_FN_INPUT_DISTANCE] = 300.0f;
+	CHECK(SG_RuneFnEvaluate(&table.analytic, table.profiles[5].cost, inputs, &value));
+	CHECK(fabsf(value - 3.0f) < 1e-3f);
 	/* Walking cost is distance over the speed clamp. */
 	inputs[SG_RUNE_FN_INPUT_DISTANCE] = 300.0f;
 	CHECK(SG_RuneFnEvaluate(&table.analytic, table.profiles[0].cost,

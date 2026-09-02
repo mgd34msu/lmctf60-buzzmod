@@ -9,6 +9,9 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+#define EASE_DISTANCE 96.0f       /* a walk that must end at a point slows over this */
+#define EASE_FLOOR 0.2f           /* and never below this fraction of full speed */
+
 static int Finite3(const float v[3])
 {
 	return isfinite(v[0]) && isfinite(v[1]) && isfinite(v[2]);
@@ -57,12 +60,25 @@ static float FlightReach(const sg_tactic_body_t *body, float vertical_velocity)
  * along that launch direction, close to the line, with its own velocity
  * along it; otherwise it goes to the run-up point first.  launch_out is
  * the launch's horizontal unit direction when there is one. */
+#define RUN_UP_EASE 64.0f
 #define RUN_UP_CLOSE 16.0f
 #define RUN_UP_BEHIND 8.0f
 #define RUN_UP_LATERAL 12.0f
 #define RUN_UP_LATERAL_PER_UNIT 0.2f
 #define RUN_UP_VELOCITY_ALIGNED 0.85f
 #define RUN_UP_VELOCITY_MATTERS 120.0f
+
+/* The fraction of run speed the record's launch leaves the edge at. */
+static float LaunchRun(const sg_rune_step_t *step, const sg_tactic_body_t *body)
+{
+	float speed = sqrtf(step->launch[0] * step->launch[0] +
+		step->launch[1] * step->launch[1]);
+	float max = body->law ? body->law->max_velocity : 0.0f;
+
+	if (!step->launch_present || !(max > 0.0f) || !(speed > 0.0f))
+		return 1.0f;
+	return speed / max > 1.0f ? 1.0f : (speed / max < 0.2f ? 0.2f : speed / max);
+}
 
 static int LinedUp(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 	float launch_out[3])
@@ -109,10 +125,29 @@ static void ToRunUp(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 {
 	float direction[3], distance, rise;
 
+	/* Eased over two body lengths: a frame at full speed covers a body
+	 * length, and a point ten units off would be overshot every frame. */
 	if (Steer(body, step->run_up, direction, &distance, &rise))
-		Toward(command, direction, distance < 32.0f ? distance / 32.0f : 1.0f);
+		Toward(command, direction, distance < RUN_UP_EASE ?
+			(distance / RUN_UP_EASE > 0.1f ? distance / RUN_UP_EASE : 0.1f) : 1.0f);
 	else
 		command->status = SG_TACTIC_COMMAND_MOVE;
+}
+
+/* The speed of a walk that must end at the step's ease point: full until
+ * the point is near, then down with the distance, never quite stopped. */
+static float EasedSpeed(const sg_rune_step_t *step, const sg_tactic_body_t *body)
+{
+	float dx, dy, distance;
+
+	if (!step->ease)
+		return 1.0f;
+	dx = step->ease_point[0] - body->origin[0];
+	dy = step->ease_point[1] - body->origin[1];
+	distance = sqrtf(dx * dx + dy * dy);
+	if (!(distance < EASE_DISTANCE))
+		return 1.0f;
+	return distance / EASE_DISTANCE > EASE_FLOOR ? distance / EASE_DISTANCE : EASE_FLOOR;
 }
 
 static int AimAngles(const float from[3], const float to[3], float *yaw_out,
@@ -132,8 +167,8 @@ static int AimAngles(const float from[3], const float to[3], float *yaw_out,
  * the aim at the bite; the body keeps pushing toward the landing throughout;
  * the rope is let go once the ride has carried the body up to the landing's
  * height or over it, or when the bite is about to be reached. */
-#define EASE_DISTANCE 64.0f       /* a walk that must end at its target slows over this */
 #define HOOK_STAND_CLOSE 24.0f
+#define HOOK_FIRE_STILL 120.0f    /* the rope is fired only under this speed */
 #define HOOK_RELEASE_BELOW 8.0f
 #define HOOK_RELEASE_FLAT 40.0f
 #define HOOK_RELEASE_AT_BITE 60.0f
@@ -160,16 +195,25 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 			command->status = SG_TACTIC_COMMAND_UNSUPPORTED;
 			return;
 		}
-		/* The ride was traced from the cell's middle: fire from there, so
-		 * the pull runs the line the record checked. */
+		/* The ride was traced from the cell's middle, from a body standing
+		 * still: fire from there, once the run-up's speed has bled off, so
+		 * the pull runs the line the record checked and the body is not
+		 * sliding on when the bolt bites. */
 		if (body->supported && step->run_up_present)
 		{
 			const float dx = step->run_up[0] - body->origin[0];
 			const float dy = step->run_up[1] - body->origin[1];
+			const float speed = sqrtf(body->velocity[0] * body->velocity[0] +
+				body->velocity[1] * body->velocity[1]);
 
 			if (dx * dx + dy * dy > HOOK_STAND_CLOSE * HOOK_STAND_CLOSE)
 			{
 				ToRunUp(step, body, command);
+				return;
+			}
+			if (speed > HOOK_FIRE_STILL)
+			{
+				command->status = SG_TACTIC_COMMAND_MOVE;   /* stand: friction does the rest */
 				return;
 			}
 		}
@@ -268,8 +312,7 @@ int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 	case SG_RUNE_MOVE_MOVER:
 	case SG_RUNE_MOVE_EXTERNAL_FORCE:
 		if (have_direction)
-			Toward(&command, direction, step->ease && distance < EASE_DISTANCE ?
-				distance / EASE_DISTANCE : 1.0f);
+			Toward(&command, direction, EasedSpeed(step, body));
 		break;
 	case SG_RUNE_MOVE_DROP:
 	{
@@ -282,15 +325,14 @@ int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 			break;
 		}
 		if (body->supported != 0U && step->launch_present)
-			Toward(&command, launch, 1.0f);
+			Toward(&command, launch, LaunchRun(step, body));
 		else if (have_direction)
 			Toward(&command, direction, 1.0f);
 		break;
 	}
 	case SG_RUNE_MOVE_CROUCH:
 		if (have_direction)
-			Toward(&command, direction, step->ease && distance < EASE_DISTANCE ?
-				distance / EASE_DISTANCE : 1.0f);
+			Toward(&command, direction, EasedSpeed(step, body));
 		command.up = -1.0f;
 		command.status = SG_TACTIC_COMMAND_MOVE;
 		break;

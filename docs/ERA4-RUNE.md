@@ -73,7 +73,22 @@ replacement runs on a real map.
    stall rule lets go there without avoiding the ride. While the bolt is
    still flying a supported body stands still. A body whose live flight
    ends in harm or the void fires its rope at the best bite recorded from
-   the floor it left (ahead and above) and hangs.
+   the floor it left (ahead and above) and hangs; a rescue rope that pulls
+   nowhere is let go of after a stall and that bite is not tried again.
+   The hanging point the builder checks is a hold's length back along the
+   pull line (where the rope stops pulling), not the bite itself: a long
+   shallow ride hangs well short of the wall, over whatever is below.
+   Landings, flights and release arcs alike, must also survive a body
+   length's fraction to either side of the line (8 units).
+   **Stance in place (2026-09-02).** The field relaxes a crossing from the
+   other stance of its source cell too, at the stance-change cost, when the
+   cell has room for it: a crouched body stands up to walk on, a standing
+   one ducks to crawl. Before this a body crouched by a ride crawled the
+   rest of its route at a third of run speed, because every walk edge
+   wanted a standing body and nothing ever said "stand up".
+   **Stuck (2026-09-02).** The stuck hop fires only for a plain contact
+   crossing: a body easing to a point, lining up a launch, or holding a
+   rope is slow on purpose, and a hop there is a hop off the ledge.
 3. **Movement capabilities** (era 4, done). One record per crossing per
    admissible kind: cell, portal, destination cell, kind, source and
    destination stances, profile, launch velocity, seconds. Contact

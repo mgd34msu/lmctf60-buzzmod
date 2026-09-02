@@ -10,6 +10,7 @@
 
 #include "sg_rune_level.h"
 #include "sg_bot_util.h"
+#include "sg_bot_cvars.h"
 
 #define DETOUR_RADIUS 900.0f      /* farther than this is a trip, not a detour */
 #define WORTH_FLOOR 12.0f         /* worth per second of detour below which no */
@@ -24,6 +25,13 @@ static float Worth(const edict_t *self, const edict_t *item)
 	gclient_t *client = self->client;
 
 	if (!it)
+		return 0.0f;
+	/* A flag is an objective, never a pickup on the way.  The game spawns
+	 * the flag entity with classname "flag"; the item definition says
+	 * item_flag_team*. */
+	if ((it->classname && !strncmp(it->classname, "item_flag", 9)) ||
+		(item->classname && (!strcmp(item->classname, "flag") ||
+			!strncmp(item->classname, "item_flag", 9))))
 		return 0.0f;
 	if (it->flags & IT_WEAPON)
 	{
@@ -151,6 +159,13 @@ int SG_BotItemDetour(sg_bot_t *bot, const sg_rune_field_t *goal_field,
 	}
 	if (!best)
 		return 0;
+	if (sg_cv.debug && sg_cv.debug->value && bot->detour_logged != best)
+	{
+		bot->detour_logged = best;
+		gi.dprintf("SGITEM %s detours for %s at (%.0f %.0f %.0f) rate %.1f\n",
+			self->client->pers.netname, best->classname ? best->classname : "?",
+			best->s.origin[0], best->s.origin[1], best->s.origin[2], best_rate);
+	}
 	VectorCopy(best->s.origin, point_out);
 	point_out[2] += 24.0f;
 	return 1;

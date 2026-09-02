@@ -11,11 +11,12 @@
 /* Profile slots, shared by every crossing of their kind under one law. */
 enum
 {
-	PROFILE_GROUND = 0,       /* walk, crouch, ramp: contact motion */
+	PROFILE_GROUND = 0,       /* walk, ramp: contact motion at run speed */
 	PROFILE_WATER,            /* swim */
 	PROFILE_AIR,              /* drop, air control */
 	PROFILE_JUMP,             /* air with the engine's launch impulse */
 	PROFILE_ROCKET_JUMP,      /* air from the blast with the summed velocity */
+	PROFILE_CROUCH,           /* crouch: contact motion at duck speed */
 	PROFILE_COUNT
 };
 
@@ -190,6 +191,8 @@ static int BuildProfiles(sg_rune_move_store_t *store)
 			law->max_velocity) ||
 		!AddContactMotion(&store->analytic, &store->profiles[PROFILE_WATER],
 			law->water_velocity) ||
+		!AddContactMotion(&store->analytic, &store->profiles[PROFILE_CROUCH],
+			law->duck_velocity > 0.0f ? law->duck_velocity : law->max_velocity) ||
 		!AddAirMotion(&store->analytic, &store->profiles[PROFILE_AIR], law,
 			0.0f, 0.0f, 0.0f, 0.0f) ||
 		!AddAirMotion(&store->analytic, &store->profiles[PROFILE_JUMP], law,
@@ -368,7 +371,7 @@ int SG_RuneMoveEmitCrossing(sg_rune_move_store_t *store,
 			{
 				kind = source_stance == SG_RUNE_MOVE_CROUCHING ?
 					SG_RUNE_MOVE_CROUCH : SG_RUNE_MOVE_WALK;
-				profile = PROFILE_GROUND;
+				profile = kind == SG_RUNE_MOVE_CROUCH ? PROFILE_CROUCH : PROFILE_GROUND;
 			}
 			else if (crossing->floor_delta < 0.0f)
 			{

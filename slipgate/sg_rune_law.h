@@ -27,6 +27,7 @@ typedef struct sg_rune_law_s
 	float water_drag;
 	float max_velocity;       /* run speed */
 	float water_velocity;     /* swim speed */
+	float duck_velocity;      /* run speed while ducked */
 	float jump_velocity;
 	float step_size;
 	float hook_fire_speed;

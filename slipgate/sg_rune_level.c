@@ -390,14 +390,28 @@ static int BuildPosts(post_set_t *set, uint32_t flag_cell)
 	uint8_t *covered = NULL;
 	uint32_t cell;
 	int slot, ok = 0;
+	sg_rune_field_t from_flag;
 
 	memset(set, 0, sizeof(*set));
+	memset(&from_flag, 0, sizeof(from_flag));
 	set->flag_cell = flag_cell;
 	if (!field || sg_rune_level.artifact.fires.cell_count != cell_count)
+	{
+		if (sg_cv.debug && sg_cv.debug->value)
+			gi.dprintf("SGPOST flag cell %u: no posts (field %s, fire rows %u of %u cells)\n",
+				(unsigned int)flag_cell, field ? "ready" : "missing",
+				(unsigned int)sg_rune_level.artifact.fires.cell_count,
+				(unsigned int)cell_count);
 		return 0;
+	}
 	weight = calloc(cell_count, sizeof(*weight));
 	covered = calloc(cell_count, sizeof(*covered));
 	if (!weight || !covered)
+		goto done;
+	/* A post must be reachable from the flag as well as cover it: a ledge
+	 * that only drops to the flag is no post.  One forward field from the
+	 * flag answers that for every candidate. */
+	if (!SG_RuneFieldBuildFrom(&from_flag, &sg_rune_level.router, flag_cell))
 		goto done;
 	/* Approaches: the nearer to the flag, the more it matters to see. */
 	for (cell = 0U; cell < cell_count; cell++)
@@ -412,17 +426,20 @@ static int BuildPosts(post_set_t *set, uint32_t flag_cell)
 		uint32_t best = SG_RUNE_CX_INDEX_NONE;
 		float best_score = 0.0f, best_centre[3] = { 0.0f, 0.0f, 0.0f };
 		int attempts = 0;
+		uint32_t candidates = 0U, seeing = 0U;
 
-retry:
 		best = SG_RUNE_CX_INDEX_NONE;
 		best_score = 0.0f;
 		for (cell = 0U; cell < cell_count; cell++)
 		{
 			float cost = field->cost[SG_RUNE_FIELD_STATE(cell, 0)];
+			float back = from_flag.cost[SG_RUNE_FIELD_STATE(cell, 0)];
 			const float *centre = &sg_rune_level.router.cell_center[cell * 3U];
 			float centre_of_cover[3] = { 0.0f, 0.0f, 0.0f }, score;
 			int other;
 
+			if (!(back < POST_REACH_SECONDS * 2.0f))
+				continue;
 			if (!(cost >= 0.0f && cost <= POST_REACH_SECONDS) ||
 				!(sg_rune_level.artifact.complex.cells[cell].semantics &
 					SG_RUNE_CX_CELL_SUPPORTED) ||
@@ -436,7 +453,10 @@ retry:
 					break;
 			if (other < slot)
 				continue;
+			candidates++;
 			score = Coverage(cell, weight, covered, centre_of_cover);
+			if (score > 0.0f)
+				seeing++;
 			if (score > best_score)
 			{
 				best_score = score;
@@ -445,22 +465,14 @@ retry:
 			}
 		}
 		if (best == SG_RUNE_CX_INDEX_NONE)
-			break;
-		/* The post must be reachable from the flag as well as cover it: a
-		 * ledge that only drops to the flag is no post.  A few tries. */
 		{
-			const sg_rune_field_t *to_post = SG_RuneLevelField(best);
-
-			if (!to_post || !(to_post->cost[SG_RUNE_FIELD_STATE(flag_cell, 0)] <
-				POST_REACH_SECONDS * 2.0f))
-			{
-				weight[best] = 0.0f;   /* not an approach either, from now on */
-				covered[best] = 2U;    /* excluded as a post */
-				if (++attempts < 12)
-					goto retry;
-				break;
-			}
+			if (sg_cv.debug && sg_cv.debug->value)
+				gi.dprintf("SGPOST flag cell %u post %d: none (%u candidates within "
+					"reach both ways, %u seeing an approach)\n", (unsigned int)flag_cell,
+					slot, (unsigned int)candidates, (unsigned int)seeing);
+			break;
 		}
+		(void)attempts;
 		set->post[slot] = best;
 		if (sg_cv.debug && sg_cv.debug->value)
 			gi.dprintf("SGPOST flag cell %u post %d: cell %u at (%.0f %.0f %.0f) "
@@ -476,6 +488,7 @@ retry:
 	}
 	ok = set->valid > 0;
 done:
+	SG_RuneFieldFree(&from_flag);
 	free(weight);
 	free(covered);
 	return ok;
@@ -489,7 +502,12 @@ int SG_RuneLevelDefendPost(uint32_t flag_cell, int slot, float point_out[3],
 
 	if (!sg_rune_level.current || slot < 0 || slot >= POST_SLOTS ||
 		flag_cell >= sg_rune_level.artifact.complex.cell_count)
+	{
+		if (sg_cv.debug && sg_cv.debug->value && level.framenum % 50 == 0)
+			gi.dprintf("SGPOST flag cell %u slot %d: refused (rune %d)\n",
+				(unsigned int)flag_cell, slot, sg_rune_level.current ? 1 : 0);
 		return 0;
+	}
 	for (index = 0; index < POST_FLAGS; index++)
 		if (sg_posts[index].flag_cell == flag_cell && sg_posts[index].valid)
 			set = &sg_posts[index];
@@ -506,6 +524,8 @@ int SG_RuneLevelDefendPost(uint32_t flag_cell, int slot, float point_out[3],
 		if (!BuildPosts(set, flag_cell))
 			return 0;
 	}
+	if (set->valid <= 0)
+		return 0;
 	if (slot >= set->valid)
 		slot = set->valid - 1;
 	memcpy(point_out, &sg_rune_level.router.cell_center[set->post[slot] * 3U],

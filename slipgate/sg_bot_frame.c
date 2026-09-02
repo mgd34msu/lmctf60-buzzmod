@@ -125,8 +125,10 @@ static team_pass_t sg_team_pass;
 #define ROLE_KEEP_SCALE 0.6f     /* a held role counts this much nearer */
 
 static uint32_t StandingCellNear(const vec3_t point);
+static qboolean FlagNowOrHome(int team, vec3_t out);
 
 #define ESCORT_GAP_SECONDS 1.0f   /* an escort holds this far from its point */
+#define ESCORT_STANDOFF 96.0f     /* and this far from a carrier that stands */
 #define ESCORT_AHEAD 128.0f       /* the escort's point runs this far ahead of a moving carrier */
 #define CARRIER_DETOUR_HEALTH 40  /* under this a carrier will go for health */
 
@@ -170,13 +172,18 @@ static qboolean FlagNow(int team, vec3_t out)
 	return false;
 }
 
+/* The flag's stand: the game keeps it on the flag entity, which itself
+ * moves when the flag is dropped. */
 static qboolean FlagHome(int team, vec3_t out)
 {
 	edict_t *flag = ctf_flagsearch(team);
 
 	if (!flag)
 		return false;
-	VectorCopy(flag->s.origin, out);
+	if (VectorLength(flag->homeposition) > 0.0f)
+		VectorCopy(flag->homeposition, out);
+	else
+		VectorCopy(flag->s.origin, out);
 	return true;
 }
 
@@ -332,7 +339,7 @@ static qboolean DestinationFor(sg_bot_t *bot, int role, vec3_t out)
 	case SG_ROLE_CARRY:
 		return FlagHome(team, out);
 	case SG_ROLE_RECOVER:
-		return FlagNow(team, out);
+		return FlagNowOrHome(team, out);
 	case SG_ROLE_ESCORT:
 		target = SG_OrderEscortTarget(e);
 		if (!target)
@@ -345,20 +352,57 @@ static qboolean DestinationFor(sg_bot_t *bot, int role, vec3_t out)
 			float speed = VectorLength(target->velocity);
 
 			VectorCopy(target->s.origin, out);
+			if (speed <= 50.0f)
+			{
+				/* A standing carrier is kept company from a body length
+				 * off, on the side this body is already on: never on top
+				 * of it, never in its run-up. */
+				vec3_t off, point;
+				float flat;
+
+				VectorSubtract(e->s.origin, target->s.origin, off);
+				off[2] = 0.0f;
+				flat = VectorLength(off);
+				if (flat > 1.0f)
+				{
+					VectorScale(off, ESCORT_STANDOFF / flat, off);
+					VectorAdd(target->s.origin, off, point);
+					if (StandingCellNear(point) != SG_RUNE_CX_INDEX_NONE)
+						VectorCopy(point, out);
+				}
+				return true;
+			}
 			if (speed > 50.0f)
 			{
 				vec3_t point;
+				uint32_t ahead_cell;
 
 				VectorScale(target->velocity, ESCORT_AHEAD / speed, ahead);
 				ahead[2] = 0.0f;
 				VectorAdd(out, ahead, point);
-				/* Only where there is floor to stand on. */
+				/* Only where there is floor to stand on, and only where
+				 * this body can get to from where it is. */
+				ahead_cell = StandingCellNear(point);
+				if (ahead_cell != SG_RUNE_CX_INDEX_NONE && bot->cell != SG_RUNE_CX_INDEX_NONE)
+				{
+					const sg_rune_field_t *to_ahead = SG_RuneLevelField(ahead_cell);
+
+					if (to_ahead && to_ahead->cost[SG_RUNE_FIELD_STATE(bot->cell, 0)] < INFINITY)
+					{
+						VectorCopy(point, out);
+						return true;
+					}
+				}
+				/* Nowhere ahead to be: behind the carrier then, off its line,
+				 * never on it. */
+				VectorScale(ahead, -0.75f, ahead);
+				VectorAdd(target->s.origin, ahead, point);
 				if (StandingCellNear(point) != SG_RUNE_CX_INDEX_NONE)
 					VectorCopy(point, out);
 			}
 			return true;
 		}
-		return FlagNow(enemy, out);
+		return FlagNowOrHome(enemy, out);
 	case SG_ROLE_DEFEND:
 		target = TeamCarrier(enemy);
 		bot->post_facing_valid = false;
@@ -374,6 +418,7 @@ static qboolean DestinationFor(sg_bot_t *bot, int role, vec3_t out)
 		{
 			uint32_t flag_cell = StandingCellNear(out);
 			vec3_t post, facing;
+			int posted = 0;
 
 			if (flag_cell != SG_RUNE_CX_INDEX_NONE &&
 				SG_RuneLevelDefendPost(flag_cell, DefendRank(bot), post, facing,
@@ -382,12 +427,21 @@ static qboolean DestinationFor(sg_bot_t *bot, int role, vec3_t out)
 				VectorCopy(post, out);
 				VectorCopy(facing, bot->post_facing);
 				bot->post_facing_valid = true;
+				posted = 1;
 			}
+			if (sg_cv.debug && sg_cv.debug->value && level.framenum % 100 == 0)
+				gi.dprintf("SGPOST %s defends flag at (%.0f %.0f %.0f) cell %u rank %d: %s\n",
+					e->client->pers.netname, out[0], out[1], out[2],
+					(unsigned int)flag_cell, DefendRank(bot), posted ? "posted" : "at the flag");
 			return true;
 		}
 		return false;
 	default:
-		return FlagNow(enemy, out);
+		/* Attacking while a teammate carries the enemy flag: the enemy's
+		 * stand, to be there when the flag returns, not on the carrier. */
+		if (TeamCarrier(team))
+			return FlagHome(enemy, out);
+		return FlagNowOrHome(enemy, out);
 	}
 }
 
@@ -456,8 +510,10 @@ static uint32_t StandingCellNear(const vec3_t point)
 		VectorCopy(point, probe);
 		probe[2] += rises[index];
 		cell = SG_RuneLevelLocate(probe, 0, NULL);
-		if (cell == SG_RUNE_CX_INDEX_NONE)
-			continue;
+		if (cell == SG_RUNE_CX_INDEX_NONE ||
+			(sg_rune_level.artifact.complex.cells[cell].semantics &
+				SG_RUNE_CX_CELL_HAZARD))
+			continue;   /* lava or slime is no place to go */
 		if (sg_rune_level.artifact.complex.cells[cell].semantics &
 			SG_RUNE_CX_CELL_SUPPORTED)
 			return cell;
@@ -467,9 +523,20 @@ static uint32_t StandingCellNear(const vec3_t point)
 	return first;
 }
 
+/* A flag lying where no body can stand (in lava, off the world) is not a
+ * destination: whoever wants it goes to its home and waits for its return. */
+static qboolean FlagNowOrHome(int team, vec3_t out)
+{
+	if (FlagNow(team, out) && StandingCellNear(out) != SG_RUNE_CX_INDEX_NONE)
+		return true;
+	return FlagHome(team, out);
+}
+
 /* A crossing that failed on this body is avoided for a while. */
 #define AVOID_SECONDS 30.0f
-#define RELEASE_LIVE_TOLERANCE 0.1f  /* a live release arc is checked this much slower and faster */
+#define LAUNCH_COMMIT 48.0f       /* a launch is kept while the body is this near its run-up */
+#define RELEASE_LIVE_TOLERANCE 0.0f  /* a live release arc is checked as it is: the record carried the margins */
+#define RIDE_OVERSHOOT 32.0f          /* past the bite by this much: the ride has failed, let go */
 #define RIDE_STALL_SECONDS 1.5f
 #define RIDE_STALL_DISTANCE 24.0f
 
@@ -529,6 +596,21 @@ static qboolean FlightSafe(const sg_rune_flight_t *flight)
 		!(cx->cells[flight->landing_cell].semantics & SG_RUNE_CX_CELL_HAZARD);
 }
 
+/* Whether letting go where the body hangs now, with no speed, lands it well. */
+#define HANG_PATIENCE 6.0f
+
+static qboolean HangDropSafe(const sg_bot_t *bot, const edict_t *e)
+{
+	static const vec3_t still = { 0.0f, 0.0f, 0.0f };
+	sg_rune_flight_t drop;
+
+	if (bot->cell == SG_RUNE_CX_INDEX_NONE)
+		return true;
+	return SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.complex,
+		&sg_rune_level.artifact.law, bot->cell, e->s.origin, still, 0.0f, &drop) ?
+		true : false;
+}
+
 /* A body falling into harm fires its rope at the best bite it knows: of
  * the hook rides recorded from the floor it left, the anchor most nearly
  * ahead and above.  The ride's own records are not the point; the bite
@@ -561,6 +643,8 @@ static qboolean RescueAnchor(const sg_bot_t *bot, const edict_t *e, vec3_t ancho
 
 		if (record->kind != SG_RUNE_MOVE_HOOK)
 			continue;
+		if (VectorCompare(record->anchor, bot->rescue_failed))
+			continue;
 		VectorSubtract(record->anchor, e->s.origin, to);
 		if (to[2] < RESCUE_ABOVE || VectorLength(to) > RESCUE_RANGE)
 			continue;
@@ -589,12 +673,53 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 	qboolean supported = e->groundentity != NULL;
 	qboolean swimming = e->waterlevel >= 2;
 
+	sg_rune_step_t held = bot->step;
+
 	memset(&bot->step, 0, sizeof(bot->step));
 	bot->step.kind = SG_RUNE_STEP_HOLD;
 	bot->crouching = (uint8_t)crouching;
 	bot->cell = SG_RuneLevelLocate(e->s.origin, crouching, &violation);
 	if (bot->cell == SG_RUNE_CX_INDEX_NONE)
 		return;
+	/* A launch being lined up is kept while the body is near its run-up
+	 * point: the cells at a floor's edge are small, and a body settling on
+	 * the point drifts across them, where the field would send it off
+	 * again and it would come back and drift again. */
+	if (held.kind == SG_RUNE_STEP_CROSS && held.run_up_present && supported &&
+		e->client->hookstate == 0 &&
+		(held.move_kind == SG_RUNE_MOVE_HOOK || held.move_kind == SG_RUNE_MOVE_JUMP ||
+		 held.move_kind == SG_RUNE_MOVE_DROP || held.move_kind == SG_RUNE_MOVE_ROCKET_JUMP) &&
+		held.capability != SG_RUNE_CX_INDEX_NONE)
+	{
+		float dx = held.run_up[0] - e->s.origin[0], dy = held.run_up[1] - e->s.origin[1];
+		uint32_t avoid[SG_BOT_AVOID];
+		uint32_t avoid_count = Avoided(bot, avoid), i;
+		qboolean avoided = false;
+
+		for (i = 0U; i < avoid_count; i++)
+			if (avoid[i] == held.capability)
+				avoided = true;
+		/* Past the portal along the launch line, the launch is done with or
+		 * missed: the field decides afresh from wherever the body is. */
+		if (held.launch_present)
+		{
+			float lx = held.launch[0], ly = held.launch[1];
+			float length = sqrtf(lx * lx + ly * ly);
+
+			if (length > 1.0f &&
+				((e->s.origin[0] - held.target[0]) * lx +
+				 (e->s.origin[1] - held.target[1]) * ly) / length > 0.0f)
+				avoided = true;
+		}
+		if (!avoided && dx * dx + dy * dy < LAUNCH_COMMIT * LAUNCH_COMMIT)
+		{
+			bot->step = held;
+			bot->step.crouching_now = (uint8_t)crouching;
+			bot->airborne = 0U;
+			bot->ride_since = 0.0f;
+			return;
+		}
+	}
 	/* The destination's cell, resolved again when the point moves. */
 	if (bot->destination_cell == SG_RUNE_CX_INDEX_NONE ||
 		VectorLength(bot->destination) == 0.0f ||
@@ -602,10 +727,18 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 		fabsf(destination[1] - bot->destination[1]) > 24.0f ||
 		fabsf(destination[2] - bot->destination[2]) > 48.0f)
 	{
-		VectorCopy(destination, bot->destination);
-		bot->destination_cell = bot->role == SG_ROLE_DEFEND &&
+		uint32_t resolved = bot->role == SG_ROLE_DEFEND &&
 			bot->post_cell != SG_RUNE_CX_INDEX_NONE ? bot->post_cell :
 			StandingCellNear(destination);
+
+		/* A point with no floor near it (a carrier mid-air, a flag in the
+		 * lava) keeps the last cell the route was going to. */
+		if (resolved != SG_RUNE_CX_INDEX_NONE ||
+			bot->destination_cell == SG_RUNE_CX_INDEX_NONE)
+		{
+			VectorCopy(destination, bot->destination);
+			bot->destination_cell = resolved;
+		}
 	}
 	if (bot->destination_cell == SG_RUNE_CX_INDEX_NONE)
 	{
@@ -615,13 +748,57 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 				destination[2]);
 		return;
 	}
+	/* A rope that came back without ever carrying the body missed, or bit
+	 * something that shook it off: the ride it was fired for is not tried
+	 * again for a while, or the body fires at the same bite from the same
+	 * spot until the flag returns. */
+	if (e->client->hookstate == 0 && bot->hook_phase == 2 && !bot->fired_bit &&
+		bot->fired_capability != SG_RUNE_CX_INDEX_NONE)
+	{
+		Avoid(bot, bot->fired_capability);
+		if (sg_cv.debug && sg_cv.debug->value)
+			gi.dprintf("SGBOT %s rope missed: ride avoided\n", e->client->pers.netname);
+		bot->fired_capability = SG_RUNE_CX_INDEX_NONE;
+		bot->hook_phase = 0;
+		bot->flight_capability = SG_RUNE_CX_INDEX_NONE;
+	}
 	/* A rope out or attached: the hook crossing goes on, whatever is under
 	 * the body, until the rope is let go; then the body is on a flight to
 	 * the record's landing. */
 	if (e->client->hookstate != 0 && bot->rescue)
 	{
 		/* A rescue rope: ride it to the bite and hang; the release is
-		 * judged by the live flight like any ride. */
+		 * judged by the live flight like any ride.  A rope that pulls the
+		 * body nowhere is let go of, and that bite is not tried again. */
+		if (e->client->hookstate == 2)
+		{
+			vec3_t moved;
+
+			if (bot->ride_since <= 0.0f)
+			{
+				bot->ride_since = level.time;
+				VectorCopy(e->s.origin, bot->ride_origin);
+			}
+			VectorSubtract(e->s.origin, bot->ride_origin, moved);
+			if (VectorLength(moved) >= RIDE_STALL_DISTANCE)
+			{
+				bot->ride_since = level.time;
+				VectorCopy(e->s.origin, bot->ride_origin);
+			}
+			else if (level.time - bot->ride_since > RIDE_STALL_SECONDS &&
+				(HangDropSafe(bot, e) || level.time - bot->ride_since > HANG_PATIENCE))
+			{
+				ctf_hook_abort(e);
+				bot->hook_phase = 3;
+				bot->hook_entity = NULL;
+				VectorCopy(bot->rescue_anchor, bot->rescue_failed);
+				bot->rescue = 0U;
+				bot->ride_since = 0.0f;
+				if (sg_cv.debug && sg_cv.debug->value)
+					gi.dprintf("SGBOT %s rescue rope let go\n", e->client->pers.netname);
+				goto grounded;
+			}
+		}
 		bot->airborne = (uint8_t)!supported;
 		bot->step.kind = SG_RUNE_STEP_CROSS;
 		bot->step.cell = bot->cell;
@@ -651,15 +828,61 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 				if (bot->ride_since <= 0.0f)
 				{
 					bot->ride_since = level.time;
+					bot->ride_nearest = 0.0f;
+					bot->hang_since = 0.0f;
 					VectorCopy(e->s.origin, bot->ride_origin);
 				}
 				VectorSubtract(e->s.origin, bot->ride_origin, moved);
 				if (VectorLength(moved) >= RIDE_STALL_DISTANCE)
+					bot->fired_bit = 1U;   /* the rope carried the body: a ride */
+				{
+					/* Past the bite and still on the rope: the body sailed by
+					 * where it should have let go.  Let go now, wherever it
+					 * lands, rather than swing back into the wall. */
+					vec3_t to_bite;
+					float distance;
+
+					VectorSubtract(record->anchor, e->s.origin, to_bite);
+					distance = VectorLength(to_bite);
+					if (bot->ride_nearest <= 0.0f || distance < bot->ride_nearest)
+						bot->ride_nearest = distance;
+					else if (distance > bot->ride_nearest + RIDE_OVERSHOOT)
+					{
+						ctf_hook_abort(e);
+						bot->hook_phase = 3;
+						bot->hook_entity = NULL;
+						Avoid(bot, bot->flight_capability);
+						bot->flight_capability = SG_RUNE_CX_INDEX_NONE;
+						bot->ride_since = 0.0f;
+						bot->ride_nearest = 0.0f;
+						if (sg_cv.debug && sg_cv.debug->value)
+							gi.dprintf("SGBOT %s rope let go past the bite\n",
+								e->client->pers.netname);
+						goto grounded;
+					}
+				}
+				{
+					/* Held at the bite: the clock of the hang runs from the
+					 * first such frame, however the body sways there. */
+					vec3_t to_bite;
+
+					VectorSubtract(record->anchor, e->s.origin, to_bite);
+					to_bite[2] -= (float)e->viewheight;
+					if (VectorLength(to_bite) <= SG_FACT_HOOK_HOLD + 8.0f)
+					{
+						if (bot->hang_since <= 0.0f)
+							bot->hang_since = level.time;
+					}
+					else
+						bot->hang_since = 0.0f;
+				}
+				if (VectorLength(moved) >= RIDE_STALL_DISTANCE && bot->hang_since <= 0.0f)
 				{
 					bot->ride_since = level.time;
 					VectorCopy(e->s.origin, bot->ride_origin);
 				}
-				else if (level.time - bot->ride_since > RIDE_STALL_SECONDS)
+				else if (level.time - bot->ride_since > RIDE_STALL_SECONDS ||
+					(bot->hang_since > 0.0f && level.time - bot->hang_since > RIDE_STALL_SECONDS))
 				{
 					vec3_t to_bite;
 					qboolean hanging;
@@ -670,6 +893,9 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 					VectorSubtract(record->anchor, e->s.origin, to_bite);
 					to_bite[2] -= (float)e->viewheight;
 					hanging = VectorLength(to_bite) <= SG_FACT_HOOK_HOLD + 8.0f;
+					if (hanging && !HangDropSafe(bot, e) &&
+						level.time - bot->hang_since < HANG_PATIENCE)
+						goto ride_on;
 					ctf_hook_abort(e);
 					bot->hook_phase = 3;
 					bot->hook_entity = NULL;
@@ -685,6 +911,7 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 			}
 			else
 				bot->ride_since = 0.0f;
+ride_on:
 			bot->airborne = (uint8_t)!supported;
 			bot->step.kind = SG_RUNE_STEP_CROSS;
 			bot->step.cell = bot->cell;
@@ -701,6 +928,7 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 	}
 grounded:
 	bot->ride_since = 0.0f;
+	bot->hang_since = 0.0f;
 	bot->airborne = (uint8_t)(!supported && !swimming);
 	if (bot->airborne)
 	{
@@ -718,15 +946,14 @@ grounded:
 				VectorCopy(e->s.origin, bot->flight_landing);
 		}
 		/* Falling into lava or slime, or out of the world: the rope. */
-		if (traced && !FlightSafe(&live) && live.outcome != SG_RUNE_FLIGHT_LANDED &&
+		if (traced && live.outcome == SG_RUNE_FLIGHT_HARM &&
 			e->client->hookstate == 0 &&
 			!bot->rescue && SG_BotHookReady(e) && RescueAnchor(bot, e, bot->rescue_anchor))
 		{
 			bot->rescue = 1U;
 			if (sg_cv.debug && sg_cv.debug->value)
-				gi.dprintf("SGBOT %s rope out to save a fall into %s\n",
-					e->client->pers.netname,
-					live.outcome == SG_RUNE_FLIGHT_HARM ? "harm" : "the void");
+				gi.dprintf("SGBOT %s rope out to save a fall into harm\n",
+					e->client->pers.netname);
 		}
 		bot->step.kind = SG_RUNE_STEP_CROSS;
 		bot->step.cell = bot->cell;
@@ -1004,6 +1231,9 @@ static void ApplyMechanism(sg_bot_t *bot, edict_t *e)
  * the direction sideways, away from it, the more the closer. */
 #define GIVE_WAY_REACH 56.0f
 
+#define GIVE_WAY_LOOK 40.0f       /* the step aside is checked this far ahead for floor */
+#define YIELD_REACH 72.0f         /* a standing body this near a teammate carrier steps away */
+
 static void GiveWay(const edict_t *e, float direction[3])
 {
 	int i;
@@ -1048,8 +1278,35 @@ static void GiveWay(const edict_t *e, float direction[3])
 
 		if (length > 1e-3f)
 		{
-			direction[0] = x / length;
-			direction[1] = y / length;
+			/* Only onto floor: a step aside at a ledge is a step off it.
+			 * The other side is tried, then the way is kept. */
+			float sides[2][2] = { { x / length, y / length },
+				{ (direction[0] - push[0]), (direction[1] - push[1]) } };
+			int side;
+
+			length = sqrtf(sides[1][0] * sides[1][0] + sides[1][1] * sides[1][1]);
+			if (length > 1e-3f)
+			{
+				sides[1][0] /= length;
+				sides[1][1] /= length;
+			}
+			for (side = 0; side < 2; side++)
+			{
+				vec3_t ahead;
+				uint32_t cell;
+
+				ahead[0] = e->s.origin[0] + sides[side][0] * GIVE_WAY_LOOK;
+				ahead[1] = e->s.origin[1] + sides[side][1] * GIVE_WAY_LOOK;
+				ahead[2] = e->s.origin[2];
+				cell = SG_RuneLevelLocate(ahead, 0, NULL);
+				if (cell == SG_RUNE_CX_INDEX_NONE ||
+					!(sg_rune_level.artifact.complex.cells[cell].semantics &
+						SG_RUNE_CX_CELL_SUPPORTED))
+					continue;
+				direction[0] = sides[side][0];
+				direction[1] = sides[side][1];
+				return;
+			}
 		}
 	}
 }
@@ -1085,6 +1342,38 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	}
 	moving = command.status != SG_TACTIC_COMMAND_HOLD && command.speed > 0.0f &&
 		isfinite(command.direction[0]) && isfinite(command.direction[1]);
+	/* A body standing in a teammate carrier's way steps out of it: the
+	 * carrier's run home is the team's, and bodies block each other. */
+	if (!moving && !BotCarrying(e))
+	{
+		edict_t *carrier = TeamCarrier(e->client->ctf.teamnum);
+
+		if (carrier && carrier != e)
+		{
+			vec3_t away;
+			float flat;
+
+			VectorSubtract(e->s.origin, carrier->s.origin, away);
+			away[2] = 0.0f;
+			flat = VectorLength(away);
+			if (flat < YIELD_REACH && flat > 1.0f)
+			{
+				vec3_t ahead;
+
+				VectorScale(away, 1.0f / flat, away);
+				ahead[0] = e->s.origin[0] + away[0] * GIVE_WAY_LOOK;
+				ahead[1] = e->s.origin[1] + away[1] * GIVE_WAY_LOOK;
+				ahead[2] = e->s.origin[2];
+				if (SG_BotStandingCellNear(ahead) != SG_RUNE_CX_INDEX_NONE)
+				{
+					VectorCopy(away, command.direction);
+					command.speed = 0.6f;
+					command.status = SG_TACTIC_COMMAND_MOVE;
+					moving = true;
+				}
+			}
+		}
+	}
 	if (moving)
 		GiveWay(e, command.direction);
 	if (moving)
@@ -1160,6 +1449,8 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 		Cmd_Hook_f(e);
 		bot->hook_phase = 2;
 		bot->hook_entity = e->client->hook;
+		bot->fired_capability = bot->rescue ? SG_RUNE_CX_INDEX_NONE : bot->flight_capability;
+		bot->fired_bit = 0U;
 	}
 	else if (command.hook_release && e->client->hookstate != 0)
 	{
@@ -1168,6 +1459,9 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 
 		/* Let go only where the body, with the velocity it has now, lands
 		 * on a floor; otherwise ride on to the bite and hang there. */
+		/* The record's arc was checked with margins when it was made; the
+		 * live check catches a gross deviation, not a marginal one, so it
+		 * runs at the speed the body has. */
 		if (e->client->hookstate == 2 && bot->cell != SG_RUNE_CX_INDEX_NONE)
 			let_go = SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.complex,
 				&sg_rune_level.artifact.law, bot->cell, e->s.origin, e->velocity,
@@ -1193,9 +1487,17 @@ static qboolean Stuck(sg_bot_t *bot, edict_t *e)
 	float dy = e->s.origin[1] - bot->stuck_origin[1];
 	float dz = e->s.origin[2] - bot->stuck_origin[2];
 
+	/* Only a plain contact crossing can be stuck: a body easing to a
+	 * point, lining up a launch, or holding a rope is slow on purpose. */
 	if (dx * dx + dy * dy + dz * dz > 32.0f * 32.0f ||
 		(bot->step.kind != SG_RUNE_STEP_CROSS &&
-		 bot->step.kind != SG_RUNE_STEP_ARRIVED))
+		 bot->step.kind != SG_RUNE_STEP_ARRIVED) ||
+		bot->step.ease || bot->step.run_up_present || e->client->hookstate != 0 ||
+		(bot->step.kind == SG_RUNE_STEP_CROSS &&
+		 bot->step.move_kind != SG_RUNE_MOVE_WALK &&
+		 bot->step.move_kind != SG_RUNE_MOVE_CROUCH &&
+		 bot->step.move_kind != SG_RUNE_MOVE_RAMP &&
+		 bot->step.move_kind != SG_RUNE_MOVE_SWIM))
 	{
 		VectorCopy(e->s.origin, bot->stuck_origin);
 		bot->stuck_since = level.time;

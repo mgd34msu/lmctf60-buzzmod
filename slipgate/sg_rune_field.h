@@ -50,6 +50,13 @@ int SG_RuneFieldBuild(sg_rune_field_t *field, const sg_rune_router_t *router,
 /* The same with a surcharge (seconds) added for every cell entered: what
  * a cell costs beyond the time to cross it, such as being under an
  * enemy's line of fire.  NULL surcharge is the plain build. */
+/* The mirror image: the cost from source_cell to every state, over the
+ * router's departures.  next[] holds the capability that reached a state
+ * (from its source), next_crouching the stance it left in.  For "what can
+ * the flag reach" questions; a body still steers by a field to its goal. */
+int SG_RuneFieldBuildFrom(sg_rune_field_t *field, const sg_rune_router_t *router,
+	uint32_t source_cell);
+
 int SG_RuneFieldBuildWeighted(sg_rune_field_t *field,
 	const sg_rune_router_t *router, uint32_t destination_cell,
 	const float *cell_surcharge);
@@ -85,8 +92,9 @@ typedef struct sg_rune_step_s
 	float launch[3];
 	uint8_t run_up_present;
 	uint8_t launch_present;
-	uint8_t ease;             /* the step after this one is a launch or an
-	                             end: arrive at the target, not through it */
+	uint8_t ease;             /* a launch or an end is near: arrive at
+	                             ease_point, not through it */
+	float ease_point[3];
 } sg_rune_step_t;
 
 /* The step from (cell, crouching) toward the field's destination; point is

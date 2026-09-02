@@ -22,7 +22,6 @@
 #define NEAR_BITE_STOP 40.0f
 #define MIN_PULL 64.0f
 #define RELEASE_TOLERANCE 0.15f   /* the pull speed a release arc is checked against, either way */
-#define HOLD_OFF_SURFACE 16.0f    /* the hull's half width: a hanging body's origin off the face */
 
 typedef struct bite_s
 {
@@ -273,9 +272,11 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 			uint32_t hold_cell;
 			sg_rune_flight_t drop;
 
-			hold[0] = bite->point[0] + bite->normal[0] * HOLD_OFF_SURFACE;
-			hold[1] = bite->point[1] + bite->normal[1] * HOLD_OFF_SURFACE;
-			hold[2] = bite->point[2] + bite->normal[2] * HOLD_OFF_SURFACE - EYE_HEIGHT;
+			/* The rope stops pulling with the eye a hold's length short of
+			 * the bite, back along the line it was pulled on. */
+			hold[0] = bite->point[0] - direction[0] * build->law->hook_hold;
+			hold[1] = bite->point[1] - direction[1] * build->law->hook_hold;
+			hold[2] = bite->point[2] - direction[2] * build->law->hook_hold - EYE_HEIGHT;
 			hold_cell = SG_RuneLocate(&build->locator, hold, 0U, 8.0f, NULL);
 			if (hold_cell == SG_RUNE_CX_INDEX_NONE)
 				continue;

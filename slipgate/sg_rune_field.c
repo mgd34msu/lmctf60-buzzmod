@@ -287,6 +287,123 @@ int SG_RuneFieldBuild(sg_rune_field_t *field, const sg_rune_router_t *router,
 	return SG_RuneFieldBuildWeighted(field, router, destination_cell, NULL);
 }
 
+int SG_RuneFieldBuildFrom(sg_rune_field_t *field, const sg_rune_router_t *router,
+	uint32_t source_cell)
+{
+	const sg_rune_artifact_t *artifact;
+	const sg_rune_cx_view_t *cx;
+	const sg_rune_move_table_t *move;
+	uint32_t state_count, state, stance;
+	heap_t heap;
+	heap_item_t item;
+
+	if (!field || !router || !router->artifact)
+		return 0;
+	artifact = router->artifact;
+	cx = &artifact->complex;
+	move = &artifact->movement;
+	if (source_cell >= cx->cell_count)
+		return 0;
+	state_count = cx->cell_count * 2U;
+	if (field->state_count != state_count)
+	{
+		SG_RuneFieldFree(field);
+		field->cost = malloc((size_t)state_count * sizeof(float));
+		field->next = malloc((size_t)state_count * sizeof(uint32_t));
+		field->next_crouching = malloc((size_t)state_count);
+		if (!field->cost || !field->next || !field->next_crouching)
+		{
+			SG_RuneFieldFree(field);
+			return 0;
+		}
+		field->state_count = state_count;
+	}
+	field->destination_cell = source_cell;
+	field->settled = 0U;
+	for (state = 0U; state < state_count; state++)
+	{
+		field->cost[state] = INFINITY;
+		field->next[state] = SG_RUNE_CX_INDEX_NONE;
+		field->next_crouching[state] = 0U;
+	}
+	memset(&heap, 0, sizeof(heap));
+	for (stance = 0U; stance < 2U; stance++)
+	{
+		sg_rune_cx_stances_t needed = stance ? SG_RUNE_CX_STANCE_CROUCHING :
+			SG_RUNE_CX_STANCE_STANDING;
+
+		if ((cx->cells[source_cell].valid_stances & needed) == 0U)
+			continue;
+		state = SG_RUNE_FIELD_STATE(source_cell, stance);
+		field->cost[state] = 0.0f;
+		if (!HeapPush(&heap, 0.0f, state))
+		{
+			free(heap.items);
+			return 0;
+		}
+	}
+	while (HeapPop(&heap, &item))
+	{
+		uint32_t cell = item.state / 2U;
+		uint32_t crouching = item.state & 1U;
+		uint8_t here = crouching ? SG_RUNE_MOVE_CROUCHING : SG_RUNE_MOVE_STANDING;
+		uint32_t slot;
+
+		if (item.cost > field->cost[item.state])
+			continue;
+		field->settled++;
+		for (slot = router->departure_first[cell];
+			slot < router->departure_first[cell + 1U]; slot++)
+		{
+			uint32_t capability = router->departures[slot];
+			const sg_rune_move_capability_t *record = &move->capabilities[capability];
+			float edge = router->edge_cost[capability];
+			float change = 0.0f;
+			uint32_t arrive;
+
+			if (!(edge < INFINITY))
+				continue;
+			if ((record->source_stances & here) == 0U)
+			{
+				/* After a change in place, where the cell allows it. */
+				uint8_t other = crouching ? SG_RUNE_MOVE_STANDING : SG_RUNE_MOVE_CROUCHING;
+				sg_rune_cx_stances_t room = crouching ? SG_RUNE_CX_STANCE_STANDING :
+					SG_RUNE_CX_STANCE_CROUCHING;
+
+				if ((record->source_stances & other) == 0U ||
+					(cx->cells[cell].valid_stances & room) == 0U)
+					continue;
+				change = STANCE_CHANGE_COST;
+			}
+			for (arrive = 0U; arrive < 2U; arrive++)
+			{
+				uint8_t stance_bit = arrive ? SG_RUNE_MOVE_CROUCHING : SG_RUNE_MOVE_STANDING;
+				uint32_t to_state;
+				float candidate;
+
+				if ((record->destination_stances & stance_bit) == 0U)
+					continue;
+				to_state = SG_RUNE_FIELD_STATE(record->destination, arrive);
+				candidate = item.cost + edge + change +
+					(arrive != crouching ? STANCE_CHANGE_COST : 0.0f);
+				if (candidate < field->cost[to_state])
+				{
+					field->cost[to_state] = candidate;
+					field->next[to_state] = capability;
+					field->next_crouching[to_state] = (uint8_t)crouching;
+					if (!HeapPush(&heap, candidate, to_state))
+					{
+						free(heap.items);
+						return 0;
+					}
+				}
+			}
+		}
+	}
+	free(heap.items);
+	return 1;
+}
+
 int SG_RuneFieldBuildWeighted(sg_rune_field_t *field,
 	const sg_rune_router_t *router, uint32_t destination_cell,
 	const float *cell_surcharge)
@@ -370,13 +487,28 @@ int SG_RuneFieldBuildWeighted(sg_rune_field_t *field,
 				uint8_t from = source_stance ? SG_RUNE_MOVE_CROUCHING :
 					SG_RUNE_MOVE_STANDING;
 				uint32_t from_state;
-				float candidate;
+				float candidate, change = 0.0f;
 
 				if ((record->source_stances & from) == 0U)
-					continue;
+				{
+					/* Not from this stance: from the other one after a change
+					 * in place, where the cell allows it.  A crouched body
+					 * stands up to walk on; a standing one ducks to crawl. */
+					uint8_t other = source_stance ? SG_RUNE_MOVE_STANDING :
+						SG_RUNE_MOVE_CROUCHING;
+					sg_rune_cx_stances_t room = source_stance ?
+						SG_RUNE_CX_STANCE_STANDING : SG_RUNE_CX_STANCE_CROUCHING;
+
+					if ((record->source_stances & other) == 0U ||
+						(cx->cells[record->cell].valid_stances & room) == 0U)
+						continue;
+					change = STANCE_CHANGE_COST +
+						((source_stance ? 0U : 1U) != crouching ? STANCE_CHANGE_COST : 0.0f);
+				}
+				else
+					change = source_stance != crouching ? STANCE_CHANGE_COST : 0.0f;
 				from_state = SG_RUNE_FIELD_STATE(record->cell, source_stance);
-				candidate = item.cost + edge +
-					(source_stance != crouching ? STANCE_CHANGE_COST : 0.0f) +
+				candidate = item.cost + edge + change +
 					(cell_surcharge ? cell_surcharge[cell] : 0.0f);
 				if (candidate < field->cost[from_state])
 				{
@@ -480,35 +612,65 @@ int SG_RuneStepSelect(const sg_rune_router_t *router,
  * target, not through it: a body at full speed covers a body length a
  * frame and overshoots a small cell at a floor's edge before it decides
  * again.  The launch then lines itself up from a standing start. */
+static int Contact(uint8_t kind)
+{
+	return kind == SG_RUNE_MOVE_WALK || kind == SG_RUNE_MOVE_CROUCH ||
+		kind == SG_RUNE_MOVE_RAMP || kind == SG_RUNE_MOVE_SWIM;
+}
+
+static int Launch(uint8_t kind)
+{
+	return kind == SG_RUNE_MOVE_JUMP || kind == SG_RUNE_MOVE_DROP ||
+		kind == SG_RUNE_MOVE_ROCKET_JUMP || kind == SG_RUNE_MOVE_HOOK;
+}
+
+/* Looks two contact crossings ahead: cells at a floor's edge are small,
+ * and a body that eases only over the last one still overshoots. */
 static void Lookahead(const sg_rune_router_t *router,
 	const sg_rune_field_t *field, sg_rune_step_t *step_out)
 {
-	uint32_t beyond, state, next;
-	uint8_t kind;
+	uint32_t cell = step_out->cell, capability = step_out->capability;
+	int crouching = step_out->crouching_next;
+	int depth;
 
 	step_out->ease = 0U;
-	if (step_out->kind != SG_RUNE_STEP_CROSS ||
-		step_out->capability == SG_RUNE_CX_INDEX_NONE)
+	if (step_out->kind != SG_RUNE_STEP_CROSS || capability == SG_RUNE_CX_INDEX_NONE ||
+		!Contact(step_out->move_kind))
 		return;
-	kind = step_out->move_kind;
-	if (kind != SG_RUNE_MOVE_WALK && kind != SG_RUNE_MOVE_CROUCH &&
-		kind != SG_RUNE_MOVE_RAMP && kind != SG_RUNE_MOVE_SWIM)
-		return;
-	beyond = router->destination[step_out->capability];
-	if (beyond >= router->artifact->complex.cell_count ||
-		beyond == field->destination_cell)
-		return;
-	state = SG_RUNE_FIELD_STATE(beyond, step_out->crouching_next);
-	next = field->next[state];
-	if (next == SG_RUNE_CX_INDEX_NONE)
+	for (depth = 0; depth < 2; depth++)
 	{
-		step_out->ease = 1U;
-		return;
+		uint32_t beyond = router->destination[capability], state, next;
+		uint8_t kind;
+
+		if (beyond >= router->artifact->complex.cell_count ||
+			beyond == field->destination_cell)
+			return;
+		state = SG_RUNE_FIELD_STATE(beyond, crouching);
+		next = field->next[state];
+		if (next == SG_RUNE_CX_INDEX_NONE)
+		{
+			/* Nowhere on from there: stop on the target. */
+			step_out->ease = 1U;
+			memcpy(step_out->ease_point, step_out->target, sizeof(step_out->ease_point));
+			return;
+		}
+		kind = router->artifact->movement.capabilities[next].kind;
+		if (Launch(kind))
+		{
+			/* The launch lines up at its cell's middle: ease to there. */
+			step_out->ease = 1U;
+			memcpy(step_out->ease_point, &router->cell_center[beyond * 3U],
+				sizeof(step_out->ease_point));
+			step_out->ease_point[2] += 24.0f;
+			return;
+		}
+		if (!Contact(kind))
+			return;
+		cell = beyond;
+		capability = next;
+		crouching = field->next_crouching[state];
 	}
-	kind = router->artifact->movement.capabilities[next].kind;
-	if (kind == SG_RUNE_MOVE_JUMP || kind == SG_RUNE_MOVE_DROP ||
-		kind == SG_RUNE_MOVE_ROCKET_JUMP || kind == SG_RUNE_MOVE_HOOK)
-		step_out->ease = 1U;
+	(void)cell;
 }
 
 static void Fill(const sg_rune_router_t *router, uint32_t capability,
@@ -686,8 +848,14 @@ int SG_RuneStepSelectAvoiding(const sg_rune_router_t *router,
 		float edge = router->edge_cost[capability];
 		int arrive;
 
-		if (Avoided(capability, avoid, avoid_count) || !(record->source_stances & here) ||
-			!isfinite(edge))
+		if (Avoided(capability, avoid, avoid_count) || !isfinite(edge))
+			continue;
+		/* Not from this stance: after a change in place, if the cell allows
+		 * the other one. */
+		if (!(record->source_stances & here) &&
+			(!(record->source_stances & (crouching ? SG_RUNE_MOVE_STANDING : SG_RUNE_MOVE_CROUCHING)) ||
+			 !(router->artifact->complex.cells[cell].valid_stances &
+				(crouching ? SG_RUNE_CX_STANCE_STANDING : SG_RUNE_CX_STANCE_CROUCHING))))
 			continue;
 		for (arrive = 0; arrive < 2; arrive++)
 		{
