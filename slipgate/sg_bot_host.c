@@ -130,20 +130,29 @@ static void Host_WriteString(char *s)
 	sg_stage_text_used += (int)length + 1;
 }
 
+/* The engine takes a null vector as zero for both of these. */
 static void Host_WritePosition(vec3_t pos)
 {
 	piece_t *piece = Stage(PIECE_POSITION);
 
-	if (piece)
+	if (!piece)
+		return;
+	if (pos)
 		VectorCopy(pos, piece->vector);
+	else
+		VectorClear(piece->vector);
 }
 
 static void Host_WriteDir(vec3_t dir)
 {
 	piece_t *piece = Stage(PIECE_DIR);
 
-	if (piece)
+	if (!piece)
+		return;
+	if (dir)
 		VectorCopy(dir, piece->vector);
+	else
+		VectorClear(piece->vector);
 }
 
 static void Host_WriteAngle(float f)
