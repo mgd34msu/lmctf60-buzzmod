@@ -1922,7 +1922,7 @@ static void SG_BotHookTouch(edict_t *self, edict_t *other,
 	if (!plane)
 		gi.WriteDir (vec3_origin);
 	else
-		gi.WriteDir (plane->normal);
+		gi.WriteDir (normal);
 	gi.multicast (self->s.origin, MULTICAST_PVS);
 }
 
