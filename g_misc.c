@@ -2,7 +2,6 @@
 
 #include "g_local.h"
 #include "slipgate/sg_local.h"
-#include "slipgate/sg_rune_mechanism_catalog.h"
 
 
 /*QUAKED func_group (0 0 0) ?
@@ -1882,10 +1881,7 @@ void teleporter_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_
 
 	if (!other->client)
 		return;
-	if (SG_OwnsBot(other))
-		dest = SG_ResolveTeleportDestination(self, other);
-	else
-		dest = G_Find (NULL, FOFS(targetname), self->target);
+	dest = G_Find (NULL, FOFS(targetname), self->target);
 	if (!dest)
 	{
 		gi.dprintf ("Couldn't find destination\n");
@@ -1949,7 +1945,6 @@ void SP_misc_teleporter (edict_t *ent)
 	gi.linkentity (ent);
 
 	trig = G_Spawn ();
-	SG_MechCatalogSynthetic(trig, ent, SG_MECH_SYNTHETIC_TELEPORT);
 	trig->touch = teleporter_touch;
 	trig->solid = SOLID_TRIGGER;
 	trig->target = ent->target;

@@ -4,10 +4,8 @@
 #include "slipgate/sg_identity.h"
 #include "slipgate/sg_host_law_owner.h"
 #include "slipgate/sg_rune_source_authority_owner.h"
-#include "slipgate/sg_rune_mechanism_catalog.h"
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_net.h"
-#include "slipgate/sg_human_trace.h"
 #include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionNewLevel
 #include "g_ctffunc.h"
 #include "g_tourney.h"
@@ -977,7 +975,6 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	 * Retire it while outgoing identity and client state are still visible. */
 	SG_LevelTransitionSaveOutgoingState ();
 
-	SG_HumanTraceNewLevel ();
 	SG_NetNewLevel ();
 
 	// BUZZKILL - the session recorder's per-level state: chat counts, the
@@ -993,7 +990,6 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	strncpy (level.mapname, mapname, sizeof(level.mapname)-1);
 	strncpy (game.spawnpoint, spawnpoint, sizeof(game.spawnpoint)-1);
 	SG_LevelIdentityBegin(mapname);
-	SG_MechCatalogBegin();
 
 	// set client fields on player ents
 	for (i=0 ; i<game.maxclients ; i++)
@@ -1030,12 +1026,6 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 		entities = ED_ParseEdict (entities, ent);
 
 		total_ents++;
-		/* Source ordinals are the parsed entity ordinals used by effective
-		 * entity semantics: the world is zero and this declaration is therefore
-		 * total_ents - 1.  The catalog resolver deliberately maps this semantic
-		 * value back to an authenticated live owner; it is never an edict slot. */
-		SG_MechCatalogDeclared(ent, (uint32_t)(total_ents - 1),
-			ent->classname);
 
 		// yet another map hack
 		if (!Q_stricmp(level.mapname, "command") && !Q_stricmp(ent->classname, "trigger_once") && !Q_stricmp(ent->model, "*27"))

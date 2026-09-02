@@ -1052,6 +1052,9 @@ void G_RunEntity (edict_t *ent);
 // g_main.c
 //
 void SaveClientData (void);
+/* Implemented in slipgate/sg_client.c (still present); its prototype lived
+ * in the now-deleted sg_compound_guard_game.h. */
+void SG_RosterStorageReset (void);
 void FetchClientEntData (edict_t *ent);
 void EndDMLevel (void);
 
@@ -1584,11 +1587,6 @@ struct edict_s
 	int             dontfree;
 	float           droptime;
 	int             entprops; //flags to tag entities with, for use with flags, which have no client
-	/* Exact source incarnation for a bot-owned delayed target callback. */
-	uint32_t        sg_delayed_source_key;
-	uint32_t        sg_delayed_source_generation;
-	struct sg_relay_wall_game_state_s *sg_relay_wall_live;
-	struct sg_timed_vault_game_runtime_state_s *sg_timed_vault_live;
 	// END CTF CODE
 
 };

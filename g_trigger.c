@@ -1,6 +1,5 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
-#include "slipgate/sg_push_game.h"
 #include "slipgate/sg_host_mechanism_law.h"
 
 
@@ -49,11 +48,6 @@ void multi_trigger (edict_t *ent)
 
 void Use_Multi (edict_t *ent, edict_t *other, edict_t *activator)
 {
-	/* Targeted activation is distinct from the physical touch admitted by the
-	 * declared controller.  Authorize before publishing activator or mutating
-	 * debounce state through multi_trigger. */
-	if (!SG_AuthorizeDoorTriggerUse(ent, activator))
-		return;
 	ent->activator = activator;
 	multi_trigger (ent);
 }
@@ -82,10 +76,6 @@ void Touch_Multi (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *su
 			return;
 	}
 
-	/* Give the declared door controller its last fail-closed boundary before
-	 * Touch_Multi publishes the activator or fires any targets. */
-	if (!SG_AuthorizeDoorTriggerTouch(self, other))
-		return;
 	self->activator = other;
 	multi_trigger (self);
 }
@@ -398,7 +388,6 @@ void trigger_push_touch (edict_t *self, edict_t *other, cplane_t *plane, csurfac
 		{
 			// don't take falling damage immediately from this
 			VectorCopy (other->velocity, other->client->oldvelocity);
-			SG_PushGameTouched(self, other);
 			if (other->fly_sound_debounce_time < level.time)
 			{
 				other->fly_sound_debounce_time = level.time + 1.5;

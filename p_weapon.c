@@ -1,12 +1,10 @@
 // g_weapon.c
 
+#include <limits.h>
 #include "g_local.h"
 #include "slipgate/sg_local.h"
-#include "slipgate/sg_compound_guard_game.h"
-#include "slipgate/sg_compound_hook_game_events.h"
 #include "slipgate/sg_host_law_owner.h"
 #include "slipgate/sg_host_law_owner_internal.h"
-#include "slipgate/sg_human_trace.h"
 #ifdef world
 #define SG_P_WEAPON_RESTORE_WORLD
 #undef world
@@ -1901,17 +1899,6 @@ static void SG_BotHookTouch(edict_t *self, edict_t *other,
 		ctf_hook_abort(self->owner);
 		return;
 	}
-	if (SG_OwnsBot(self->owner) &&
-	    SG_CompoundHookGameAttachWillApply(self, other, surf) ==
-	        SG_COMPOUND_HOOK_GAME_EVENT_DENIED)
-	{
-		if (self->owner && self->owner->client &&
-		    !self->owner->client->hook)
-			self->owner->client->hook = self;
-		ctf_hook_abort(self->owner);
-		return;
-	}
-
 	VectorClear (self->velocity);
 
 	if (self->owner->client)
@@ -1964,20 +1951,6 @@ static void SG_BotHookTouch(edict_t *self, edict_t *other,
 		VectorCopy(dest, self->hook_offset);
 		self->solid = SOLID_TRIGGER;
 		gi.linkentity(self);
-		if (SG_OwnsBot(self->owner))
-		{
-			sg_compound_hook_live_result_t compound_result =
-			    SG_CompoundHookGameAttached(self);
-
-			if (compound_result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING ||
-			    compound_result.outcome == SG_COMPOUND_HOOK_LIVE_REJECTED)
-			{
-				if (self->owner->client && !self->owner->client->hook)
-					self->owner->client->hook = self;
-				ctf_hook_abort(self->owner);
-				return;
-			}
-		}
 	}
 
 	gi.WriteByte (svc_temp_entity);
@@ -1987,7 +1960,7 @@ static void SG_BotHookTouch(edict_t *self, edict_t *other,
 		gi.WriteDir (vec3_origin);
 	else
 		gi.WriteDir (plane->normal);
-	gi.multicast (self->s.origin, MULTICAST_PVS);	
+	gi.multicast (self->s.origin, MULTICAST_PVS);
 }
 
 /* Unmodified LMCTF hook collision path. Bot bolts use SG_BotHookTouch and
@@ -2067,7 +2040,6 @@ void hook_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *sur
 		VectorCopy(dest, self->hook_offset);
 		self->solid = SOLID_TRIGGER;
 		gi.linkentity(self);
-		SG_HumanTraceHookAttach(self->owner, self, other);
 	}
 
 	gi.WriteByte (svc_temp_entity);
@@ -2139,7 +2111,6 @@ static edict_t *LMCTF_FireHumanHook(edict_t *self, vec3_t start,
 	bolt->takedamage = DAMAGE_YES;
 	bolt->health = SG_HOST_HOOK_HEALTH;
 	gi.linkentity(bolt);
-	SG_HumanTraceHookFire(self, bolt);
 	gi.sound(self, CHAN_AUTO, gi.soundindex("weapons/grapple/grfire.wav"),
 	    0.8f, ATTN_NORM, 0);
 	tr = gi.trace(self->s.origin, NULL, NULL, bolt->s.origin, self,
@@ -2187,27 +2158,6 @@ edict_t *fire_hook (edict_t *self, vec3_t start, vec3_t dir, int speed)
 	bolt->takedamage = DAMAGE_YES;
 	bolt->health = SG_HOST_HOOK_HEALTH;	 // after 59 damage, hook destoyed
 	gi.linkentity (bolt);
-	if (SG_OwnsBot(self))
-	{
-		sg_compound_hook_live_result_t compound_result;
-		sg_compound_guard_result_t guard_result;
-		sg_mover_subject_t subject;
-
-		guard_result = SG_CompoundGuardGameHookLinked(self, bolt, &subject);
-		if (guard_result != SG_COMPOUND_GUARD_OK)
-		{
-			G_FreeEdict(bolt);
-			return NULL;
-		}
-		compound_result = SG_CompoundHookGameLinked(self, bolt, &subject);
-		if (compound_result.outcome != SG_COMPOUND_HOOK_LIVE_IDLE &&
-		    compound_result.outcome != SG_COMPOUND_HOOK_LIVE_RUNNING)
-		{
-			self->client->hook = bolt;
-			ctf_hook_abort(self);
-			return NULL;
-		}
-	}
 	fire_result = SG_HostLawProductionHookFire((uint32_t)self->s.number,
 		(uint32_t)bolt->s.number, &fire_step);
 	if (fire_result.status != SG_HOST_LAW_OK || !fire_step.accepted ||
@@ -2406,15 +2356,6 @@ void CTF_HookPullStep (edict_t *ent, qboolean draw_cable)
 
 	VectorCopy (velocity, ent->velocity);
 	VectorCopy (ent->velocity, ent->client->oldvelocity);
-	if (SG_OwnsBot(ent))
-	{
-		sg_compound_hook_live_result_t compound_result =
-		    SG_CompoundHookGamePullApplied(ent, ent->client->hook);
-
-		if (compound_result.outcome == SG_COMPOUND_HOOK_LIVE_RECOVERING ||
-		    compound_result.outcome == SG_COMPOUND_HOOK_LIVE_REJECTED)
-			ctf_hook_abort(ent);
-	}
 }
 
 static void LMCTF_HumanHookFire(edict_t *ent)
@@ -2581,7 +2522,6 @@ void Weapon_Hook (edict_t *ent)
 	
 	if ( !((ent->client->latched_buttons|ent->client->buttons) & BUTTON_ATTACK))
 	{
-		SG_HumanTraceHookRelease(ent);
 		ctf_hook_abort(ent);
 	}
 	

@@ -12,12 +12,8 @@
 #include "slipgate/sg_identity.h"
 #include "slipgate/sg_host_law_owner.h"
 #include "slipgate/sg_rune_source_authority_owner.h"
-#include "slipgate/sg_bot_localization.h"
 #include "slipgate/sg_net.h"
 #include "slipgate/sg_local.h"
-#include "slipgate/sg_compound_guard_game.h"
-#include "slipgate/sg_rune_mechanism_catalog.h"
-#include "slipgate/sg_strategy_runtime_bridge.h"
 
 #ifdef _WIN32
 _CrtMemState startup1;	// memory diagnostics
@@ -142,7 +138,7 @@ void ShutdownGame (void)
 {
 	/* Retire plan leases and the complete compact production owner while its
 	 * field, localization, and decoded-model storage are still live. */
-	SG_CompactProductionStorageWillFree();
+	SG_RuneLevelStorageWillFree();
 	gi.dprintf ("==== ShutdownGame ====\n");
 
 	sl_GameEnd( &gi, level );	// StdLog - Mark Davies
@@ -154,7 +150,6 @@ void ShutdownGame (void)
 	DB_Conn_Cleanup();	// close the shared stats database, if it was opened
 	stats_log_reset();	// free the stats list before its TAG_GAME pool goes
 
-	SG_CompoundGuardGameStorageWillFree();
 	gi.FreeTags (TAG_LEVEL);
 	gi.FreeTags (TAG_GAME);
 
@@ -878,10 +873,6 @@ void G_RunFrame (void)
 
 		G_RunEntity (ent);
 	}
-	/* The first complete entity pass materializes delayed stock mechanisms
-	 * (notably automatic door triggers).  Seal before bot/runtime publication
-	 * sees the frame, and before `sv rune` may temporarily open movers. */
-	SG_MechCatalogSeal();
 	/*
 	 * SLIPGATE bots think here, after the entity loop rather than inside it:
 	 * they see a fully updated world that way and never act on a half-stepped

@@ -1,8 +1,5 @@
 #include "g_local.h"
 #include "slipgate/sg_local.h"
-#include "slipgate/sg_compound_world.h"
-#include "slipgate/sg_rune_mechanism_catalog.h"
-#include "slipgate/sg_train_gate_game.h"
 #include "slipgate/sg_host_mechanism_law.h"
 
 /*
@@ -134,10 +131,10 @@ void Move_Done (edict_t *ent)
 	VectorClear (ent->velocity);
 	/* Move_Calc can complete synchronously during a blocked reversal while an
 	 * older Move_Final is still scheduled.  Consume that stale callback before
-	 * publishing the new endpoint; the endpoint callback may install its own
+	 * calling the endpoint; the endpoint callback may install its own
 	 * deliberate schedule (for example door_go_down at TOP). */
 	ent->nextthink = 0;
-	SG_MoverCompletionDispatch (ent);
+	ent->moveinfo.endfunc (ent);
 }
 
 void Move_Final (edict_t *ent)
@@ -178,7 +175,6 @@ void Move_Calc (edict_t *ent, vec3_t dest, void(*func)(edict_t*))
 	VectorSubtract (dest, ent->s.origin, ent->moveinfo.dir);
 	ent->moveinfo.remaining_distance = VectorNormalize (ent->moveinfo.dir);
 	ent->moveinfo.endfunc = func;
-	SG_MoverCompletionArm (ent);
 
 	if (ent->moveinfo.speed == ent->moveinfo.accel && ent->moveinfo.speed == ent->moveinfo.decel)
 	{
@@ -210,7 +206,7 @@ void AngleMove_Done (edict_t *ent)
 {
 	VectorClear (ent->avelocity);
 	ent->nextthink = 0;
-	SG_MoverCompletionDispatch (ent);
+	ent->moveinfo.endfunc (ent);
 }
 
 void AngleMove_Final (edict_t *ent)
@@ -273,7 +269,6 @@ void AngleMove_Calc (edict_t *ent, void(*func)(edict_t*))
 {
 	VectorClear (ent->avelocity);
 	ent->moveinfo.endfunc = func;
-	SG_MoverCompletionArm (ent);
 	if (level.current_entity == ((ent->flags & FL_TEAMSLAVE) ? ent->teammaster : ent))
 	{
 		AngleMove_Begin (ent);
@@ -490,9 +485,7 @@ void plat_blocked (edict_t *self, edict_t *other)
 
 
 void Use_Plat (edict_t *ent, edict_t *other, edict_t *activator)
-{ 
-	if (!SG_AuthorizeLiftUse(ent, activator))
-		return;
+{
 	if (ent->think)
 		return;		// already down
 	plat_go_down (ent);
@@ -505,8 +498,6 @@ void Touch_Plat_Center (edict_t *ent, edict_t *other, cplane_t *plane, csurface_
 		return;
 		
 	if (other->health <= 0)
-		return;
-	if (!SG_AuthorizeLiftTouch(ent, ent->enemy, other))
 		return;
 
 	ent = ent->enemy;	// now point at the plat, not the trigger
@@ -525,7 +516,6 @@ void plat_spawn_inside_trigger (edict_t *ent)
 // middle trigger
 //	
 	trigger = G_Spawn();
-	SG_MechCatalogSynthetic(trigger, ent, SG_MECH_SYNTHETIC_PLATFORM);
 	trigger->touch = Touch_Plat_Center;
 	trigger->movetype = MOVETYPE_NONE;
 	trigger->solid = SOLID_TRIGGER;
@@ -783,11 +773,7 @@ void button_wait (edict_t *self)
 	self->s.effects &= ~EF_ANIM01;
 	self->s.effects |= EF_ANIM23;
 
-	/* The button has already moved, but its target fanout is the first callback
-	 * mutation outside the switch itself.  Reauthenticate the exact sealed plan
-	 * before killtargets, relays, speakers, or doors can run. */
-	if (SG_AuthorizeButtonTargets(self, self->activator))
-		G_UseTargets (self, self->activator);
+	G_UseTargets (self, self->activator);
 	self->s.frame = 1;
 	if (self->moveinfo.wait >= 0)
 	{
@@ -809,8 +795,6 @@ void button_fire (edict_t *self)
 
 void button_use (edict_t *self, edict_t *other, edict_t *activator)
 {
-	if (!SG_AuthorizeButtonUse(self, activator))
-		return;
 	self->activator = activator;
 	button_fire (self);
 }
@@ -822,8 +806,6 @@ void button_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *s
 
 	if (other->health <= 0)
 		return;
-	if (!SG_AuthorizeButtonTouch(self, other))
-		return;
 
 	self->activator = other;
 	button_fire (self);
@@ -831,8 +813,6 @@ void button_touch (edict_t *self, edict_t *other, cplane_t *plane, csurface_t *s
 
 void button_killed (edict_t *self, edict_t *inflictor, edict_t *attacker, int damage, vec3_t point)
 {
-	if (!SG_AuthorizeButtonShot(self, inflictor, attacker, damage))
-		return;
 	self->activator = attacker;
 	self->health = self->max_health;
 	self->takedamage = DAMAGE_NO;
@@ -963,7 +943,6 @@ void door_hit_top (edict_t *self)
 		self->think = door_go_down;
 		self->nextthink = level.time + self->moveinfo.wait;
 	}
-	SG_MoverCompletionPublish(self, SG_MOVER_COMPLETION_TOP);
 }
 
 void door_hit_bottom (edict_t *self)
@@ -976,12 +955,10 @@ void door_hit_bottom (edict_t *self)
 	}
 	self->moveinfo.state = STATE_BOTTOM;
 	door_use_areaportals (self, false);
-	SG_MoverCompletionPublish(self, SG_MOVER_COMPLETION_BOTTOM);
 }
 
 void door_go_down (edict_t *self)
 {
-	SG_MoverCompletionTransition(self);
 	if (!(self->flags & FL_TEAMSLAVE))
 	{
 		if (self->moveinfo.sound_start)
@@ -1012,7 +989,6 @@ void door_go_up (edict_t *self, edict_t *activator)
 			self->nextthink = level.time + self->moveinfo.wait;
 		return;
 	}
-	SG_MoverCompletionTransition(self);
 	
 	if (!(self->flags & FL_TEAMSLAVE))
 	{
@@ -1035,11 +1011,6 @@ void door_use (edict_t *self, edict_t *other, edict_t *activator)
 	edict_t	*ent;
 
 	if (self->flags & FL_TEAMSLAVE)
-		return;
-
-	/* Authorization must precede every door-team mutation, including toggle
-	 * descent, message/touch clearing, movement and target publication. */
-	if (!SG_AuthorizeDoorActivation(other, self, activator))
 		return;
 
 	if (self->spawnflags & DOOR_TOGGLE)
@@ -1075,11 +1046,6 @@ void Touch_DoorTrigger (edict_t *self, edict_t *other, cplane_t *plane, csurface
 		return;
 
 	if ((self->owner->spawnflags & DOOR_NOMONSTER) && (other->svflags & SVF_MONSTER))
-		return;
-
-	/* Keep the declared controller's decision ahead of debounce state and the
-	 * synchronous door_use mutation chain. */
-	if (!SG_AuthorizeDoorTriggerTouch(self, other))
 		return;
 
 	if (level.time < self->touch_debounce_time)
@@ -1154,7 +1120,6 @@ void Think_SpawnDoorTrigger (edict_t *ent)
 	maxs[1] += 60;
 
 	other = G_Spawn ();
-	SG_MechCatalogSynthetic(other, ent, SG_MECH_SYNTHETIC_AUTO_DOOR);
 	VectorCopy (mins, other->mins);
 	VectorCopy (maxs, other->maxs);
 	other->owner = ent;
@@ -1210,12 +1175,6 @@ void door_killed (edict_t *self, edict_t *inflictor, edict_t *attacker, int dama
 {
 	edict_t	*ent;
 
-	/* A projectile-driven door activation has already reached pain/die, but the
-	 * team reset below is still a world mutation.  Apply the same SG authority
-	 * boundary before changing health/takedamage; door_use rechecks immediately
-	 * before motion so both halves fail closed under intervening drift. */
-	if (!SG_AuthorizeDoorActivation(attacker, self->teammaster, attacker))
-		return;
 	for (ent = self->teammaster ; ent ; ent = ent->teamchain)
 	{
 		ent->health = ent->max_health;
@@ -1734,8 +1693,6 @@ void func_train_find (edict_t *self)
 
 void train_use (edict_t *self, edict_t *other, edict_t *activator)
 {
-	if (!SG_AuthorizeTrainUse(self, other, activator))
-		return;
 	self->activator = activator;
 
 	if (self->spawnflags & TRAIN_START_ON)

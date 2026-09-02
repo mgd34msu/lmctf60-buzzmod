@@ -3,7 +3,6 @@
 #include "g_tourney.h"
 #include "bat.h"
 #include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatLevelEnd from BeginIntermission
-#include "slipgate/sg_human_trace.h"
 #include "slipgate/sg_local.h"
 #include "ctf_sqlite_unidb.h"       // BUZZKILL - DB_SessionRecord from BeginIntermission
 #include "ui_boards.h"              // settled boards: UI_Boards_MatchEnd from BeginIntermission
@@ -85,10 +84,6 @@ void BeginIntermission (edict_t *targ)
 
 	if (level.intermissiontime)
 		return;		// already activated
-	SG_HumanTraceMatchEnd();
-	/* The recorder has committed its terminal roots, while the exact compact
-	 * production owner and its level-bound model are still current. */
-	SG_CompactProductionPostMatchLearning();
 
 	MvpDisp = 1;
 

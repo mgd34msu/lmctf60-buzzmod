@@ -12,7 +12,6 @@
 #include "slipgate/sg_identity.h"
 #include "slipgate/sg_rune_source_authority_owner.h"
 #include "slipgate/sg_local.h"
-#include "slipgate/sg_compound_guard_game.h"
 
 qboolean SG_OwnsBot(edict_t * ent);
 int SG_RemoveBots(void);
@@ -701,7 +700,6 @@ void ReadGame(char* filename)
 	DB_Conn_Cleanup();
 	stats_log_init();
 
-	SG_CompoundGuardGameStorageWillFree();
 	gi.FreeTags(TAG_GAME);
 
 	f = fopen(filename, "rb");

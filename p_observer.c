@@ -1,5 +1,4 @@
 #include "g_local.h"
-#include "slipgate/sg_human_trace.h"
 #include <inttypes.h>
 #include "g_ctffunc.h"
 #include "stdlog.h"
@@ -95,7 +94,6 @@ void Drop_All (edict_t *ent)
 
 	if (ent->client->hook)
 	{
-		SG_HumanTraceHookReset(ent, ent->client->hook);
 		G_FreeEdict (ent->client->hook);
 		ent->client->hook = NULL;
 	}

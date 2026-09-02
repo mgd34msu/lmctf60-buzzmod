@@ -1,7 +1,6 @@
 
 #include "g_local.h"
 #include "slipgate/sg_client_ownership.h"
-#include "slipgate/sg_hook_game.h"
 #include "m_player.h"
 #include "plasma.h" // SKWiD MOD
 #include "g_ctffunc.h" //surt for some nice wrapper functions
@@ -1017,10 +1016,6 @@ void ClientEndServerFrame (edict_t *ent)
 	if (ent->client->hookstate) // We are still grappled
 	{
 		Weapon_Hook_Fire(ent);
-		/* Ordinary graph hooks acknowledge this only after the historical
-		 * end-frame production pull has changed the authoritative body. */
-		if (SG_OwnsBot(ent))
-			SG_HookLiveEndFrame(ent);
 	}
 
 	//

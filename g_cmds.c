@@ -13,7 +13,6 @@
 #include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatHear from Cmd_Say_f
 #include "slipgate/sg_local.h"
 #include "slipgate/sg_combat.h"
-#include "slipgate/sg_human_trace.h"
 
 void spectator_respawn (edict_t *ent);
 int Team_Observer_OK(int Team_To_View, edict_t *ent);
@@ -1096,7 +1095,6 @@ void Drop_All (edict_t *ent)
 
 	if (ent->client->hook)
 	{
-		SG_HumanTraceHookReset(ent, ent->client->hook);
 		G_FreeEdict (ent->client->hook);
 		ent->client->hook = NULL;
 	}
@@ -1483,7 +1481,6 @@ void Cmd_Unhook_f (edict_t *ent)
 		}
 		else
 		{
-			SG_HumanTraceHookRelease(ent);
 			ctf_hook_abort(ent);
 		}
 	}

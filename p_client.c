@@ -5,11 +5,8 @@
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_local.h"
-#include "slipgate/sg_human_trace.h"
-#include "slipgate/sg_bot_localization.h"
 #include "slipgate/sg_chat.h"
 #include "slipgate/sg_combat.h"
-#include "slipgate/sg_compound_guard_game.h"
 #include "slipgate/sg_host_law_owner.h"
 #include "ctf_sqlite_unidb.h"	// db_record_t -- ui_boards.h's UI_Records_FormatLine needs it declared first
 #include "ui_boards.h"		// UI_Tick_Dirty -- disconnects change the boards' roster
@@ -797,7 +794,6 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 		/* Railgun elimination is known at this first death edge. It has no
 		 * PutClientInServer successor, so close before any follower can WAIT. */
 		(void)POVLock_HandleRespawnTerminal(self);
-		(void)SG_CompoundGuardGamePlayerDie(self);
 		SG_NoteDeath(self);     /* the obituary is common knowledge */
 		/* Death chat belongs to the first death edge. */
 		SG_ChatDeath(self, attacker, meansOfDeath);
@@ -1050,10 +1046,8 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 	{
 		edict_t *dead_hook = self->client->hook;
 
-		SG_HumanTraceHookReset(self, dead_hook);
 		G_FreeEdict (dead_hook);
 		self->client->hook = NULL;
-		(void)SG_CompoundGuardGameBoltEvicted(self, dead_hook);
 	}
 	if (self->client->rune && self->client->rune->item)
 	{
@@ -1645,7 +1639,6 @@ void InitBodyQue (void)
 	{
 		ent = G_Spawn();
 		ent->classname = "bodyque";
-		(void)SG_CompoundGuardGameBodyQueueInit(ent);
 	}
 }
 
@@ -1671,7 +1664,6 @@ void CopyToBodyQue (edict_t *ent)
 	// grab a body que and cycle to the next one
 	body = &g_edicts[(int)maxclients->value + level.body_que + 1];
 	level.body_que = (level.body_que + 1) % BODY_QUEUE_SIZE;
-	(void)SG_CompoundGuardGameBodyWillReplace(body);
 
 	// FIXME: send an effect on the removed body
 
@@ -1696,7 +1688,6 @@ void CopyToBodyQue (edict_t *ent)
 	body->takedamage = DAMAGE_YES;
 
 	gi.linkentity (body);
-	(void)SG_CompoundGuardGameBodyDidCopy(ent, body);
 }
 
 
@@ -2130,7 +2121,6 @@ void PutClientInServer (edict_t *ent)
 	// force the current weapon up
 	client->newweapon = client->pers.weapon;
 	ChangeWeapon (ent);
-	(void)SG_CompoundGuardGameClientSpawned(ent);
 	/* The new ctfid and the complete target body now exist. Only this exact
 	 * SG instance may reattach recording sessions held across respawn. */
 	POVLock_TargetSpawned(ent);
@@ -2688,8 +2678,6 @@ void ClientDisconnect (edict_t *ent)
 	POVLock_ClearTarget(ent);
 	/* The dropping viewer is no longer a usable network endpoint. */
 	POVLock_ViewerDisconnected(ent);
-	if (SG_OwnsBot(ent))
-		SG_CancelBotDelayedUses(ent);
 	/* A client index is recycled process storage. Retire every private and
 	 * shared sensor/chat fact before the edict can be reused by a different
 	 * human or fake client; SG-specific callers may already have done this,
@@ -2728,16 +2716,12 @@ void ClientDisconnect (edict_t *ent)
 			ctf_playerdropflag(ent, flag->item);
 		}
 	}
-	(void)SG_CompoundGuardGameClientDisconnecting(ent);
-	
 	if (ent->client->hook)
 	{
 		edict_t *dead_hook = ent->client->hook;
 
-		SG_HumanTraceHookReset(ent, dead_hook);
 		G_FreeEdict (dead_hook);
 		ent->client->hook = NULL;
-		(void)SG_CompoundGuardGameBoltEvicted(ent, dead_hook);
 	}
 	
 	
@@ -2758,7 +2742,6 @@ void ClientDisconnect (edict_t *ent)
 	ent->s.modelindex = 0;
 	ent->solid = SOLID_NOT;
 	ent->inuse = false;
-	(void)SG_CompoundGuardGameClientDisconnected(ent);
 	ent->classname = "disconnected";
 	ent->client->p_stats_player = NULL; // LM_Hati
 	ent->client->pers.connected = false;
@@ -2822,7 +2805,6 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 	qboolean	povlock_frame;
 	qboolean	povrecord_frame;
 	pmove_t	pm;
-	pmove_state_t	human_trace_before;
 	edict_t		*flag;  // CTF CODE -- LM_JORM
 	vec3_t 	offset; // CTF CODE -- LM_JORM
 
@@ -3050,15 +3032,12 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 			pm.numtouch = (int)result.touch_count;
 			for (i = 0; i < pm.numtouch; i++)
 				pm.touchents[i] = &g_edicts[result.touch_instance_ids[i]];
-			SG_BotLocalizationObservePmove(ent, &request, &result);
 		}
 		else
 		{
 			SG_HumanSpeedPmoveBegin(ent, &pm.s, pm.cmd.msec);
-			human_trace_before = pm.s;
 			gi.Pmove (&pm);
 			SG_HumanSpeedPmoveEnd(ent, &pm.s, pm.cmd.msec);
-			SG_HumanTracePmove(ent, &human_trace_before, &pm);
 		}
 
 		// save results of pmove
@@ -3117,7 +3096,6 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 					break;
 			if (j != i)
 				continue;	// duplicated
-			SG_NoteDropSolidContact(other, ent);
 			if (!other->touch)
 				continue;
 			other->touch (other, ent, NULL, NULL);
