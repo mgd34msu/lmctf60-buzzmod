@@ -177,9 +177,6 @@ typedef struct sg_configuration_semantics_s
 	uint32_t hook_surface_count;
 	sg_rune_vec3_t *hook_vertices;
 	uint32_t hook_vertex_count;
-	uint64_t lattice_solve_calls;
-	uint64_t lattice_constraints;
-	uint32_t lattice_maximum_binary_shift;
 } sg_configuration_semantics_t;
 
 void SG_ConfigurationSemanticsDefaultLimits(

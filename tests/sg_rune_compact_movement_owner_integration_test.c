@@ -354,7 +354,6 @@ void SG_ConfigurationDestroy(sg_configuration_space_t *space)
 {
 	if (space == NULL)
 		return;
-	free(space->certificate_nodes);
 	free(space->stance_overlaps);
 	free(space->portals);
 	free(space->vertices);

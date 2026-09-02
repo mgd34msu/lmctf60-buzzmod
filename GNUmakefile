@@ -1278,10 +1278,8 @@ SHLIBLDFLAGS = -shared
 # Exact configuration construction is an offline game-module concern. The
 # shipped module retains the compact artifact reader/runtime service only.
 RUNE_COMPACT_GENERATOR_OFFLINE_OBJS = \
-	slipgate/sg_configuration_audit.o \
-	slipgate/sg_configuration_lattice.o \
 	slipgate/sg_configuration_semantics.o \
-	slipgate/sg_configuration_space.o \
+	slipgate/sg_configuration_cells.o \
 	slipgate/sg_static_visibility.o \
 	slipgate/sg_rune_compact_builder.o \
 	slipgate/sg_rune_compact_geometry.o \
@@ -1315,22 +1313,19 @@ rune-compact-generator:
 	@false
 else
 RUNE_COMPACT_GENERATOR_TARGET = game$(ARCH)-lmctf-$(VER)-rune-generator.so
-RUNE_COMPACT_GENERATOR_CPPFLAGS = $(shell pkg-config --cflags isl)
-RUNE_COMPACT_GENERATOR_LIBS = $(shell pkg-config --libs isl)
 
 .PHONY: rune-compact-generator rune-compact-generator-requirements
 
 rune-compact-generator: $(RUNE_COMPACT_GENERATOR_TARGET)
 
+# The generator no longer has any external library dependency; this target
+# is kept as a no-op so callers that still invoke it as a prerequisite are
+# unaffected.
 rune-compact-generator-requirements:
-	@pkg-config --exists isl || { echo "rune-compact-generator requires isl" >&2; exit 1; }
-
-$(RUNE_COMPACT_GENERATOR_OFFLINE_OBJS): | rune-compact-generator-requirements
-$(RUNE_COMPACT_GENERATOR_OFFLINE_OBJS): CPPFLAGS += $(RUNE_COMPACT_GENERATOR_CPPFLAGS)
+	@:
 
 $(RUNE_COMPACT_GENERATOR_TARGET): $(RUNE_COMPACT_GENERATOR_OBJS)
-	$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $^ $(LDFLAGS) \
-		$(RUNE_COMPACT_GENERATOR_LIBS)
+	$(CC) $(CFLAGS) $(SHLIBLDFLAGS) -o $@ $^ $(LDFLAGS)
 endif
 
 ######################################################################
@@ -1416,7 +1411,6 @@ host-rocket-jump-law-test: tests/run_sg_host_rocket_jump_law_test.sh \
 	rune-v2-belief-test \
 	rune-v2-perception-evidence-test rune-v2-belief-runtime-test \
 	compact-belief-runtime-test \
-	rune-v2-configuration-space-test \
 	bot-localization-test \
 	water-capability-real-bsp-test \
 	weapon-effect-profile-test hook-visibility-catalog-test \
@@ -1611,14 +1605,6 @@ slipgate/sg_host_law_publication.o: slipgate/sg_host_law_publication.c \
 		slipgate/sg_host_engine_parity.h slipgate/sg_host_hook_law.h \
 		slipgate/sg_host_mechanism_law.h slipgate/sg_weapon_host_constants.h \
 		game.h q_shared.h
-slipgate/sg_cell_phase_localization.o: \
-		slipgate/sg_cell_phase_localization.c \
-		slipgate/sg_cell_phase_localization.h \
-		slipgate/sg_configuration_semantics.h \
-		slipgate/sg_configuration_space.h slipgate/sg_destination.h \
-		slipgate/sg_host_law_owner.h slipgate/sg_host_law_publication.h \
-		slipgate/sg_host_collision.h slipgate/sg_host_pmove.h \
-		slipgate/sg_rune_model.h game.h q_shared.h
 slipgate/sg_compact_localization.o: slipgate/sg_compact_localization.c \
 		slipgate/sg_compact_localization.h slipgate/sg_localization_runtime.h \
 		slipgate/sg_rune_compact_localize.h slipgate/sg_rune_compact_model.h \
@@ -3425,8 +3411,6 @@ host-law-publication-test: $(HOST_LAW_PUBLICATION_TEST) \
 		slipgate/sg_host_law_publication.c \
 		slipgate/sg_host_law_publication.h \
 		slipgate/sg_host_law_publication_private.h \
-		slipgate/sg_host_law_construction_offline.c \
-		slipgate/sg_host_law_construction_offline.h \
 		slipgate/sg_host_law_owner.c slipgate/sg_host_law_owner.h \
 		slipgate/sg_host_engine_pmove.c slipgate/sg_host_engine_pmove.h \
 		slipgate/sg_host_engine_runtime.c \
@@ -3721,7 +3705,6 @@ rune-compact-test: rune-source-authority-test rune-compact-model-test \
 
 rune-v2-contract-test: rune-v2-belief-test \
 		rune-v2-perception-evidence-test rune-v2-belief-runtime-test \
-		rune-v2-configuration-space-test \
 		weapon-effect-profile-test \
 		hook-visibility-catalog-test \
 		bsp-entity-semantics-publication-test \
@@ -3733,30 +3716,8 @@ rune-v2-contract-test: rune-v2-belief-test \
 		tests/sg_bsp_entity_semantics_test.c \
 		slipgate/sg_bsp_entity_semantics.c \
 		slipgate/sg_bsp_entity_semantics.h \
-		tests/run_sg_static_visibility_test.sh \
-		tests/sg_static_visibility_test.c \
 		slipgate/sg_static_visibility.c \
 		slipgate/sg_static_visibility.h \
-		tests/run_sg_bsp_completeness_proof_test.sh \
-		tests/sg_bsp_completeness_proof_test.c \
-		tests/sg_bsp_completeness_portal_index_scaling_test.c \
-		tests/sg_bsp_completeness_world_guard_test.c \
-		tests/sg_bsp_completeness_deep_traversal_test.c \
-		slipgate/sg_bsp_completeness_proof.c \
-		slipgate/sg_bsp_completeness_proof.h \
-		slipgate/sg_bsp_completeness_internal.h \
-		slipgate/sg_bsp_completeness_core.c \
-		slipgate/sg_bsp_completeness_coverage.c \
-		slipgate/sg_bsp_completeness_lattice.c \
-		slipgate/sg_bsp_completeness_portal.c \
-		slipgate/sg_bsp_completeness_portal_index.c \
-		slipgate/sg_bsp_completeness_region.c \
-		slipgate/sg_bsp_completeness_state.c \
-		slipgate/sg_bsp_completeness_traversal.c \
-		tests/run_sg_cell_phase_localization_test.sh \
-		tests/sg_cell_phase_localization_test.c \
-		slipgate/sg_cell_phase_localization.c \
-		slipgate/sg_cell_phase_localization.h \
 		tests/run_sg_host_collision_test.sh \
 		tests/sg_host_collision_test.c slipgate/sg_host_collision.c \
 		slipgate/sg_host_pmove.c \
@@ -3790,9 +3751,6 @@ rune-v2-contract-test: rune-v2-belief-test \
 		slipgate/sg_bsp_world.c -lm -o "$$tmp/bsp"; \
 	"$$tmp/bsp"; \
 	sh tests/run_sg_bsp_entity_semantics_test.sh; \
-	sh tests/run_sg_static_visibility_test.sh; \
-	sh tests/run_sg_bsp_completeness_proof_test.sh; \
-	sh tests/run_sg_cell_phase_localization_test.sh; \
 	sh tests/run_sg_host_collision_test.sh; \
 	$(CC) $$strict -Wcast-align -I. tests/sg_rune_v2_codec_test.c \
 		slipgate/sg_rune_v2_codec.c slipgate/sg_rune_model.c -lm \
@@ -3844,13 +3802,6 @@ compact-belief-runtime-test: tests/run_sg_belief_runtime_test.sh \
 		slipgate/sg_compact_belief_perception.h
 	sh tests/run_sg_belief_runtime_test.sh
 	sh tests/run_sg_compact_belief_perception_test.sh
-
-rune-v2-configuration-space-test: tests/run_sg_configuration_space_test.sh \
-		tests/sg_configuration_space_test.c \
-		slipgate/sg_configuration_lattice.c \
-		slipgate/sg_configuration_space.c \
-		slipgate/sg_configuration_audit.c
-	sh tests/run_sg_configuration_space_test.sh
 
 water-capability-real-bsp-test: tests/run_sg_water_real_bsp_test.sh \
 		tests/sg_water_real_bsp_test.c \
@@ -4421,3 +4372,15 @@ SQLITE_CFLAGS = -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION=1 \
 
 sqlite3.o: sqlite3.c
 	$(CC) $(CFLAGS) $(SHLIBCFLAGS) $(SQLITE_CFLAGS) -o $@ -c $<
+
+# The era-4 cell builder on one map: counts and timing.
+CELLSDUMP_BIN = cellsdump.gnu
+$(CELLSDUMP_BIN): tools/cellsdump.c slipgate/sg_configuration_cells.c \
+		slipgate/sg_configuration_semantics.c slipgate/sg_configuration_space.h \
+		slipgate/sg_configuration_semantics.h
+	$(CC) -std=c11 -O2 -g -Wall -Wextra -I. tools/cellsdump.c \
+		slipgate/sg_configuration_cells.c slipgate/sg_configuration_semantics.c \
+		slipgate/sg_host_collision.c slipgate/sg_bsp_world.c \
+		slipgate/sg_rune_model.c slipgate/sg_crc32.c -lm -o $@
+.PHONY: cellsdump
+cellsdump: $(CELLSDUMP_BIN)

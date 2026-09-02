@@ -9,8 +9,6 @@ strict='-std=c11 -Wall -Wextra -Wpedantic -Werror -Wconversion'
 strict="$strict -Wsign-conversion -Wshadow -Wstrict-prototypes"
 strict="$strict -Wmissing-prototypes -Wformat=2 -Wcast-qual -Wcast-align"
 strict="$strict -DSG_HOST_LAW_TESTING"
-isl_cflags=$(pkg-config --cflags isl)
-isl_libs=$(pkg-config --libs isl)
 
 cd "$repo_dir"
 
@@ -46,7 +44,6 @@ compile_host_law()
 	for pair in \
 		'tests/sg_host_law_publication_test.c test' \
 		'slipgate/sg_host_law_publication.c publication' \
-		'slipgate/sg_host_law_construction_offline.c construction-offline' \
 		'slipgate/sg_host_law_owner.c owner' \
 		'slipgate/sg_host_engine_pmove.c engine-pmove' \
 		'slipgate/sg_host_engine_runtime.c engine-runtime' \
@@ -58,22 +55,11 @@ compile_host_law()
 		'slipgate/sg_host_collision.c collision' \
 		'slipgate/sg_bsp_world.c bsp-world' \
 		'slipgate/sg_configuration_semantics.c configuration-semantics' \
-		'slipgate/sg_configuration_lattice.c configuration-lattice' \
-		'slipgate/sg_configuration_space.c configuration-space' \
+		'slipgate/sg_configuration_cells.c configuration-cells' \
 		'slipgate/sg_rune_compact_spatial_index.c compact-spatial-index' \
-		'slipgate/sg_configuration_audit.c configuration-audit' \
-		'slipgate/sg_bsp_completeness_proof.c completeness-proof' \
-		'slipgate/sg_bsp_completeness_core.c completeness-core' \
-		'slipgate/sg_bsp_completeness_region.c completeness-region' \
-		'slipgate/sg_bsp_completeness_traversal.c completeness-traversal' \
-		'slipgate/sg_bsp_completeness_lattice.c completeness-lattice' \
-		'slipgate/sg_bsp_completeness_coverage.c completeness-coverage' \
-		'slipgate/sg_bsp_completeness_state.c completeness-state' \
-		'slipgate/sg_bsp_completeness_portal.c completeness-portal' \
-		'slipgate/sg_bsp_completeness_portal_index.c completeness-portal-index' \
 		'slipgate/sg_rune_model.c rune-model'; do
 		set -- $pair
-		$cc $strict $isl_cflags $extra -I. -DDEDICATED_ONLY -c "$1" \
+		$cc $strict $extra -I. -DDEDICATED_ONLY -c "$1" \
 			-o "$tmp_dir/$2-$suffix.o"
 		objects="$objects $tmp_dir/$2-$suffix.o"
 	done
@@ -93,7 +79,7 @@ compile_host_law()
 		-o "$tmp_dir/q-shared-$suffix.o"
 	$cc $extra $objects \
 		"$tmp_dir/yq2-pmove-$suffix.o" \
-		"$tmp_dir/q-shared-$suffix.o" -lm $isl_libs \
+		"$tmp_dir/q-shared-$suffix.o" -lm \
 		-o "$tmp_dir/host-law-$suffix"
 }
 
@@ -111,7 +97,6 @@ ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
 
 for source in \
 	slipgate/sg_host_law_publication.c \
-	slipgate/sg_host_law_construction_offline.c \
 	slipgate/sg_host_law_owner.c \
 	slipgate/sg_host_engine_pmove.c \
 	slipgate/sg_host_engine_runtime.c \

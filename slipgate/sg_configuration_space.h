@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include "sg_host_collision.h"
-#include "sg_rune_compact_spatial_index.h"
 
 #define SG_CONFIGURATION_INDEX_NONE UINT32_MAX
 /* Quake II pmove_state_t stores origin in signed 12.3 fixed-point shorts. */
@@ -18,8 +17,6 @@
 #define SG_CONFIGURATION_DEFAULT_MAX_PORTALS SG_RUNE_MODEL_MAX_PORTALS
 #define SG_CONFIGURATION_DEFAULT_MAX_STANCE_OVERLAPS \
 	SG_RUNE_MODEL_MAX_PHASE_TRANSITIONS
-#define SG_CONFIGURATION_DEFAULT_MAX_CERTIFICATE_NODES \
-	UINT32_C(16777216)
 
 typedef enum sg_configuration_error_code_e
 {
@@ -50,7 +47,6 @@ typedef struct sg_configuration_limits_s
 	uint32_t max_vertices;
 	uint32_t max_portals;
 	uint32_t max_stance_overlaps;
-	uint32_t max_certificate_nodes;
 } sg_configuration_limits_t;
 
 typedef enum sg_configuration_plane_source_e
@@ -141,28 +137,6 @@ typedef struct sg_configuration_stance_overlap_s
 	sg_rune_vec3_t interior_witness;
 } sg_configuration_stance_overlap_t;
 
-typedef enum sg_configuration_certificate_kind_e
-{
-	SG_CONFIGURATION_CERTIFICATE_SPLIT = 0,
-	SG_CONFIGURATION_CERTIFICATE_VALID,
-	SG_CONFIGURATION_CERTIFICATE_BLOCKED,
-	SG_CONFIGURATION_CERTIFICATE_EMPTY
-} sg_configuration_certificate_kind_t;
-
-/* A split node partitions its inherited convex region into front and back.
- * Terminal nodes let an independent checker reconstruct the whole domain. */
-typedef struct sg_configuration_certificate_node_s
-{
-	sg_configuration_certificate_kind_t kind;
-	sg_configuration_plane_t plane;
-	uint32_t front;
-	uint32_t back;
-	uint32_t cell;
-	uint32_t blocking_brush;
-	uint32_t bsp_leaf;
-	sg_rune_stance_t stance;
-} sg_configuration_certificate_node_t;
-
 typedef struct sg_configuration_space_s
 {
 	sg_rune_model_identity_t identity;
@@ -177,21 +151,6 @@ typedef struct sg_configuration_space_s
 	uint32_t portal_count;
 	sg_configuration_stance_overlap_t *stance_overlaps;
 	uint32_t stance_overlap_count;
-	sg_configuration_certificate_node_t *certificate_nodes;
-	uint32_t certificate_node_count;
-	uint32_t certificate_roots[SG_RUNE_STANCE_COUNT];
-	uint64_t lattice_solve_calls;
-	uint64_t lattice_constraints;
-	uint32_t lattice_maximum_binary_shift;
-	uint64_t brush_index_queries;
-	uint32_t brush_index_entry_count;
-	uint64_t brush_index_visited_nodes;
-	uint64_t brush_index_tested_entries;
-	uint32_t brush_index_minimum_tested_entries;
-	uint32_t brush_index_maximum_tested_entries;
-	uint64_t topology_split_count;
-	uint64_t topology_carried_portal_count;
-	sg_rune_compact_spatial_index_t *topology_index;
 } sg_configuration_space_t;
 
 void SG_ConfigurationDefaultLimits(sg_configuration_limits_t *limits_out);
@@ -210,16 +169,21 @@ int SG_ConfigurationBuildWithProgress(
 void SG_ConfigurationDestroy(sg_configuration_space_t *space);
 const char *SG_ConfigurationErrorString(sg_configuration_error_code_t code);
 
-#if defined(SG_CONFIGURATION_SPACE_TESTING)
-int SG_ConfigurationTestConstraintFacetWinding(void);
-int SG_ConfigurationTestCompleteFinalIncidence(void);
-int SG_ConfigurationTestFinalRepresentationBounds(void);
-int SG_ConfigurationTestTopologyMappingValidation(void);
-int SG_ConfigurationTestConstraintPortal(
-	const sg_host_collision_authority_t *authority);
-int SG_ConfigurationTestHostValidatedCandidate(
-	const sg_host_collision_authority_t *authority, sg_rune_stance_t stance,
-	const int32_t primary[3], const int32_t fallback[3], float witness[3]);
-#endif
+
+/* Diagnostics of the last build's portal pass. */
+typedef struct sg_configuration_portal_stats_s
+{
+	uint64_t overlaps;           /* face pairs with a non-empty overlap */
+	uint64_t witnessed;          /* of those, both sides gave a witness */
+	uint64_t transition_failed;  /* of those, the host refused the crossing */
+} sg_configuration_portal_stats_t;
+const sg_configuration_portal_stats_t *SG_ConfigurationLastPortalStats(void);
+
+/* The side polygons of one brush: the brush's planes cut from the world box,
+ * one callback per side that survives with area.  Used for hook surfaces. */
+typedef int (*sg_configuration_brush_polygon_fn)(void *context, uint32_t brush,
+	uint32_t brush_side, const float (*points)[3], uint32_t count);
+int SG_ConfigurationBrushPolygons(const struct sg_bsp_world_s *world,
+	uint32_t brush, sg_configuration_brush_polygon_fn fn, void *context);
 
 #endif

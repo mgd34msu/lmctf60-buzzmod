@@ -2,7 +2,6 @@
 #include "sg_rune_compact_builder_owner.h"
 #include "sg_rune_compact_weapon_catalog.h"
 
-#include "sg_configuration_audit.h"
 #include "sg_host_law_publication_private.h"
 #include "sg_rune_compact_binary32.h"
 #include "sg_rune_compact_localize.h"
@@ -889,7 +888,6 @@ static int Build(
 	progress_link_t progress_link;
 	sg_configuration_limits_t default_configuration_limits;
 	const sg_configuration_limits_t *configuration_limits;
-	sg_configuration_audit_result_t configuration_audit;
 	sg_configuration_semantics_error_t semantics_error;
 	sg_configuration_semantics_limits_t default_semantics_limits;
 	const sg_configuration_semantics_limits_t *semantics_limits;
@@ -1119,18 +1117,6 @@ static int Build(
 				SG_RUNE_COMPACT_BUILDER_ERROR_CONFIGURATION,
 			configuration_error.source_index, SG_CONFIGURATION_ERROR_NONE,
 			(uint64_t)configuration_error.code);
-		goto done;
-	}
-	memset(&configuration_audit, 0, sizeof(configuration_audit));
-	if (development_audit &&
-		!SG_ConfigurationAudit(&builder->collision, builder->configuration,
-			&configuration_audit)) {
-		SetError(error_out,
-			configuration_audit.code == SG_CONFIGURATION_AUDIT_OUT_OF_MEMORY ?
-				SG_RUNE_COMPACT_BUILDER_ERROR_OUT_OF_MEMORY :
-				SG_RUNE_COMPACT_BUILDER_ERROR_CONFIGURATION_AUDIT,
-			configuration_audit.record, SG_CONFIGURATION_AUDIT_OK,
-			(uint64_t)configuration_audit.code);
 		goto done;
 	}
 	memset(&semantics_error, 0, sizeof(semantics_error));

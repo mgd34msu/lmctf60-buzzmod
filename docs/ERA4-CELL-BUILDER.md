@@ -94,3 +94,13 @@ statistics, topology index. Consumers that read those are fixed to stop.
 - Only the patched Yamagi at ~/Games/Quake2/engines/yquake2 publishes the
   four sv_rune_* identity cvars; q2repro does not. See
   "Generating on this machine" in RUNE-BUILD-CHECKLIST.md.
+
+## Scope ruling (2026-09-01, evening)
+
+"Pull from era 3" means fragments, never whole units. Every era-3 unit the
+generator or the bot runtime still runs on is on the deletion list, replaced
+by an era-4 unit, in this order, each run on a real map before the next:
+compact geometry, response, mechanisms, static, movement fields, weapon
+fields, composer, wire, publication; then the runtime loader, localizer,
+field service, and tactic units. Their tests go with them. The cell builder
+and the regions are done and are the first era-4 units in the pipeline.

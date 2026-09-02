@@ -1,6 +1,5 @@
 #include "sg_rune_compact_mechanisms_build.h"
 
-#include "sg_configuration_lattice.h"
 #include "sg_rune_compact_builder_owner.h"
 #include "sg_rune_compact_localize.h"
 #include "sg_rune_compact_mechanisms_entities.h"
@@ -198,8 +197,19 @@ static int LocatePoint(const sg_rune_compact_model_t *model,
 	return 1;
 }
 
+/* A halfspace of an entity-location search: a cell facet plane (sign-flipped
+ * so the cell's interior satisfies dot(normal, point) <= distance) or one
+ * side of an axis-aligned box. open marks a constraint-only boundary, which
+ * must be satisfied strictly. */
+typedef struct mechanisms_halfspace_s
+{
+	float normal[3];
+	float distance;
+	int open;
+} mechanisms_halfspace_t;
+
 static int AppendCellHalfspaces(const sg_rune_compact_geometry_view_t *geometry,
-	uint32_t cell_index, sg_configuration_lattice_halfspace_t *halfspaces,
+	uint32_t cell_index, mechanisms_halfspace_t *halfspaces,
 	uint32_t *count_out)
 {
 	const sg_rune_compact_cell_t *cell;
@@ -254,7 +264,7 @@ static int AppendCellHalfspaces(const sg_rune_compact_geometry_view_t *geometry,
 }
 
 static void AppendBoundsHalfspaces(const sg_rune_q8_bounds_t *bounds,
-	sg_configuration_lattice_halfspace_t *halfspaces, uint32_t *count)
+	mechanisms_halfspace_t *halfspaces, uint32_t *count)
 {
 	uint32_t axis;
 
@@ -273,11 +283,79 @@ static void AppendBoundsHalfspaces(const sg_rune_q8_bounds_t *bounds,
 	}
 }
 
+/* True when point (in float world units) satisfies every halfspace within a
+ * small epsilon: dot(normal, point) <= distance, strictly so when open. */
+static int PointSatisfiesHalfspaces(const mechanisms_halfspace_t *halfspaces,
+	uint32_t halfspace_count, const float point[3])
+{
+	static const float epsilon = 1.0f / 1024.0f;
+	uint32_t index;
+
+	for (index = 0U; index < halfspace_count; index++)
+	{
+		const mechanisms_halfspace_t *halfspace = &halfspaces[index];
+		float dot = halfspace->normal[0] * point[0] +
+			halfspace->normal[1] * point[1] +
+			halfspace->normal[2] * point[2];
+		float limit = halfspace->distance + epsilon;
+
+		if (halfspace->open ? dot >= limit : dot > limit)
+			return 0;
+	}
+	return 1;
+}
+
+/* Averages every vertex of every facet incident to the cell. The carve keeps
+ * each cell convex, so the vertex centroid of a convex polytope always lies
+ * inside it; that gives a cheap, solver-free interior witness to start from.
+ * Returns 0 (leaving centroid_out untouched) when the cell has no incident
+ * facet vertices to average. */
+static int CellVertexCentroid(const sg_rune_compact_geometry_view_t *geometry,
+	const sg_rune_compact_cell_t *cell, float centroid_out[3])
+{
+	double sum[3];
+	uint64_t count;
+	uint32_t local;
+	uint32_t axis;
+
+	sum[0] = 0.0;
+	sum[1] = 0.0;
+	sum[2] = 0.0;
+	count = 0U;
+	for (local = 0U; local < cell->incidences.count; local++)
+	{
+		const uint32_t reference = cell->incidences.first + local;
+		const uint32_t incidence_index =
+			geometry->cell_incidences[reference].value;
+		const sg_rune_compact_incidence_t *incidence =
+			&geometry->incidences[incidence_index];
+		const sg_rune_compact_facet_t *facet =
+			&geometry->facets[incidence->facet.value];
+		uint32_t vertex_local;
+
+		for (vertex_local = 0U; vertex_local < facet->vertices.count;
+			vertex_local++)
+		{
+			const sg_rune_q8_vec3_t *vertex = &geometry->vertices[
+				facet->vertices.first + vertex_local];
+
+			for (axis = 0U; axis < 3U; axis++)
+				sum[axis] += (double)vertex->value[axis];
+			count++;
+		}
+	}
+	if (count == 0U)
+		return 0;
+	for (axis = 0U; axis < 3U; axis++)
+		centroid_out[axis] = (float)(sum[axis] / (double)count * 0.125);
+	return 1;
+}
+
 static int LocateEntity(
 	const sg_rune_compact_geometry_view_t *geometry,
 	const sg_rune_compact_model_t *model,
 	const sg_bsp_entity_semantic_t *entity,
-	sg_configuration_lattice_halfspace_t *halfspaces,
+	mechanisms_halfspace_t *halfspaces,
 	sg_rune_compact_cell_index_t *cell_out,
 	sg_rune_q8_vec3_t *witness_out, sg_rune_q8_bounds_t *bounds_out)
 {
@@ -295,20 +373,71 @@ static int LocateEntity(
 	}
 	for (cell = 0U; cell < geometry->cell_count; cell++)
 	{
-		sg_configuration_lattice_stats_t stats;
-		int32_t point[3];
+		const sg_rune_q8_bounds_t *cell_bounds = &geometry->cells[cell].bounds;
 		uint32_t halfspace_count;
+		float centre[3];
+		float target[3];
+		float candidate[3];
+		int32_t point[3];
+		int have_centroid;
 		int found;
+		uint32_t step;
+		uint32_t axis;
 
-		memset(&stats, 0, sizeof(stats));
 		if (!AppendCellHalfspaces(geometry, cell, halfspaces,
 				&halfspace_count))
 			return 0;
-		AppendBoundsHalfspaces(&geometry->cells[cell].bounds, halfspaces,
-			&halfspace_count);
+		AppendBoundsHalfspaces(cell_bounds, halfspaces, &halfspace_count);
 		AppendBoundsHalfspaces(bounds_out, halfspaces, &halfspace_count);
-		found = SG_ConfigurationLatticeFind(halfspaces, halfspace_count, NULL,
-			point, &stats);
+		/* No LP solver: the carve already made this cell convex, so the
+		 * centroid of its facet vertices lies inside it. Start there (or,
+		 * lacking vertices, at the centre of the two bounding boxes just
+		 * appended above) and, if the entity's own box or float rounding
+		 * puts that outside a constraint, step the candidate toward the
+		 * centre of the two boxes' overlap until every halfspace above is
+		 * satisfied within a small epsilon, or give up on this cell. */
+		have_centroid = CellVertexCentroid(geometry, &geometry->cells[cell],
+			centre);
+		for (axis = 0U; axis < 3U; axis++)
+		{
+			int32_t cell_min = cell_bounds->mins.value[axis];
+			int32_t cell_max = cell_bounds->maxs.value[axis];
+			int32_t entity_min = bounds_out->mins.value[axis];
+			int32_t entity_max = bounds_out->maxs.value[axis];
+			int32_t lo = cell_min > entity_min ? cell_min : entity_min;
+			int32_t hi = cell_max < entity_max ? cell_max : entity_max;
+
+			target[axis] = ((float)lo + (float)hi) * 0.5f * 0.125f;
+			if (!have_centroid)
+				centre[axis] = target[axis];
+		}
+		found = 0;
+		for (step = 0U; step <= 4U && found == 0; step++)
+		{
+			float t = (float)step * 0.25f;
+			int snapped = 1;
+
+			for (axis = 0U; axis < 3U; axis++)
+			{
+				float world = centre[axis] +
+					(target[axis] - centre[axis]) * t;
+
+				if (!FloatToQ8(world, &point[axis]))
+				{
+					snapped = 0;
+					break;
+				}
+				candidate[axis] = (float)point[axis] * 0.125f;
+			}
+			if (!snapped)
+			{
+				found = -1;
+				break;
+			}
+			if (PointSatisfiesHalfspaces(halfspaces, halfspace_count,
+					candidate))
+				found = 1;
+		}
 		if (found < 0)
 			return -1;
 		if (found == 0)
@@ -495,7 +624,7 @@ int SG_RuneCompactMechanismsBuildCandidate(
 	sg_rune_compact_mechanisms_entities_t entities;
 	sg_rune_compact_mechanism_transitions_result_t transitions;
 	sg_rune_compact_mechanisms_candidate_t candidate;
-	sg_configuration_lattice_halfspace_t *halfspaces = NULL;
+	mechanisms_halfspace_t *halfspaces = NULL;
 	uint32_t maximum_incidences = 0U;
 	uint32_t index;
 	int success = 0;

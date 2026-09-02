@@ -1,52 +1,69 @@
+/* Era-4 semantic regions.
+ *
+ * One region per configuration cell, built in one pass from what the cell
+ * already carries: its mesh, its witness, its leaf.  Support is the cell's,
+ * probed at its floor; water is read at the witness; the samples are the
+ * host's leaves at the stance's sample heights.  Boundaries are the cell's
+ * brush faces traced back to their source brush sides.  Hook surfaces are
+ * the side polygons of every solid brush in every model.
+ *
+ * There is no partition of a cell into support regions and no mesh rebuilt
+ * from constraints; the runtime localizes support and water from the live
+ * pose. */
 #include "sg_configuration_semantics.h"
-#include "sg_configuration_lattice.h"
 
-#include <float.h>
 #include <limits.h>
 #include <math.h>
-#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define SEMANTICS_POINT_EPSILON 0.00001f
-#define SEMANTICS_GEOMETRY_EPSILON 0.000001
-#define SEMANTICS_CONTENTS_DEADMONSTER UINT32_C(0x04000000)
-
-typedef struct semantic_constraint_s
-{
-	sg_configuration_lattice_halfspace_t halfspace;
-	uint32_t source_kind;
-	uint32_t source_index;
-	uint32_t source_variant;
-	uint8_t sample_index;
-	uint8_t reversed;
-} semantic_constraint_t;
-
-typedef struct semantic_constraints_s
-{
-	semantic_constraint_t *items;
-	uint32_t count;
-	uint32_t capacity;
-} semantic_constraints_t;
+#include "sg_bsp_world.h"
+#include "sg_host_collision.h"
 
 typedef struct semantic_build_s
 {
 	const sg_host_collision_authority_t *authority;
+	const sg_bsp_world_t *world;
 	const sg_configuration_space_t *configuration;
 	sg_configuration_semantics_limits_t limits;
 	sg_configuration_semantics_t *output;
-	uint32_t region_capacity;
-	uint32_t face_capacity;
-	uint32_t vertex_capacity;
-	uint32_t boundary_capacity;
-	uint32_t hook_surface_capacity;
-	uint32_t hook_vertex_capacity;
+	uint32_t region_capacity, face_capacity, vertex_capacity;
+	uint32_t boundary_capacity, hook_surface_capacity, hook_vertex_capacity;
+	uint32_t *side_to_brush;
+	uint8_t *brush_marks;
 	sg_configuration_semantics_error_t error;
 } semantic_build_t;
 
-static float HullMinimum(const sg_rune_hull_profile_t *hull,
-	const float normal[3]);
+static void SetError(semantic_build_t *build,
+	sg_configuration_semantics_error_code_t code, uint32_t source_index)
+{
+	if (build->error.code == SG_CONFIGURATION_SEMANTICS_ERROR_NONE)
+	{
+		build->error.code = code;
+		build->error.source_index = source_index;
+	}
+}
 
+static int Grow(void **array, uint32_t *capacity, uint32_t required,
+	uint32_t limit, size_t element)
+{
+	uint32_t next;
+	void *grown;
+
+	if (required <= *capacity)
+		return 1;
+	if (required > limit)
+		return 0;
+	next = *capacity ? *capacity : 256U;
+	while (next < required)
+		next = next > limit / 2U ? limit : next * 2U;
+	grown = realloc(*array, (size_t)next * element);
+	if (!grown)
+		return 0;
+	*array = grown;
+	*capacity = next;
+	return 1;
+}
 
 static float Dot(const float a[3], const float b[3])
 {
@@ -55,584 +72,11 @@ static float Dot(const float a[3], const float b[3])
 
 static void Copy3(float out[3], const float in[3])
 {
-	out[0] = in[0];
-	out[1] = in[1];
-	out[2] = in[2];
+	memcpy(out, in, sizeof(float) * 3U);
 }
 
-static int Finite3(const float value[3])
-{
-	return isfinite(value[0]) && isfinite(value[1]) && isfinite(value[2]);
-}
-
-static int NormalizeSemanticPlaneDouble(
-	const sg_configuration_plane_t *plane, double normal[3], double *distance)
-{
-	double scale = fmax(fabs((double)plane->normal[0]),
-		fmax(fabs((double)plane->normal[1]),
-			fabs((double)plane->normal[2])));
-	double length;
-	uint32_t axis;
-
-	if (!(scale > 0.0) || !isfinite(scale) || !isfinite(plane->distance))
-		return 0;
-	for (axis = 0U; axis < 3U; axis++)
-		normal[axis] = (double)plane->normal[axis] / scale;
-	length = sqrt(normal[0] * normal[0] + normal[1] * normal[1] +
-		normal[2] * normal[2]);
-	if (!(length > 0.0) || !isfinite(length))
-		return 0;
-	for (axis = 0U; axis < 3U; axis++)
-		normal[axis] /= length;
-	*distance = ((double)plane->distance / scale) / length;
-	return isfinite(*distance);
-}
-
-static float PublishedCoordinateTolerance(float value)
-{
-	float lower = nextafterf(value, -INFINITY);
-	float upper = nextafterf(value, INFINITY);
-
-	return fmaxf((float)SEMANTICS_GEOMETRY_EPSILON,
-		fmaxf(value - lower, upper - value) * 2.0f);
-}
-
-static double PublishedPlaneResidualTolerance(const float point[3],
-	const double normal[3])
-{
-	return SEMANTICS_GEOMETRY_EPSILON +
-		fabs(normal[0]) * PublishedCoordinateTolerance(point[0]) +
-		fabs(normal[1]) * PublishedCoordinateTolerance(point[1]) +
-		fabs(normal[2]) * PublishedCoordinateTolerance(point[2]);
-}
-
-static int PublishedPointsSame(const float left[3], const float right[3])
-{
-	uint32_t axis;
-
-	for (axis = 0U; axis < 3U; axis++)
-	{
-		float tolerance = fmaxf(PublishedCoordinateTolerance(left[axis]),
-			PublishedCoordinateTolerance(right[axis]));
-
-		if (fabsf(left[axis] - right[axis]) > tolerance)
-			return 0;
-	}
-	return 1;
-}
-
-static void SetError(semantic_build_t *build,
-	sg_configuration_semantics_error_code_t code, uint32_t source)
-{
-	if (build->error.code == SG_CONFIGURATION_SEMANTICS_ERROR_NONE)
-	{
-		build->error.code = code;
-		build->error.source_index = source;
-	}
-}
-
-static int Grow(void **array, uint32_t *capacity, uint32_t required,
-	uint32_t limit, size_t size)
-{
-	uint32_t next;
-	void *grown;
-
-	if (required <= *capacity)
-		return 1;
-	if (required > limit || (size_t)required > SIZE_MAX / size)
-		return 0;
-	next = *capacity ? *capacity : 64U;
-	if (next > limit)
-		next = limit;
-	while (next < required)
-	{
-		if (next > limit / 2U)
-		{
-			next = limit;
-			break;
-		}
-		next *= 2U;
-	}
-	grown = realloc(*array, (size_t)next * size);
-	if (!grown)
-		return 0;
-	*array = grown;
-	*capacity = next;
-	return 1;
-}
-
-static int AppendConstraint(semantic_constraints_t *constraints,
-	const semantic_constraint_t *constraint)
-{
-	semantic_constraint_t *grown;
-	uint32_t next;
-
-	if (constraints->count == UINT32_MAX)
-		return 0;
-	if (constraints->count == constraints->capacity)
-	{
-		next = constraints->capacity ? constraints->capacity * 2U : 32U;
-		if (next < constraints->capacity)
-			return 0;
-		grown = realloc(constraints->items, (size_t)next * sizeof(*grown));
-		if (!grown)
-			return 0;
-		constraints->items = grown;
-		constraints->capacity = next;
-	}
-	constraints->items[constraints->count++] = *constraint;
-	return 1;
-}
-
-static void FreeConstraints(semantic_constraints_t *constraints)
-{
-	free(constraints->items);
-	memset(constraints, 0, sizeof(*constraints));
-}
-
-static int IdentityEqual(const sg_rune_model_identity_t *left,
-	const sg_rune_model_identity_t *right)
-{
-	return left->bsp_content_id == right->bsp_content_id &&
-		left->entity_semantics_id == right->entity_semantics_id &&
-		left->physics_abi_id == right->physics_abi_id &&
-		left->source_set_identity == right->source_set_identity &&
-		left->schema_id == right->schema_id &&
-		left->producer_identity == right->producer_identity &&
-		memcmp(&left->standing_hull, &right->standing_hull,
-			sizeof(left->standing_hull)) == 0 &&
-		memcmp(&left->crouching_hull, &right->crouching_hull,
-			sizeof(left->crouching_hull)) == 0 &&
-		memcmp(&left->physics, &right->physics,
-			sizeof(left->physics)) == 0;
-}
-
-static int MarkModelBrushes(const sg_bsp_world_t *world, uint32_t model_index,
-	uint8_t *brush_marks);
-static int HostLeafAtPoint(const sg_bsp_world_t *world, const float point[3],
-	uint32_t *leaf_out);
-static int ValidateCellMesh(const sg_configuration_space_t *configuration,
-	uint32_t cell_index);
-static int CellQ8Bounds(	const sg_configuration_space_t *configuration,
-	const sg_configuration_cell_t *cell, float mins[3], float maxs[3])
-{
-	sg_configuration_lattice_halfspace_t *halfspaces;
-	uint32_t local, axis;
-
-	if (!cell->face_count)
-		return 0;
-	#if SIZE_MAX == UINT32_MAX
-	if ((size_t)cell->face_count > SIZE_MAX / sizeof(*halfspaces))
-		return -1;
-	#endif
-	halfspaces = malloc((size_t)cell->face_count * sizeof(*halfspaces));
-	if (!halfspaces)
-		return -1;
-	for (local = 0; local < cell->face_count; local++)
-	{
-		const sg_configuration_plane_t *plane = &configuration->faces[
-			cell->first_face + local].plane;
-
-		Copy3(halfspaces[local].normal, plane->normal);
-		halfspaces[local].distance = plane->distance;
-		halfspaces[local].open = plane->source_kind ==
-			SG_CONFIGURATION_PLANE_EXPANDED_BRUSH && plane->reversed != 0U;
-	}
-	for (axis = 0; axis < 3U; axis++)
-	{
-		int32_t minimum, maximum;
-		sg_configuration_lattice_stats_t stats = { 0 };
-		int result;
-
-		result = SG_ConfigurationLatticeCoordinateBounds(halfspaces,
-			cell->face_count, axis, &minimum, &maximum, &stats);
-		if (result <= 0)
-		{
-			free(halfspaces);
-			return result;
-		}
-		mins[axis] = (float)minimum * 0.125f;
-		maxs[axis] = (float)maximum * 0.125f;
-	}
-	free(halfspaces);
-	return 1;
-}
-
-static int CellUsesQ8Bounds(const sg_configuration_space_t *configuration,
-	const sg_configuration_cell_t *cell)
-{
-	uint32_t local;
-
-	for (local = 0; local < cell->face_count; local++)
-		if (configuration->faces[cell->first_face + local].kind ==
-			SG_CONFIGURATION_FACE_CONSTRAINT_ONLY)
-			return 1;
-	return 0;
-}
-
-static int ValidateSource(const sg_host_collision_authority_t *authority,
-	const sg_configuration_space_t *configuration,
-	sg_configuration_semantics_error_t *error)
-{
-	uint32_t cell_index;
-
-	if (!authority->world->models || !authority->world->model_count ||
-		(configuration->cell_count && !configuration->cells) ||
-		(configuration->face_count && !configuration->faces) ||
-		(configuration->vertex_count && !configuration->vertices))
-		return 0;
-	if (configuration->domain.mins.value[0] !=
-			SG_CONFIGURATION_PMOVE_ORIGIN_MIN ||
-		configuration->domain.mins.value[1] !=
-			SG_CONFIGURATION_PMOVE_ORIGIN_MIN ||
-		configuration->domain.mins.value[2] !=
-			SG_CONFIGURATION_PMOVE_ORIGIN_MIN ||
-		configuration->domain.maxs.value[0] !=
-			SG_CONFIGURATION_PMOVE_ORIGIN_MAX ||
-		configuration->domain.maxs.value[1] !=
-			SG_CONFIGURATION_PMOVE_ORIGIN_MAX ||
-		configuration->domain.maxs.value[2] !=
-			SG_CONFIGURATION_PMOVE_ORIGIN_MAX)
-		return 0;
-	for (cell_index = 0; cell_index < configuration->cell_count; cell_index++)
-	{
-		const sg_configuration_cell_t *cell = &configuration->cells[cell_index];
-		const sg_bsp_leaf_t *leaf;
-		uint32_t local, facet_vertex_count = 0;
-		float vertex_mins[3] = { INFINITY, INFINITY, INFINITY };
-		float vertex_maxs[3] = { -INFINITY, -INFINITY, -INFINITY };
-
-		if (cell->stance >= SG_RUNE_STANCE_COUNT || cell->face_count < 4U ||
-			cell->first_face > configuration->face_count ||
-			cell->face_count > configuration->face_count - cell->first_face ||
-			cell->bsp_leaf.index >= authority->world->leaf_count ||
-			!Finite3(cell->bounds.mins.value) ||
-			!Finite3(cell->bounds.maxs.value) ||
-			!Finite3(cell->interior_witness.value))
-		{
-			error->source_index = cell_index;
-			return 0;
-		}
-		leaf = &authority->world->leaves[cell->bsp_leaf.index];
-		if (cell->bsp_area.index != leaf->area ||
-			cell->bsp_cluster.index !=
-				(leaf->cluster < 0 ? UINT32_MAX : (uint32_t)leaf->cluster) ||
-			cell->contents != SG_HostCollisionRuneContents(
-				(sg_host_collision_contents_t)leaf->contents) ||
-			!HostLeafAtPoint(authority->world, cell->interior_witness.value,
-				&local) || local != cell->bsp_leaf.index)
-		{
-			error->source_index = cell_index;
-			return 0;
-		}
-		for (local = 0; local < cell->face_count; local++)
-		{
-			uint32_t face_index = cell->first_face + local;
-			const sg_configuration_face_t *face =
-				&configuration->faces[face_index];
-			uint32_t vertex;
-			if (!Finite3(face->plane.normal) ||
-				!isfinite(face->plane.distance) ||
-				(face->plane.normal[0] == 0.0f && face->plane.normal[1] == 0.0f &&
-					face->plane.normal[2] == 0.0f) ||
-				face->kind > SG_CONFIGURATION_FACE_CONSTRAINT_ONLY ||
-				(face->kind == SG_CONFIGURATION_FACE_FACET &&
-					face->vertex_count < 3U) ||
-				(face->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY &&
-					face->vertex_count != 0U) ||
-				face->first_vertex > configuration->vertex_count ||
-				face->vertex_count > configuration->vertex_count -
-					face->first_vertex ||
-				face->plane.reversed > 1U ||
-				face->plane.source_kind >
-					SG_CONFIGURATION_PLANE_EXPANDED_BRUSH)
-			{
-				error->source_index = face_index;
-				return 0;
-			}
-			if (face->plane.source_kind == SG_CONFIGURATION_PLANE_BSP)
-			{
-				const sg_bsp_plane_t *source;
-				float sign = face->plane.reversed ? -1.0f : 1.0f;
-				if (face->plane.source_index >= authority->world->plane_count ||
-					face->plane.source_variant != 0U)
-					return 0;
-				source = &authority->world->planes[face->plane.source_index];
-				if (face->plane.normal[0] != sign * source->normal.value[0] ||
-					face->plane.normal[1] != sign * source->normal.value[1] ||
-					face->plane.normal[2] != sign * source->normal.value[2] ||
-					face->plane.distance != sign * source->distance)
-					return 0;
-			}
-			else if (face->plane.source_kind == SG_CONFIGURATION_PLANE_DOMAIN)
-			{
-				uint32_t axis = face->plane.source_index;
-				uint32_t variant = face->plane.source_variant;
-				float normal[3] = { 0, 0, 0 };
-				float distance;
-				if (axis >= 3U || variant != axis * 2U +
-					(face->plane.reversed ? 1U : 0U))
-					return 0;
-				normal[axis] = face->plane.reversed ? -1.0f : 1.0f;
-				distance = face->plane.reversed ?
-					-configuration->domain.mins.value[axis] :
-					configuration->domain.maxs.value[axis];
-				if (face->plane.normal[0] != normal[0] ||
-					face->plane.normal[1] != normal[1] ||
-					face->plane.normal[2] != normal[2] ||
-					face->plane.distance != distance)
-					return 0;
-			}
-			else if (face->plane.source_kind ==
-				SG_CONFIGURATION_PLANE_EXPANDED_BRUSH)
-			{
-				const sg_rune_hull_profile_t *hull =
-					cell->stance == SG_RUNE_STANCE_STANDING ?
-					&authority->identity.standing_hull :
-					&authority->identity.crouching_hull;
-				const sg_bsp_brush_side_t *side;
-				const sg_bsp_plane_t *source;
-				float distance, sign = face->plane.reversed ? -1.0f : 1.0f;
-				if (face->plane.source_index >= authority->world->brush_side_count ||
-					face->plane.source_variant != (uint32_t)cell->stance)
-					return 0;
-				side = &authority->world->brush_sides[face->plane.source_index];
-				if (side->plane >= authority->world->plane_count)
-					return 0;
-				source = &authority->world->planes[side->plane];
-				distance = source->distance - HullMinimum(hull,
-					source->normal.value);
-				if (face->plane.normal[0] != sign * source->normal.value[0] ||
-					face->plane.normal[1] != sign * source->normal.value[1] ||
-					face->plane.normal[2] != sign * source->normal.value[2] ||
-					face->plane.distance != sign * distance)
-					return 0;
-			}
-			for (vertex = face->first_vertex;
-				vertex < face->first_vertex + face->vertex_count; vertex++)
-				if (!Finite3(configuration->vertices[vertex].value))
-				{
-					error->source_index = face_index;
-					return 0;
-				}
-				else
-				{
-					uint32_t axis;
-					for (axis = 0; axis < 3U; axis++)
-					{
-						float value = configuration->vertices[vertex].value[axis];
-						if (value < vertex_mins[axis])
-							vertex_mins[axis] = value;
-						if (value > vertex_maxs[axis])
-							vertex_maxs[axis] = value;
-					}
-			facet_vertex_count += face->vertex_count;
-		}
-		}
-		for (local = 0; local < cell->face_count; local++)
-		{
-			const sg_configuration_face_t *face =
-				&configuration->faces[cell->first_face + local];
-			double face_normal[3], face_distance;
-			uint32_t vertex;
-			if (!NormalizeSemanticPlaneDouble(&face->plane, face_normal,
-					&face_distance) ||
-				(double)cell->interior_witness.value[0] * face_normal[0] +
-				(double)cell->interior_witness.value[1] * face_normal[1] +
-				(double)cell->interior_witness.value[2] * face_normal[2] >=
-					face_distance)
-				return 0;
-			for (vertex = face->first_vertex;
-				vertex < face->first_vertex + face->vertex_count; vertex++)
-			{
-				const float *point = configuration->vertices[vertex].value;
-				uint32_t other, prior;
-				if (fabs((double)point[0] * face_normal[0] +
-						(double)point[1] * face_normal[1] +
-						(double)point[2] * face_normal[2] - face_distance) >
-					PublishedPlaneResidualTolerance(point, face_normal))
-					return 0;
-				for (other = 0; other < cell->face_count; other++)
-				{
-					const sg_configuration_face_t *halfspace =
-						&configuration->faces[cell->first_face + other];
-					double normal[3], distance;
-
-					if (!NormalizeSemanticPlaneDouble(&halfspace->plane, normal,
-							&distance) ||
-						(double)point[0] * normal[0] +
-						(double)point[1] * normal[1] +
-						(double)point[2] * normal[2] - distance >
-							PublishedPlaneResidualTolerance(point, normal))
-						return 0;
-				}
-				for (prior = face->first_vertex; prior < vertex; prior++)
-					if (PublishedPointsSame(
-							configuration->vertices[prior].value, point))
-						return 0;
-			}
-		}
-		if (CellUsesQ8Bounds(configuration, cell))
-		{
-			if (CellQ8Bounds(configuration, cell, vertex_mins,
-					vertex_maxs) != 1)
-			{
-				error->source_index = cell_index;
-				return 0;
-			}
-		}
-		else if (!facet_vertex_count)
-			for (local = 0; local < 3U; local++)
-			{
-				vertex_mins[local] = cell->interior_witness.value[local];
-				vertex_maxs[local] = cell->interior_witness.value[local];
-			}
-		for (local = 0; local < 3U; local++)
-			if (fabsf(cell->bounds.mins.value[local] - vertex_mins[local]) >
-					SEMANTICS_POINT_EPSILON ||
-				fabsf(cell->bounds.maxs.value[local] - vertex_maxs[local]) >
-					SEMANTICS_POINT_EPSILON)
-			{
-				error->source_index = cell_index;
-				return 0;
-		}
-		if (!ValidateCellMesh(configuration, cell_index))
-			return 0;
-	}
-	return 1;
-}
-
-static int SolveInterior(const semantic_constraints_t *constraints,
-	int32_t q8[3], sg_configuration_lattice_stats_t *stats)
-{
-	sg_configuration_lattice_halfspace_t *halfspaces;
-	uint8_t *clearance;
-	uint32_t index;
-	int positive = 0;
-	int result;
-
-	if (!constraints->count)
-		return 0;
-	halfspaces = malloc((size_t)constraints->count * sizeof(*halfspaces));
-	clearance = malloc(constraints->count);
-	if (!halfspaces || !clearance)
-	{
-		free(halfspaces);
-		free(clearance);
-		return -2;
-	}
-	for (index = 0; index < constraints->count; index++)
-	{
-		halfspaces[index] = constraints->items[index].halfspace;
-		clearance[index] = 1;
-	}
-	result = SG_ConfigurationLatticeFindMaxClearance(halfspaces, clearance,
-		constraints->count, NULL, q8, &positive, stats);
-	if (result > 0 && !positive)
-	{
-		for (index = 0; index < constraints->count; index++)
-			halfspaces[index].open = 1;
-		result = SG_ConfigurationLatticeFind(halfspaces, constraints->count,
-			NULL, q8, stats);
-	}
-	free(clearance);
-	free(halfspaces);
-	return result;
-}
-
-static float HullMinimum(const sg_rune_hull_profile_t *hull,
-	const float normal[3])
-{
-	float result = 0.0f;
-	int axis;
-
-	for (axis = 0; axis < 3; axis++)
-		result += normal[axis] < 0.0f ?
-			normal[axis] * hull->maxs.value[axis] :
-			normal[axis] * hull->mins.value[axis];
-	return result;
-}
-
-static int BuildSolveInterior(semantic_build_t *build,
-	const semantic_constraints_t *constraints, int32_t q8[3])
-{
-	sg_configuration_lattice_stats_t stats = { 0 };
-	int result = SolveInterior(constraints, q8, &stats);
-
-	build->output->lattice_solve_calls += stats.solve_calls;
-	build->output->lattice_constraints += stats.constraints;
-	if (stats.maximum_binary_shift >
-		build->output->lattice_maximum_binary_shift)
-		build->output->lattice_maximum_binary_shift =
-			stats.maximum_binary_shift;
-	return result;
-}
-
-static int BuildConstraintBounds(semantic_build_t *build,
-	const semantic_constraints_t *constraints, float mins[3], float maxs[3])
-{
-	sg_configuration_lattice_halfspace_t *halfspaces;
-	uint32_t index, axis;
-
-	if (!constraints->count)
-		return 0;
-	halfspaces = malloc((size_t)constraints->count * sizeof(*halfspaces));
-	if (!halfspaces)
-		return -1;
-	for (index = 0; index < constraints->count; index++)
-		halfspaces[index] = constraints->items[index].halfspace;
-	for (axis = 0; axis < 3U; axis++)
-	{
-		int32_t minimum, maximum;
-		sg_configuration_lattice_stats_t stats = { 0 };
-		int result;
-
-		result = SG_ConfigurationLatticeCoordinateBounds(halfspaces,
-			constraints->count, axis, &minimum, &maximum, &stats);
-		build->output->lattice_solve_calls += stats.solve_calls;
-		build->output->lattice_constraints += stats.constraints;
-		if (stats.maximum_binary_shift >
-			build->output->lattice_maximum_binary_shift)
-			build->output->lattice_maximum_binary_shift =
-				stats.maximum_binary_shift;
-		if (result <= 0)
-		{
-			free(halfspaces);
-			return result;
-		}
-		mins[axis] = (float)minimum * 0.125f;
-		maxs[axis] = (float)maximum * 0.125f;
-	}
-	free(halfspaces);
-	return 1;
-}
-
-static int AddCellConstraints(const sg_configuration_space_t *configuration,
-	uint32_t cell_index, semantic_constraints_t *constraints)
-{
-	const sg_configuration_cell_t *cell = &configuration->cells[cell_index];
-	uint32_t local;
-
-	for (local = 0; local < cell->face_count; local++)
-	{
-		uint32_t face_index = cell->first_face + local;
-		const sg_configuration_face_t *face = &configuration->faces[face_index];
-		semantic_constraint_t constraint;
-
-		memset(&constraint, 0, sizeof(constraint));
-		Copy3(constraint.halfspace.normal, face->plane.normal);
-		constraint.halfspace.distance = face->plane.distance;
-		constraint.halfspace.open = face->plane.source_kind ==
-			SG_CONFIGURATION_PLANE_EXPANDED_BRUSH && face->plane.reversed != 0U;
-		constraint.source_kind = SG_CONFIGURATION_SEMANTIC_PLANE_CELL;
-		constraint.source_index = face_index;
-		constraint.reversed = (uint8_t)(face->plane.reversed != 0U);
-		if (!AppendConstraint(constraints, &constraint))
-			return 0;
-	}
-	return 1;
-}
-
+/* Sample heights above the origin for a stance: just above the feet, half
+ * way to the eyes, and at the eyes. */
 static int SampleOffsets(const sg_host_collision_authority_t *authority,
 	sg_rune_stance_t stance, float offsets[3])
 {
@@ -673,6 +117,7 @@ static int HostLeafAtPoint(const sg_bsp_world_t *world, const float point[3],
 		const sg_bsp_node_t *node;
 		const sg_bsp_plane_t *plane;
 		float distance;
+
 		if ((uint32_t)child >= world->node_count)
 			return 0;
 		node = &world->nodes[child];
@@ -686,508 +131,11 @@ static int HostLeafAtPoint(const sg_bsp_world_t *world, const float point[3],
 	return *leaf_out < world->leaf_count;
 }
 
-static int NormalizeSemanticHalfspaceDouble(
-	const sg_configuration_lattice_halfspace_t *halfspace, double normal[3],
-	double *distance)
-{
-	double scale = fmax(fabs((double)halfspace->normal[0]),
-		fmax(fabs((double)halfspace->normal[1]),
-			fabs((double)halfspace->normal[2])));
-	double length;
-	uint32_t axis;
-
-	if (!(scale > 0.0) || !isfinite(scale) || !isfinite(halfspace->distance))
-		return 0;
-	for (axis = 0U; axis < 3U; axis++)
-		normal[axis] = (double)halfspace->normal[axis] / scale;
-	length = sqrt(normal[0] * normal[0] + normal[1] * normal[1] +
-		normal[2] * normal[2]);
-	if (!(length > 0.0) || !isfinite(length))
-		return 0;
-	for (axis = 0U; axis < 3U; axis++)
-		normal[axis] /= length;
-	*distance = ((double)halfspace->distance / scale) / length;
-	return isfinite(*distance);
-}
-
-static int PointInside(const float point[3],
-	const semantic_constraints_t *constraints)
-{
-	uint32_t index;
-
-	for (index = 0; index < constraints->count; index++)
-	{
-		double normal[3], distance;
-
-		if (!NormalizeSemanticHalfspaceDouble(
-				&constraints->items[index].halfspace, normal, &distance) ||
-			(double)point[0] * normal[0] + (double)point[1] * normal[1] +
-			(double)point[2] * normal[2] - distance >
-				PublishedPlaneResidualTolerance(point, normal))
-			return 0;
-	}
-	return 1;
-}
-
-static int Intersect3(const semantic_constraint_t *a,
-	const semantic_constraint_t *b, const semantic_constraint_t *c,
-	float point[3])
-{
-	double n0[3], n1[3], n2[3], d0, d1, d2;
-	double cross12[3], cross20[3], cross01[3], determinant;
-	double determinant_scale;
-	uint32_t axis;
-
-	if (!NormalizeSemanticHalfspaceDouble(&a->halfspace, n0, &d0) ||
-		!NormalizeSemanticHalfspaceDouble(&b->halfspace, n1, &d1) ||
-		!NormalizeSemanticHalfspaceDouble(&c->halfspace, n2, &d2))
-		return 0;
-	cross12[0] = n1[1] * n2[2] - n1[2] * n2[1];
-	cross12[1] = n1[2] * n2[0] - n1[0] * n2[2];
-	cross12[2] = n1[0] * n2[1] - n1[1] * n2[0];
-	determinant = n0[0] * cross12[0] + n0[1] * cross12[1] +
-		n0[2] * cross12[2];
-	determinant_scale = fabs(n0[0] * cross12[0]) +
-		fabs(n0[1] * cross12[1]) + fabs(n0[2] * cross12[2]);
-	if (!isfinite(determinant) || fabs(determinant) <=
-		DBL_EPSILON * fmax(1.0, determinant_scale))
-		return 0;
-	cross20[0] = n2[1] * n0[2] - n2[2] * n0[1];
-	cross20[1] = n2[2] * n0[0] - n2[0] * n0[2];
-	cross20[2] = n2[0] * n0[1] - n2[1] * n0[0];
-	cross01[0] = n0[1] * n1[2] - n0[2] * n1[1];
-	cross01[1] = n0[2] * n1[0] - n0[0] * n1[2];
-	cross01[2] = n0[0] * n1[1] - n0[1] * n1[0];
-	for (axis = 0; axis < 3; axis++)
-		point[axis] = (float)((d0 * cross12[axis] + d1 * cross20[axis] +
-			d2 * cross01[axis]) / determinant);
-	return Finite3(point);
-}
-
-static int SamePoint(const sg_rune_vec3_t *point, const float value[3])
-{
-	return PublishedPointsSame(point->value, value);
-}
-
-static int SameHalfspace(const sg_configuration_lattice_halfspace_t *left,
-	const sg_configuration_lattice_halfspace_t *right)
-{
-	return left->normal[0] == right->normal[0] &&
-		left->normal[1] == right->normal[1] &&
-		left->normal[2] == right->normal[2] &&
-		left->distance == right->distance;
-}
-
-#if defined(SG_CONFIGURATION_SEMANTICS_TESTING)
-#endif
-
-static int SemanticIntersectPlanesDouble(const sg_configuration_plane_t *a,
-	const sg_configuration_plane_t *b, const sg_configuration_plane_t *c,
-	double point[3])
-{
-	double n0[3], n1[3], n2[3], cross12[3], cross20[3], cross01[3];
-	double d0, d1, d2, determinant, determinant_scale;
-	uint32_t axis;
-
-	if (!NormalizeSemanticPlaneDouble(a, n0, &d0) ||
-		!NormalizeSemanticPlaneDouble(b, n1, &d1) ||
-		!NormalizeSemanticPlaneDouble(c, n2, &d2))
-		return 0;
-	cross12[0] = n1[1] * n2[2] - n1[2] * n2[1];
-	cross12[1] = n1[2] * n2[0] - n1[0] * n2[2];
-	cross12[2] = n1[0] * n2[1] - n1[1] * n2[0];
-	determinant = n0[0] * cross12[0] + n0[1] * cross12[1] +
-		n0[2] * cross12[2];
-	determinant_scale = fabs(n0[0] * cross12[0]) +
-		fabs(n0[1] * cross12[1]) + fabs(n0[2] * cross12[2]);
-	if (!isfinite(determinant) || fabs(determinant) <=
-		DBL_EPSILON * fmax(1.0, determinant_scale))
-		return 0;
-	cross20[0] = n2[1] * n0[2] - n2[2] * n0[1];
-	cross20[1] = n2[2] * n0[0] - n2[0] * n0[2];
-	cross20[2] = n2[0] * n0[1] - n2[1] * n0[0];
-	cross01[0] = n0[1] * n1[2] - n0[2] * n1[1];
-	cross01[1] = n0[2] * n1[0] - n0[0] * n1[2];
-	cross01[2] = n0[0] * n1[1] - n0[1] * n1[0];
-	for (axis = 0U; axis < 3U; axis++)
-	{
-		point[axis] = (d0 * cross12[axis] + d1 * cross20[axis] +
-			d2 * cross01[axis]) / determinant;
-		if (!isfinite(point[axis]))
-			return 0;
-	}
-	return 1;
-}
-
-static int SemanticPointInsideCellDouble(
-	const sg_configuration_space_t *configuration,
-	const sg_configuration_cell_t *cell, const double point[3])
-{
-	uint32_t face;
-
-	for (face = 0U; face < cell->face_count; face++)
-	{
-		const sg_configuration_plane_t *plane = &configuration->faces[
-			cell->first_face + face].plane;
-		double normal[3], distance;
-		double residual;
-
-		if (!NormalizeSemanticPlaneDouble(plane, normal, &distance))
-			return 0;
-		residual = point[0] * normal[0] + point[1] * normal[1] +
-			point[2] * normal[2] - distance;
-		if (residual > SEMANTICS_GEOMETRY_EPSILON)
-			return 0;
-	}
-	return 1;
-}
-
-static int SemanticAppendPublishedPoint(sg_rune_vec3_t **points,
-	uint32_t *count, uint32_t *capacity, const double exact[3])
-{
-	float rounded[3];
-	uint32_t axis, existing;
-
-	for (axis = 0U; axis < 3U; axis++)
-		rounded[axis] = (float)exact[axis];
-	for (existing = 0U; existing < *count; existing++)
-		if (SamePoint(&(*points)[existing], rounded))
-			return 1;
-	if (*count == UINT32_MAX || !Grow((void **)points, capacity, *count + 1U,
-			UINT32_MAX, sizeof(**points)))
-		return 0;
-	Copy3((*points)[(*count)++].value, rounded);
-	return 1;
-}
-
-static int ValidateCellMesh(const sg_configuration_space_t *configuration,
-	uint32_t cell_index)
-{
-	const sg_configuration_cell_t *cell = &configuration->cells[cell_index];
-	sg_rune_vec3_t *all = NULL;
-	uint32_t all_count = 0U, all_capacity = 0U;
-	uint32_t first, second, third, face;
-	int has_constraint = 0, valid = 0;
-
-	for (first = 0; first < cell->face_count; first++)
-		for (second = first + 1U; second < cell->face_count; second++)
-			for (third = second + 1U; third < cell->face_count; third++)
-			{
-				double point[3];
-				if (!SemanticIntersectPlanesDouble(&configuration->faces[
-						cell->first_face + first].plane, &configuration->faces[
-						cell->first_face + second].plane, &configuration->faces[
-						cell->first_face + third].plane, point) ||
-					!SemanticPointInsideCellDouble(configuration, cell, point))
-					continue;
-				if (!SemanticAppendPublishedPoint(&all, &all_count,
-						&all_capacity, point))
-					goto done;
-			}
-	for (face = 0U; face < cell->face_count; face++)
-	{
-		const sg_configuration_face_t *actual = &configuration->faces[
-			cell->first_face + face];
-		sg_rune_vec3_t *expected = NULL;
-		uint8_t *matched = NULL;
-		uint32_t expected_count = 0U, expected_capacity = 0U, vertex;
-
-		has_constraint |= actual->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY;
-		for (first = 0U; first < cell->face_count; first++)
-			if (first != face)
-				for (second = first + 1U; second < cell->face_count; second++)
-					if (second != face)
-					{
-						double point[3];
-						if (!SemanticIntersectPlanesDouble(&actual->plane,
-								&configuration->faces[cell->first_face + first].plane,
-								&configuration->faces[cell->first_face + second].plane,
-								point) || !SemanticPointInsideCellDouble(configuration,
-								cell, point))
-							continue;
-						if (!SemanticAppendPublishedPoint(&expected,
-								&expected_count, &expected_capacity, point))
-						{
-							free(expected);
-							goto done;
-						}
-					}
-		if ((actual->kind == SG_CONFIGURATION_FACE_FACET) !=
-				(expected_count >= 3U) ||
-			actual->vertex_count != (expected_count >= 3U ? expected_count : 0U))
-		{
-			free(expected);
-			goto done;
-		}
-		if (expected_count < 3U)
-		{
-			free(expected);
-			continue;
-		}
-		matched = calloc(expected_count, 1U);
-		if (!matched)
-		{
-			free(expected);
-			goto done;
-		}
-		for (vertex = 0U; vertex < actual->vertex_count; vertex++)
-		{
-			uint32_t candidate;
-			for (candidate = 0U; candidate < expected_count; candidate++)
-				if (!matched[candidate] && SamePoint(&expected[candidate],
-						configuration->vertices[actual->first_vertex + vertex].value))
-				{
-					matched[candidate] = 1U;
-					break;
-				}
-			if (candidate == expected_count)
-			{
-				free(matched);
-				free(expected);
-				goto done;
-			}
-		}
-		free(matched);
-		free(expected);
-	}
-	valid = all_count >= 4U || has_constraint;
-
-done:
-	free(all);
-	return valid;
-}
-
-static uint32_t DominantAxis(const float normal[3])
-{
-	uint32_t axis = 0, candidate;
-	for (candidate = 1; candidate < 3; candidate++)
-		if (fabsf(normal[candidate]) > fabsf(normal[axis]))
-			axis = candidate;
-	return axis;
-}
-
-static float FaceAngle(const sg_rune_vec3_t *point, uint32_t axis,
-	const float center[3])
-{
-	uint32_t u = (axis + 1U) % 3U;
-	uint32_t v = (axis + 2U) % 3U;
-	return atan2f(point->value[v] - center[v],
-		point->value[u] - center[u]);
-}
-
-static int BuildMesh(semantic_build_t *build,
-	const semantic_constraints_t *constraints,
-	sg_configuration_semantic_region_t *region)
-{
-	sg_rune_vec3_t *all = NULL;
-	uint32_t all_count = 0, all_capacity = 0;
-	uint32_t i, j, k;
-	sg_rune_vec3_t *face_points = NULL;
-	float bounds_min[3] = { INFINITY, INFINITY, INFINITY };
-	float bounds_max[3] = { -INFINITY, -INFINITY, -INFINITY };
-	int has_constraint_only = 0;
-
-	for (i = 0; i < constraints->count; i++)
-		for (j = i + 1U; j < constraints->count; j++)
-			for (k = j + 1U; k < constraints->count; k++)
-			{
-				float point[3];
-				uint32_t seen, axis;
-
-				if (!Intersect3(&constraints->items[i], &constraints->items[j],
-						&constraints->items[k], point) ||
-					!PointInside(point, constraints))
-					continue;
-				for (seen = 0; seen < all_count; seen++)
-					if (SamePoint(&all[seen], point))
-						break;
-				if (seen != all_count)
-					continue;
-				if (all_count == UINT32_MAX ||
-					!Grow((void **)&all, &all_capacity, all_count + 1U,
-					build->limits.max_vertices, sizeof(*all)))
-				{
-					free(all);
-					SetError(build, all_count >= build->limits.max_vertices ?
-						SG_CONFIGURATION_SEMANTICS_ERROR_OVERFLOW :
-						SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY, region->cell);
-					return 0;
-				}
-				Copy3(all[all_count++].value, point);
-				for (axis = 0; axis < 3; axis++)
-				{
-					if (point[axis] < bounds_min[axis]) bounds_min[axis] = point[axis];
-					if (point[axis] > bounds_max[axis]) bounds_max[axis] = point[axis];
-				}
-			}
-	region->first_face = build->output->face_count;
-	for (i = 0; i < constraints->count; i++)
-	{
-		uint32_t point_count = 0, point_capacity = 0, published_count, v, axis;
-		float center[3] = { 0, 0, 0 };
-		sg_configuration_semantic_face_t *face;
-		uint32_t canonical = UINT32_MAX;
-		uint32_t prior;
-
-		for (prior = 0; prior < constraints->count; prior++)
-			if (SameHalfspace(&constraints->items[prior].halfspace,
-				&constraints->items[i].halfspace))
-			{
-				if (canonical == UINT32_MAX)
-					canonical = prior;
-				if (constraints->items[prior].halfspace.open)
-				{
-					canonical = prior;
-					break;
-				}
-			}
-		if (canonical != i)
-			continue;
-
-		for (v = 0; v < all_count; v++)
-		{
-			double normal[3], distance;
-			int incident = NormalizeSemanticHalfspaceDouble(
-				&constraints->items[i].halfspace, normal, &distance) &&
-				fabs((double)all[v].value[0] * normal[0] +
-					(double)all[v].value[1] * normal[1] +
-					(double)all[v].value[2] * normal[2] - distance) <=
-					PublishedPlaneResidualTolerance(all[v].value, normal);
-
-			if (incident)
-			{
-				if (point_count == UINT32_MAX ||
-					!Grow((void **)&face_points, &point_capacity, point_count + 1U,
-					build->limits.max_vertices, sizeof(*face_points)))
-				{
-					SetError(build,
-						point_count >= build->limits.max_vertices ?
-						SG_CONFIGURATION_SEMANTICS_ERROR_OVERFLOW :
-						SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY,
-						region->cell);
-					goto mesh_failure;
-				}
-				face_points[point_count++] = all[v];
-			}
-		}
-		if (point_count < 3U)
-		{
-			free(face_points);
-			face_points = NULL;
-			point_capacity = 0;
-			has_constraint_only = 1;
-		}
-		else
-		{
-			for (v = 0; v < point_count; v++)
-				for (axis = 0; axis < 3; axis++)
-					center[axis] += face_points[v].value[axis];
-			for (axis = 0; axis < 3; axis++)
-				center[axis] /= (float)point_count;
-			axis = DominantAxis(constraints->items[i].halfspace.normal);
-			for (v = 1; v < point_count; v++)
-			{
-				sg_rune_vec3_t value = face_points[v];
-				float angle = FaceAngle(&value, axis, center);
-				uint32_t insert = v;
-				while (insert && FaceAngle(&face_points[insert - 1U], axis,
-					center) > angle)
-				{
-					face_points[insert] = face_points[insert - 1U];
-					insert--;
-				}
-				face_points[insert] = value;
-			}
-		}
-		published_count = point_count >= 3U ? point_count : 0U;
-		if (build->output->face_count >= build->limits.max_faces ||
-			published_count > build->limits.max_vertices -
-				build->output->vertex_count ||
-			published_count > UINT32_MAX - build->output->vertex_count)
-		{
-			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OVERFLOW,
-				region->cell);
-			goto mesh_failure;
-		}
-		if (
-			!Grow((void **)&build->output->faces, &build->face_capacity,
-			build->output->face_count + 1U, build->limits.max_faces,
-			sizeof(*build->output->faces)) ||
-			!Grow((void **)&build->output->vertices, &build->vertex_capacity,
-			build->output->vertex_count + published_count,
-			build->limits.max_vertices, sizeof(*build->output->vertices)))
-		{
-			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY,
-				region->cell);
-			goto mesh_failure;
-		}
-		face = &build->output->faces[build->output->face_count++];
-		memset(face, 0, sizeof(*face));
-		Copy3(face->normal, constraints->items[i].halfspace.normal);
-		face->distance = constraints->items[i].halfspace.distance;
-		face->first_vertex = build->output->vertex_count;
-		face->vertex_count = published_count;
-		face->kind = published_count ?
-			SG_CONFIGURATION_SEMANTIC_FACE_FACET :
-			SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY;
-		face->source_kind = constraints->items[i].source_kind;
-		face->source_index = constraints->items[i].source_index;
-		face->source_variant = constraints->items[i].source_variant;
-		face->sample_index = constraints->items[i].sample_index;
-		face->reversed = constraints->items[i].reversed;
-		face->open = (uint8_t)(constraints->items[i].halfspace.open != 0);
-		if (published_count)
-		{
-			memcpy(&build->output->vertices[build->output->vertex_count],
-				face_points, (size_t)published_count * sizeof(*face_points));
-			build->output->vertex_count += published_count;
-		}
-		free(face_points);
-		face_points = NULL;
-	}
-	region->face_count = build->output->face_count - region->first_face;
-	if (has_constraint_only)
-	{
-		int bounds = BuildConstraintBounds(build, constraints,
-			region->bounds.mins.value, region->bounds.maxs.value);
-
-		if (bounds <= 0)
-		{
-			SetError(build, bounds < 0 ?
-				SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY :
-				SG_CONFIGURATION_SEMANTICS_ERROR_NONFINITE_GEOMETRY,
-				region->cell);
-			goto mesh_failure;
-		}
-	}
-	else
-	{
-		if (all_count < 4U)
-		{
-			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_NONFINITE_GEOMETRY,
-				region->cell);
-			goto mesh_failure;
-		}
-		Copy3(region->bounds.mins.value, bounds_min);
-		Copy3(region->bounds.maxs.value, bounds_max);
-	}
-	free(all);
-	return region->face_count >= 4U;
-
-mesh_failure:
-	free(face_points);
-	free(all);
-	if (build->error.code == SG_CONFIGURATION_SEMANTICS_ERROR_NONE)
-		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY,
-			region->cell);
-	return 0;
-}
-
 /* Support is the cell's, not the witness's: a tall cell over a floor is a
  * place to stand although its centre is in the air.  Probe the host at the
- * cell's lowest origin height under the witness, stepping up by a few Q8
- * steps when the lowest corner is only valid elsewhere on a slope. */
-static int CellHasFloor(semantic_build_t *build,
+ * cell's lowest origin height under the witness, stepping up a few Q8 steps
+ * when the lowest corner is only valid elsewhere on a slope. */
+static int CellHasFloor(const semantic_build_t *build,
 	const sg_configuration_cell_t *cell, const float witness[3],
 	int witness_supported)
 {
@@ -1214,50 +162,121 @@ static int CellHasFloor(semantic_build_t *build,
 	return 0;
 }
 
-static int AppendRegion(semantic_build_t *build, uint32_t cell_index,
-	const semantic_constraints_t *constraints, const uint32_t leaves[3],
-	const int32_t witness_q8[3])
+/* ---- regions ------------------------------------------------------------ */
+
+static int AppendRegion(semantic_build_t *build, uint32_t cell_index)
 {
-	const sg_bsp_world_t *world = build->authority->world;
-	const sg_configuration_cell_t *cell = &build->configuration->cells[cell_index];
+	const sg_configuration_space_t *configuration = build->configuration;
+	const sg_configuration_cell_t *cell = &configuration->cells[cell_index];
+	const sg_bsp_world_t *world = build->world;
+	sg_configuration_semantics_t *output = build->output;
 	sg_configuration_semantic_region_t *region;
 	sg_host_collision_pose_t pose;
-	float witness[3];
 	float offsets[3];
-	uint32_t sample;
+	uint32_t face, sample;
 
-	if (build->output->region_count >= build->limits.max_regions)
-	{
-		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OVERFLOW, cell_index);
-		return 0;
-	}
-	if (!Grow((void **)&build->output->regions, &build->region_capacity,
-		build->output->region_count + 1U, build->limits.max_regions,
-		sizeof(*build->output->regions)))
-	{
-		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY, cell_index);
-		return 0;
-	}
-	region = &build->output->regions[build->output->region_count];
-	memset(region, 0, sizeof(*region));
-	region->id = ((uint64_t)cell_index << 32) | build->output->region_count;
-	region->cell = cell_index;
-	if (cell->bsp_leaf.index >= world->leaf_count)
+	if (cell->bsp_leaf.index >= world->leaf_count ||
+		cell->first_face > configuration->face_count ||
+		cell->face_count > configuration->face_count - cell->first_face)
 	{
 		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
 			cell_index);
 		return 0;
 	}
-	region->origin_contents =
-		(sg_host_collision_contents_t)world->leaves[cell->bsp_leaf.index].contents;
+	if (!Grow((void **)&output->regions, &build->region_capacity,
+		output->region_count + 1U, build->limits.max_regions,
+		sizeof(*output->regions)))
+	{
+		SetError(build, output->region_count + 1U > build->limits.max_regions ?
+			SG_CONFIGURATION_SEMANTICS_ERROR_OVERFLOW :
+			SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY, cell_index);
+		return 0;
+	}
+	region = &output->regions[output->region_count];
+	memset(region, 0, sizeof(*region));
+	region->id = ((uint64_t)cell_index << 32) | output->region_count;
+	region->cell = cell_index;
+	region->bounds = cell->bounds;
+	region->interior_witness = cell->interior_witness;
+	region->origin_contents = (sg_host_collision_contents_t)
+		world->leaves[cell->bsp_leaf.index].contents;
 	region->origin_rune_contents = cell->contents;
+	region->first_face = output->face_count;
+	/* The cell's mesh is the region's mesh. */
+	for (face = 0; face < cell->face_count; face++)
+	{
+		const uint32_t face_index = cell->first_face + face;
+		const sg_configuration_face_t *source =
+			&configuration->faces[face_index];
+		sg_configuration_semantic_face_t *record;
+		uint32_t vertex;
+
+		if (source->first_vertex > configuration->vertex_count ||
+			source->vertex_count >
+				configuration->vertex_count - source->first_vertex)
+		{
+			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
+				face_index);
+			return 0;
+		}
+		if (!Grow((void **)&output->faces, &build->face_capacity,
+			output->face_count + 1U, build->limits.max_faces,
+			sizeof(*output->faces)) ||
+			!Grow((void **)&output->vertices, &build->vertex_capacity,
+			output->vertex_count + source->vertex_count,
+			build->limits.max_vertices, sizeof(*output->vertices)))
+		{
+			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OVERFLOW,
+				face_index);
+			return 0;
+		}
+		record = &output->faces[output->face_count++];
+		memset(record, 0, sizeof(*record));
+		Copy3(record->normal, source->plane.normal);
+		record->distance = source->plane.distance;
+		record->first_vertex = output->vertex_count;
+		record->vertex_count = source->vertex_count;
+		record->source_kind = SG_CONFIGURATION_SEMANTIC_PLANE_CELL;
+		record->source_index = face_index;
+		record->reversed = (uint8_t)(source->plane.reversed != 0U);
+		record->open = (uint8_t)(source->plane.source_kind ==
+			SG_CONFIGURATION_PLANE_EXPANDED_BRUSH &&
+			source->plane.reversed != 0U);
+		record->kind = source->kind == SG_CONFIGURATION_FACE_CONSTRAINT_ONLY ?
+			SG_CONFIGURATION_SEMANTIC_FACE_CONSTRAINT_ONLY :
+			SG_CONFIGURATION_SEMANTIC_FACE_FACET;
+		for (vertex = 0; vertex < source->vertex_count; vertex++)
+			output->vertices[output->vertex_count++] =
+				configuration->vertices[source->first_vertex + vertex];
+		if (source->plane.source_kind == SG_CONFIGURATION_PLANE_DOMAIN)
+			region->flags |= SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT;
+	}
+	region->face_count = output->face_count - region->first_face;
+	/* Samples: the host's leaves at the stance's heights over the witness. */
+	if (!SampleOffsets(build->authority, cell->stance, offsets))
+	{
+		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
+			cell_index);
+		return 0;
+	}
 	for (sample = 0; sample < 3; sample++)
 	{
-		region->sample_leaves[sample] = leaves[sample];
+		float point[3];
+		uint32_t leaf;
+
+		Copy3(point, cell->interior_witness.value);
+		point[2] += offsets[sample];
+		if (!HostLeafAtPoint(world, point, &leaf))
+		{
+			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_HOST_DISAGREEMENT,
+				cell_index);
+			return 0;
+		}
+		region->sample_leaves[sample] = leaf;
 		region->sample_contents[sample] =
-			(sg_host_collision_contents_t)world->leaves[leaves[sample]].contents;
-		region->sample_areas[sample] = world->leaves[leaves[sample]].area;
-		region->sample_clusters[sample] = world->leaves[leaves[sample]].cluster;
+			(sg_host_collision_contents_t)world->leaves[leaf].contents;
+		region->sample_areas[sample] = world->leaves[leaf].area;
+		region->sample_clusters[sample] = world->leaves[leaf].cluster;
 	}
 	if (region->sample_contents[0] & SG_HOST_MASK_WATER)
 	{
@@ -1278,485 +297,197 @@ static int AppendRegion(semantic_build_t *build, uint32_t cell_index,
 	if (region->water_type & SG_HOST_CONTENTS_SLIME)
 		region->flags |= SG_CONFIGURATION_SEMANTIC_REGION_SLIME |
 			SG_CONFIGURATION_SEMANTIC_REGION_HAZARD;
-	for (sample = 0; sample < 3; sample++)
-		witness[sample] = (float)witness_q8[sample] * 0.125f;
-	Copy3(region->interior_witness.value, witness);
-	if (!SampleOffsets(build->authority, cell->stance, offsets))
-	{
-		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
-			cell_index);
-		return 0;
-	}
-	for (sample = 0; sample < 3; sample++)
-	{
-		float point[3];
-		uint32_t host_leaf;
-		Copy3(point, witness);
-		point[2] += offsets[sample];
-		if (!HostLeafAtPoint(world, point, &host_leaf) ||
-			host_leaf != leaves[sample])
-		{
-			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_HOST_DISAGREEMENT,
-				cell_index);
-			return 0;
-		}
-	}
-	if (!SG_HostCollisionClassifyPose(build->authority, NULL, witness,
-		cell->stance, &pose) || !pose.valid ||
-		pose.water_level != region->water_level ||
-		pose.water_type != region->water_type)
-	{
-		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_HOST_DISAGREEMENT,
-			cell_index);
-		return 0;
-	}
-	region->flags |= CellHasFloor(build, cell, witness, pose.supported) ?
+	/* Support from the host at the witness, then at the floor. */
+	memset(&pose, 0, sizeof(pose));
+	if (!SG_HostCollisionClassifyPose(build->authority, NULL,
+		cell->interior_witness.value, cell->stance, &pose))
+		pose.valid = 0;
+	region->flags |= CellHasFloor(build, cell, cell->interior_witness.value,
+		pose.valid && pose.supported) ?
 		SG_CONFIGURATION_SEMANTIC_REGION_SUPPORTED :
 		SG_CONFIGURATION_SEMANTIC_REGION_AIRBORNE;
-	if (!BuildMesh(build, constraints, region))
-		return 0;
-	for (sample = 0; sample < region->face_count; sample++)
-	{
-		const sg_configuration_semantic_face_t *semantic_face =
-			&build->output->faces[region->first_face + sample];
-		if (semantic_face->source_kind ==
-			SG_CONFIGURATION_SEMANTIC_PLANE_CELL &&
-			semantic_face->source_index < build->configuration->face_count &&
-			build->configuration->faces[semantic_face->source_index].plane.source_kind ==
-				SG_CONFIGURATION_PLANE_DOMAIN)
-			region->flags |= SG_CONFIGURATION_SEMANTIC_REGION_VOID_ADJACENT;
-	}
-	build->output->region_count++;
+	output->region_count++;
 	return 1;
 }
 
-static int FindBrushForSide(const sg_bsp_world_t *world, uint32_t side,
-	uint32_t *brush_out)
-{
-	uint32_t brush, found = SG_CONFIGURATION_SEMANTICS_INDEX_NONE;
+/* ---- boundaries --------------------------------------------------------- */
 
+static int BuildSideToBrush(semantic_build_t *build)
+{
+	const sg_bsp_world_t *world = build->world;
+	uint32_t brush;
+
+	build->side_to_brush = malloc((size_t)(world->brush_side_count ?
+		world->brush_side_count : 1U) * sizeof(*build->side_to_brush));
+	if (!build->side_to_brush)
+		return 0;
+	memset(build->side_to_brush, 0xFF,
+		(size_t)world->brush_side_count * sizeof(*build->side_to_brush));
 	for (brush = 0; brush < world->brush_count; brush++)
 	{
-		uint32_t first = world->brushes[brush].first_side;
-		uint32_t count = world->brushes[brush].side_count;
-		if (side >= first && side - first < count)
-		{
-			if (found != SG_CONFIGURATION_SEMANTICS_INDEX_NONE)
-				return 0;
-			found = brush;
-		}
+		const sg_bsp_brush_t *record = &world->brushes[brush];
+		uint32_t side;
+
+		if (record->first_side > world->brush_side_count ||
+			record->side_count > world->brush_side_count - record->first_side)
+			return 0;
+		for (side = 0; side < record->side_count; side++)
+			build->side_to_brush[record->first_side + side] = brush;
 	}
-	if (found == SG_CONFIGURATION_SEMANTICS_INDEX_NONE)
-		return 0;
-	*brush_out = found;
 	return 1;
 }
 
-/* One region per cell, built linearly.  The cell complex already partitions
- * free space; support and water are phase dimensions the runtime localizes
- * from the live pose.  The region records whether this cell has a floor,
- * what its witness and samples are in, and the cell's own polytope mesh.
- * There is no partition of the cell into support regions: that enumerated
- * an arrangement of every nearby brush plane and never finished. */
-static int BuildCellRegion(semantic_build_t *build, uint32_t cell_index)
+/* A cell's brush and domain faces, each traced to what it touches. */
+static int AppendBoundaries(semantic_build_t *build, uint32_t cell_index)
 {
-	const sg_bsp_world_t *world = build->authority->world;
-	const sg_configuration_cell_t *cell =
-		&build->configuration->cells[cell_index];
-	semantic_constraints_t constraints = { 0 };
-	float offsets[3];
-	uint32_t leaves[3] = { 0, 0, 0 };
-	int32_t witness[3];
-	uint32_t sample;
-	int feasible;
-	int ok = 0;
+	const sg_configuration_space_t *configuration = build->configuration;
+	const sg_configuration_cell_t *cell = &configuration->cells[cell_index];
+	const sg_bsp_world_t *world = build->world;
+	sg_configuration_semantics_t *output = build->output;
+	uint32_t local;
 
-	if (!AddCellConstraints(build->configuration, cell_index, &constraints) ||
-		!SampleOffsets(build->authority, cell->stance, offsets))
+	for (local = 0; local < cell->face_count; local++)
 	{
-		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY,
-			cell_index);
-		goto done;
-	}
-	feasible = BuildSolveInterior(build, &constraints, witness);
-	if (feasible < 0)
-	{
-		SetError(build, feasible == -2 ?
-			SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY :
-			SG_CONFIGURATION_SEMANTICS_ERROR_SOLVER, cell_index);
-		goto done;
-	}
-	if (!feasible)
-	{
-		/* A cell with no interior is no place to be. */
-		ok = 1;
-		goto done;
-	}
-	for (sample = 0; sample < 3; sample++)
-	{
-		float point[3];
+		const uint32_t face_index = cell->first_face + local;
+		const sg_configuration_face_t *face = &configuration->faces[face_index];
+		sg_configuration_boundary_t boundary;
 
-		point[0] = (float)witness[0] * 0.125f;
-		point[1] = (float)witness[1] * 0.125f;
-		point[2] = (float)witness[2] * 0.125f + offsets[sample];
-		if (!HostLeafAtPoint(world, point, &leaves[sample]))
+		if (face->plane.source_kind != SG_CONFIGURATION_PLANE_DOMAIN &&
+			face->plane.source_kind != SG_CONFIGURATION_PLANE_EXPANDED_BRUSH)
+			continue;
+		memset(&boundary, 0, sizeof(boundary));
+		boundary.id = ((uint64_t)cell_index << 32) | local;
+		boundary.cell = cell_index;
+		boundary.configuration_face = face_index;
+		boundary.brush = SG_CONFIGURATION_SEMANTICS_INDEX_NONE;
+		boundary.brush_side = SG_CONFIGURATION_SEMANTICS_INDEX_NONE;
+		boundary.texinfo = SG_CONFIGURATION_SEMANTICS_INDEX_NONE;
+		Copy3(boundary.origin_normal, face->plane.normal);
+		boundary.origin_distance = face->plane.distance;
+		if (face->plane.source_kind == SG_CONFIGURATION_PLANE_DOMAIN)
+			boundary.flags = SG_CONFIGURATION_BOUNDARY_VOID;
+		else
 		{
-			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_HOST_DISAGREEMENT,
-				cell_index);
-			goto done;
-		}
-	}
-	ok = AppendRegion(build, cell_index, &constraints, leaves, witness);
-done:
-	FreeConstraints(&constraints);
-	return ok;
-}
+			const sg_bsp_brush_side_t *side;
+			const uint32_t side_index = face->plane.source_index;
 
-static int BuildBoundaries(semantic_build_t *build)
-{
-	const sg_bsp_world_t *world = build->authority->world;
-	uint32_t cell_index;
-
-	for (cell_index = 0; cell_index < build->configuration->cell_count;
-		cell_index++)
-	{
-		const sg_configuration_cell_t *cell =
-			&build->configuration->cells[cell_index];
-		uint32_t local;
-
-		for (local = 0; local < cell->face_count; local++)
-		{
-			uint32_t face_index = cell->first_face + local;
-			const sg_configuration_face_t *face =
-				&build->configuration->faces[face_index];
-			sg_configuration_boundary_t boundary;
-
-			if (face->kind != SG_CONFIGURATION_FACE_FACET)
-				continue;
-			memset(&boundary, 0, sizeof(boundary));
-			boundary.id = ((uint64_t)cell_index << 32) | local;
-			boundary.cell = cell_index;
-			boundary.configuration_face = face_index;
-			boundary.brush = SG_CONFIGURATION_SEMANTICS_INDEX_NONE;
-			boundary.brush_side = SG_CONFIGURATION_SEMANTICS_INDEX_NONE;
-			boundary.texinfo = SG_CONFIGURATION_SEMANTICS_INDEX_NONE;
-			Copy3(boundary.origin_normal, face->plane.normal);
-			boundary.origin_distance = face->plane.distance;
-			if (face->plane.source_kind == SG_CONFIGURATION_PLANE_DOMAIN)
-				boundary.flags = SG_CONFIGURATION_BOUNDARY_VOID;
-			else if (face->plane.source_kind ==
-				SG_CONFIGURATION_PLANE_EXPANDED_BRUSH)
+			if (side_index >= world->brush_side_count ||
+				build->side_to_brush[side_index] == UINT32_MAX)
 			{
-				uint32_t brush;
-				const sg_bsp_brush_side_t *side;
-
-				if (face->plane.source_index >= world->brush_side_count ||
-					!FindBrushForSide(world, face->plane.source_index, &brush))
-				{
-					SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
-						face_index);
-					return 0;
-				}
-				side = &world->brush_sides[face->plane.source_index];
-				if (side->plane >= world->plane_count)
-				{
-					SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
-						face->plane.source_index);
-					return 0;
-				}
-				Copy3(boundary.surface_normal,
-					world->planes[side->plane].normal.value);
-				boundary.surface_distance = world->planes[side->plane].distance;
-				boundary.brush = brush;
-				boundary.brush_side = face->plane.source_index;
-				boundary.flags = SG_CONFIGURATION_BOUNDARY_PHYSICAL;
-				if (boundary.surface_normal[2] >= 0.7f)
-					boundary.flags |=
-						SG_CONFIGURATION_BOUNDARY_SUPPORT_CANDIDATE;
-				if (side->texinfo >= 0)
-				{
-					if ((uint32_t)side->texinfo >= world->texinfo_count)
-					{
-						SetError(build,
-							SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
-							face->plane.source_index);
-						return 0;
-					}
-					boundary.texinfo = (uint32_t)side->texinfo;
-					boundary.surface_flags =
-						world->texinfos[side->texinfo].flags;
-				}
-			}
-			else
-				continue;
-			if (build->output->boundary_count >= build->limits.max_boundaries)
-			{
-				SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OVERFLOW,
+				SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
 					face_index);
 				return 0;
 			}
-			if (!Grow((void **)&build->output->boundaries,
-				&build->boundary_capacity, build->output->boundary_count + 1U,
-				build->limits.max_boundaries,
-				sizeof(*build->output->boundaries)))
+			side = &world->brush_sides[side_index];
+			if (side->plane >= world->plane_count)
 			{
-				SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY,
-					face_index);
+				SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
+					side_index);
 				return 0;
 			}
-			build->output->boundaries[build->output->boundary_count++] = boundary;
-		}
-	}
-	return 1;
-}
-
-static int MarkModelBrushes(const sg_bsp_world_t *world, uint32_t model_index,
-	uint8_t *brush_marks)
-{
-	int32_t *stack = NULL;
-	uint32_t stack_count = 0, stack_capacity = 0;
-	uint8_t *node_marks = NULL;
-	int result = 0;
-
-	node_marks = calloc(world->node_count ? world->node_count : 1U, 1);
-	if (!node_marks || !Grow((void **)&stack, &stack_capacity, 1U,
-		UINT32_MAX, sizeof(*stack)))
-		goto out_of_memory;
-	stack[stack_count++] = world->models[model_index].headnode;
-	while (stack_count)
-	{
-		int32_t child = stack[--stack_count];
-		if (child < 0)
-		{
-			uint32_t leaf_index = (uint32_t)(-1 - child);
-			const sg_bsp_leaf_t *leaf;
-			uint32_t offset;
-			if (leaf_index >= world->leaf_count)
-				goto done;
-			leaf = &world->leaves[leaf_index];
-			if (leaf->first_leaf_brush > world->leaf_brush_count ||
-				leaf->leaf_brush_count > world->leaf_brush_count -
-					leaf->first_leaf_brush)
-				goto done;
-			for (offset = 0; offset < leaf->leaf_brush_count; offset++)
+			Copy3(boundary.surface_normal,
+				world->planes[side->plane].normal.value);
+			boundary.surface_distance = world->planes[side->plane].distance;
+			boundary.brush = build->side_to_brush[side_index];
+			boundary.brush_side = side_index;
+			boundary.flags = SG_CONFIGURATION_BOUNDARY_PHYSICAL;
+			if (boundary.surface_normal[2] >= 0.7f)
+				boundary.flags |= SG_CONFIGURATION_BOUNDARY_SUPPORT_CANDIDATE;
+			if (side->texinfo >= 0)
 			{
-				uint32_t brush = world->leaf_brushes[
-					leaf->first_leaf_brush + offset];
-				if (brush >= world->brush_count)
-					goto done;
-				brush_marks[brush] = 1;
+				if ((uint32_t)side->texinfo >= world->texinfo_count)
+				{
+					SetError(build,
+						SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
+						side_index);
+					return 0;
+				}
+				boundary.texinfo = (uint32_t)side->texinfo;
+				boundary.surface_flags =
+					world->texinfos[side->texinfo].flags;
 			}
-			continue;
 		}
-		if ((uint32_t)child >= world->node_count)
-			goto done;
-		if (node_marks[child])
-			continue;
-		node_marks[child] = 1;
-		if (stack_count > UINT32_MAX - 2U)
-			goto done;
-		if (!Grow((void **)&stack, &stack_capacity, stack_count + 2U,
-				UINT32_MAX, sizeof(*stack)))
-			goto out_of_memory;
-		stack[stack_count++] = world->nodes[child].children[1];
-		stack[stack_count++] = world->nodes[child].children[0];
-	}
-	result = 1;
-	goto done;
-
-out_of_memory:
-	result = -1;
-
-done:
-	free(node_marks);
-	free(stack);
-	return result;
-}
-
-static int BuildHookPolygon(const sg_bsp_world_t *world,
-	const sg_bsp_brush_t *brush, uint32_t target_side,
-	sg_rune_vec3_t **points_out, uint32_t *point_count_out)
-{
-	semantic_constraints_t constraints = { 0 };
-	sg_rune_vec3_t *points = NULL;
-	uint32_t point_count = 0, point_capacity = 0;
-	uint32_t first, second, third, side_offset, axis;
-	float center[3] = { 0, 0, 0 };
-	uint32_t dominant;
-
-	*points_out = NULL;
-	*point_count_out = 0;
-	for (side_offset = 0; side_offset < brush->side_count; side_offset++)
-	{
-		uint32_t side_index = brush->first_side + side_offset;
-		const sg_bsp_brush_side_t *side;
-		const sg_bsp_plane_t *plane;
-		semantic_constraint_t constraint;
-		if (side_index >= world->brush_side_count)
-			goto failure;
-		side = &world->brush_sides[side_index];
-		if (side->plane >= world->plane_count)
-			goto failure;
-		plane = &world->planes[side->plane];
-		memset(&constraint, 0, sizeof(constraint));
-		Copy3(constraint.halfspace.normal, plane->normal.value);
-		constraint.halfspace.distance = plane->distance;
-		if (!AppendConstraint(&constraints, &constraint))
-			goto failure;
-	}
-	for (first = 0; first < constraints.count; first++)
-		for (second = first + 1U; second < constraints.count; second++)
-			for (third = second + 1U; third < constraints.count; third++)
-			{
-				float point[3];
-				double target_normal[3], target_distance;
-				uint32_t existing;
-
-				if (!NormalizeSemanticHalfspaceDouble(
-						&constraints.items[target_side].halfspace, target_normal,
-						&target_distance))
-					goto failure;
-				if (!Intersect3(&constraints.items[first],
-					&constraints.items[second], &constraints.items[third], point) ||
-					!PointInside(point, &constraints) ||
-					fabs((double)point[0] * target_normal[0] +
-						(double)point[1] * target_normal[1] +
-						(double)point[2] * target_normal[2] - target_distance) >
-						PublishedPlaneResidualTolerance(point, target_normal))
-					continue;
-				for (existing = 0; existing < point_count; existing++)
-					if (SamePoint(&points[existing], point))
-						break;
-				if (existing != point_count)
-					continue;
-				if (point_count == UINT32_MAX)
-					goto overflow;
-				if (!Grow((void **)&points, &point_capacity, point_count + 1U,
-					UINT32_MAX, sizeof(*points)))
-					goto failure;
-				Copy3(points[point_count++].value, point);
-			}
-	if (point_count < 3U)
-	{
-		free(points);
-		FreeConstraints(&constraints);
-		return 1;
-	}
-	for (first = 0; first < point_count; first++)
-		for (axis = 0; axis < 3; axis++)
-			center[axis] += points[first].value[axis];
-	for (axis = 0; axis < 3; axis++)
-		center[axis] /= (float)point_count;
-	dominant = DominantAxis(constraints.items[target_side].halfspace.normal);
-	for (first = 1; first < point_count; first++)
-	{
-		sg_rune_vec3_t value = points[first];
-		float angle = FaceAngle(&value, dominant, center);
-		uint32_t insert = first;
-		while (insert && FaceAngle(&points[insert - 1U], dominant, center) > angle)
+		if (!Grow((void **)&output->boundaries, &build->boundary_capacity,
+			output->boundary_count + 1U, build->limits.max_boundaries,
+			sizeof(*output->boundaries)))
 		{
-			points[insert] = points[insert - 1U];
-			insert--;
-		}
-		points[insert] = value;
-	}
-	FreeConstraints(&constraints);
-	*points_out = points;
-	*point_count_out = point_count;
-	return 1;
-
-failure:
-	free(points);
-	FreeConstraints(&constraints);
-	return 0;
-
-overflow:
-	free(points);
-	FreeConstraints(&constraints);
-	return -1;
-}
-
-static int AppendHookSurface(semantic_build_t *build, uint32_t model,
-	uint32_t brush_index, uint32_t side_offset)
-{
-	const sg_bsp_world_t *world = build->authority->world;
-	const sg_bsp_brush_t *brush = &world->brushes[brush_index];
-	uint32_t side_index = brush->first_side + side_offset;
-	const sg_bsp_brush_side_t *side = &world->brush_sides[side_index];
-	const sg_bsp_plane_t *plane = &world->planes[side->plane];
-	sg_rune_vec3_t *points = NULL;
-	uint32_t point_count = 0, vertex, axis;
-	sg_configuration_hook_surface_t *surface;
-
-	{
-		int polygon = BuildHookPolygon(world, brush, side_offset,
-			&points, &point_count);
-		if (polygon <= 0)
-		{
-			SetError(build, polygon < 0 ?
-				SG_CONFIGURATION_SEMANTICS_ERROR_OVERFLOW :
-				SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY, side_index);
+			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OVERFLOW,
+				face_index);
 			return 0;
 		}
+		output->boundaries[output->boundary_count++] = boundary;
 	}
-	if (!point_count)
+	return 1;
+}
+
+/* ---- hook surfaces ------------------------------------------------------ */
+
+typedef struct hook_surface_context_s
+{
+	semantic_build_t *build;
+	uint32_t model;
+} hook_surface_context_t;
+
+static int AppendHookSurface(void *context, uint32_t brush,
+	uint32_t brush_side, const float (*points)[3], uint32_t count)
+{
+	hook_surface_context_t *hook = context;
+	semantic_build_t *build = hook->build;
+	const sg_bsp_world_t *world = build->world;
+	sg_configuration_semantics_t *output = build->output;
+	const sg_bsp_brush_side_t *side;
+	sg_configuration_hook_surface_t *surface;
+	uint32_t vertex, axis;
+
+	if (brush_side >= world->brush_side_count || count < 3U)
 		return 1;
-	if (build->output->hook_surface_count >= build->limits.max_hook_surfaces ||
-		point_count > build->limits.max_hook_vertices -
-			build->output->hook_vertex_count)
+	side = &world->brush_sides[brush_side];
+	if (side->plane >= world->plane_count)
+		return 1;
+	if (!Grow((void **)&output->hook_surfaces, &build->hook_surface_capacity,
+		output->hook_surface_count + 1U, build->limits.max_hook_surfaces,
+		sizeof(*output->hook_surfaces)) ||
+		!Grow((void **)&output->hook_vertices, &build->hook_vertex_capacity,
+		output->hook_vertex_count + count, build->limits.max_hook_vertices,
+		sizeof(*output->hook_vertices)))
 	{
-		free(points);
-		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OVERFLOW, side_index);
+		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OVERFLOW, brush);
 		return 0;
 	}
-	if (!Grow((void **)&build->output->hook_surfaces,
-		&build->hook_surface_capacity, build->output->hook_surface_count + 1U,
-		build->limits.max_hook_surfaces,
-		sizeof(*build->output->hook_surfaces)) ||
-		!Grow((void **)&build->output->hook_vertices,
-		&build->hook_vertex_capacity,
-		build->output->hook_vertex_count + point_count,
-		build->limits.max_hook_vertices, sizeof(*build->output->hook_vertices)))
-	{
-		free(points);
-		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY,
-			side_index);
-		return 0;
-	}
-	surface = &build->output->hook_surfaces[build->output->hook_surface_count];
+	surface = &output->hook_surfaces[output->hook_surface_count];
 	memset(surface, 0, sizeof(*surface));
-	surface->id = build->output->hook_surface_count;
-	surface->model = model;
-	surface->brush = brush_index;
-	surface->brush_side = side_index;
+	surface->id = output->hook_surface_count;
+	surface->model = hook->model;
+	surface->brush = brush;
+	surface->brush_side = brush_side;
 	surface->texinfo = SG_CONFIGURATION_SEMANTICS_INDEX_NONE;
-	Copy3(surface->normal, plane->normal.value);
-	surface->distance = plane->distance;
-	surface->first_vertex = build->output->hook_vertex_count;
-	surface->vertex_count = point_count;
+	Copy3(surface->normal, world->planes[side->plane].normal.value);
+	surface->distance = world->planes[side->plane].distance;
+	surface->first_vertex = output->hook_vertex_count;
+	surface->vertex_count = count;
 	for (axis = 0; axis < 3; axis++)
 	{
 		surface->bounds.mins.value[axis] = INFINITY;
 		surface->bounds.maxs.value[axis] = -INFINITY;
 	}
-	for (vertex = 0; vertex < point_count; vertex++)
+	for (vertex = 0; vertex < count; vertex++)
+	{
+		sg_rune_vec3_t *out = &output->hook_vertices[output->hook_vertex_count +
+			vertex];
+
 		for (axis = 0; axis < 3; axis++)
 		{
-			float value = points[vertex].value[axis];
+			const float value = points[vertex][axis];
+
+			out->value[axis] = value;
 			if (value < surface->bounds.mins.value[axis])
 				surface->bounds.mins.value[axis] = value;
 			if (value > surface->bounds.maxs.value[axis])
 				surface->bounds.maxs.value[axis] = value;
 		}
-	if (side->texinfo >= 0)
+	}
+	if (side->texinfo >= 0 && (uint32_t)side->texinfo < world->texinfo_count)
 	{
-		if ((uint32_t)side->texinfo >= world->texinfo_count)
-		{
-			free(points);
-			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
-				side_index);
-			return 0;
-		}
 		surface->texinfo = (uint32_t)side->texinfo;
 		surface->surface_flags = world->texinfos[side->texinfo].flags;
 	}
@@ -1764,69 +495,90 @@ static int AppendHookSurface(semantic_build_t *build, uint32_t model,
 		surface->flags |= SG_CONFIGURATION_HOOK_SURFACE_SKY;
 	else
 		surface->flags |= SG_CONFIGURATION_HOOK_SURFACE_HOOKABLE;
-	if (model != 0U)
+	if (hook->model != 0U)
 		surface->flags |= SG_CONFIGURATION_HOOK_SURFACE_MOVING_MODEL;
-	memcpy(&build->output->hook_vertices[build->output->hook_vertex_count],
-		points, (size_t)point_count * sizeof(*points));
-	build->output->hook_vertex_count += point_count;
-	build->output->hook_surface_count++;
-	free(points);
+	output->hook_vertex_count += count;
+	output->hook_surface_count++;
+	return 1;
+}
+
+/* Every solid brush of the model, found through its leaves. */
+static int MarkModelBrushes(semantic_build_t *build, int32_t node)
+{
+	const sg_bsp_world_t *world = build->world;
+
+	while (node >= 0)
+	{
+		if ((uint32_t)node >= world->node_count)
+			return 0;
+		if (!MarkModelBrushes(build, world->nodes[node].children[0]))
+			return 0;
+		node = world->nodes[node].children[1];
+	}
+	{
+		const uint32_t leaf = (uint32_t)(-1 - node);
+		const sg_bsp_leaf_t *record;
+		uint32_t offset;
+
+		if (leaf >= world->leaf_count)
+			return 0;
+		record = &world->leaves[leaf];
+		for (offset = 0; offset < record->leaf_brush_count; offset++)
+		{
+			const uint32_t slot = record->first_leaf_brush + offset;
+
+			if (slot >= world->leaf_brush_count ||
+				world->leaf_brushes[slot] >= world->brush_count)
+				return 0;
+			build->brush_marks[world->leaf_brushes[slot]] = 1;
+		}
+	}
 	return 1;
 }
 
 static int BuildHookSurfaces(semantic_build_t *build)
 {
-	const sg_bsp_world_t *world = build->authority->world;
-	uint8_t *brush_marks;
-	uint32_t model;
+	const sg_bsp_world_t *world = build->world;
+	uint32_t model, brush;
 
-	brush_marks = calloc(world->brush_count ? world->brush_count : 1U, 1);
-	if (!brush_marks)
+	build->brush_marks = calloc(world->brush_count ? world->brush_count : 1U,
+		sizeof(*build->brush_marks));
+	if (!build->brush_marks)
 	{
-		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY, 0);
+		SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY, 0U);
 		return 0;
 	}
 	for (model = 0; model < world->model_count; model++)
 	{
-		uint32_t brush;
-		memset(brush_marks, 0, world->brush_count);
-		{
-			int marked = MarkModelBrushes(world, model, brush_marks);
+		hook_surface_context_t context = { build, model };
 
-			if (marked < 0)
-			{
-				free(brush_marks);
-				SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY,
-					model);
-				return 0;
-			}
-			if (!marked)
-			{
-				free(brush_marks);
-				SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
-					model);
-				return 0;
-			}
+		memset(build->brush_marks, 0,
+			(size_t)world->brush_count * sizeof(*build->brush_marks));
+		if (!MarkModelBrushes(build, world->models[model].headnode))
+		{
+			SetError(build, SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE,
+				model);
+			return 0;
 		}
 		for (brush = 0; brush < world->brush_count; brush++)
 		{
-			uint32_t contents = (uint32_t)world->brushes[brush].contents;
-			uint32_t side;
-			if (!brush_marks[brush] || !(contents & (SG_HOST_CONTENTS_SOLID |
-				SG_HOST_CONTENTS_WINDOW | SG_HOST_CONTENTS_MONSTER |
-				SEMANTICS_CONTENTS_DEADMONSTER)))
+			if (!build->brush_marks[brush] ||
+				!(world->brushes[brush].contents & SG_HOST_CONTENTS_SOLID))
 				continue;
-			for (side = 0; side < world->brushes[brush].side_count; side++)
-				if (!AppendHookSurface(build, model, brush, side))
-				{
-					free(brush_marks);
-					return 0;
-				}
+			if (!SG_ConfigurationBrushPolygons(world, brush, AppendHookSurface,
+				&context))
+			{
+				if (build->error.code == SG_CONFIGURATION_SEMANTICS_ERROR_NONE)
+					SetError(build,
+						SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY, brush);
+				return 0;
+			}
 		}
 	}
-	free(brush_marks);
 	return 1;
 }
+
+/* ---- public API --------------------------------------------------------- */
 
 void SG_ConfigurationSemanticsDefaultLimits(
 	sg_configuration_semantics_limits_t *limits_out)
@@ -1850,6 +602,7 @@ int SG_ConfigurationSemanticsBuild(
 {
 	semantic_build_t build;
 	uint32_t cell;
+	int ok = 0;
 
 	if (error_out)
 		memset(error_out, 0, sizeof(*error_out));
@@ -1863,40 +616,39 @@ int SG_ConfigurationSemanticsBuild(
 			error_out->code = SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_ARGUMENT;
 		return 0;
 	}
-	if (!IdentityEqual(&authority->identity, &configuration->identity) ||
-		!ValidateSource(authority, configuration,
-			error_out ? error_out : &(sg_configuration_semantics_error_t){ 0 }))
-	{
-		if (error_out)
-			error_out->code = SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE;
-		return 0;
-	}
 	memset(&build, 0, sizeof(build));
 	build.authority = authority;
+	build.world = authority->world;
 	build.configuration = configuration;
 	build.limits = *limits;
 	build.output = calloc(1, sizeof(*build.output));
-	if (!build.output)
+	if (!build.output || !BuildSideToBrush(&build))
 	{
-		if (error_out)
-			error_out->code = SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY;
-		return 0;
+		SetError(&build, SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY, 0U);
+		goto done;
 	}
 	build.output->identity = configuration->identity;
 	for (cell = 0; cell < configuration->cell_count; cell++)
-		if (!BuildCellRegion(&build, cell))
-			goto failure;
-	if (!BuildBoundaries(&build) || !BuildHookSurfaces(&build))
-		goto failure;
-	*semantics_out = build.output;
-	return 1;
+		if (!AppendRegion(&build, cell) || !AppendBoundaries(&build, cell))
+			goto done;
+	if (!BuildHookSurfaces(&build))
+		goto done;
+	ok = 1;
 
-failure:
-	if (error_out)
-		*error_out = build.error;
-	SG_ConfigurationSemanticsDestroy(build.output);
-	return 0;
+done:
+	free(build.side_to_brush);
+	free(build.brush_marks);
+	if (ok)
+		*semantics_out = build.output;
+	else
+	{
+		SG_ConfigurationSemanticsDestroy(build.output);
+		if (error_out)
+			*error_out = build.error;
+	}
+	return ok;
 }
+
 void SG_ConfigurationSemanticsDestroy(sg_configuration_semantics_t *semantics)
 {
 	if (!semantics)
@@ -1916,14 +668,18 @@ const char *SG_ConfigurationSemanticsErrorString(
 	switch (code)
 	{
 	case SG_CONFIGURATION_SEMANTICS_ERROR_NONE: return "none";
-	case SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_ARGUMENT: return "invalid argument";
-	case SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE: return "invalid source";
-	case SG_CONFIGURATION_SEMANTICS_ERROR_NONFINITE_GEOMETRY: return "nonfinite geometry";
-	case SG_CONFIGURATION_SEMANTICS_ERROR_OVERFLOW: return "representation overflow";
-	case SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY: return "out of memory";
-	case SG_CONFIGURATION_SEMANTICS_ERROR_SOLVER: return "lattice solver failure";
-	case SG_CONFIGURATION_SEMANTICS_ERROR_HOST_DISAGREEMENT: return "host disagreement";
-	default: return "unknown";
+	case SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_ARGUMENT:
+		return "invalid argument";
+	case SG_CONFIGURATION_SEMANTICS_ERROR_INVALID_SOURCE:
+		return "invalid source";
+	case SG_CONFIGURATION_SEMANTICS_ERROR_NONFINITE_GEOMETRY:
+		return "non-finite geometry";
+	case SG_CONFIGURATION_SEMANTICS_ERROR_OVERFLOW: return "overflow";
+	case SG_CONFIGURATION_SEMANTICS_ERROR_OUT_OF_MEMORY:
+		return "out of memory";
+	case SG_CONFIGURATION_SEMANTICS_ERROR_SOLVER: return "solver";
+	case SG_CONFIGURATION_SEMANTICS_ERROR_HOST_DISAGREEMENT:
+		return "host disagreement";
+	default: return "unknown configuration semantics error";
 	}
 }
-

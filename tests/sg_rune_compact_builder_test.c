@@ -8,7 +8,6 @@
 
 #include "slipgate/sg_rune_compact_builder.h"
 #include "slipgate/sg_rune_compact_builder_owner.h"
-#include "slipgate/sg_configuration_audit.h"
 #include "slipgate/sg_host_law_publication_private.h"
 #include "slipgate/sg_rune_source_authority.h"
 
@@ -33,7 +32,6 @@ static int fail_final_read;
 static int configuration_default_calls;
 static int semantics_default_calls;
 static int visibility_default_calls;
-static int configuration_audit_calls;
 static int entity_audit_calls;
 static int visibility_audit_calls;
 static sg_host_law_construction_view_t host_view;
@@ -109,7 +107,6 @@ typedef enum dependency_failure_e
 	FAILURE_NONE = 0,
 	FAILURE_BSP_LOAD,
 	FAILURE_CONFIGURATION_BUILD,
-	FAILURE_CONFIGURATION_AUDIT,
 	FAILURE_SEMANTICS_BUILD,
 	FAILURE_ENTITY_BUILD,
 	FAILURE_ENTITY_AUDIT,
@@ -954,21 +951,6 @@ int SG_ConfigurationBuild(const sg_host_collision_authority_t *authority,
 	return 1;
 }
 
-int SG_ConfigurationAudit(const sg_host_collision_authority_t *authority,
-	const sg_configuration_space_t *space,
-	sg_configuration_audit_result_t *result_out)
-{
-	configuration_audit_calls++;
-	(void)authority;
-	(void)space;
-	if (dependency_failure == FAILURE_CONFIGURATION_AUDIT) {
-		result_out->code = SG_CONFIGURATION_AUDIT_OUT_OF_MEMORY;
-		return 0;
-	}
-	result_out->code = SG_CONFIGURATION_AUDIT_OK;
-	return 1;
-}
-
 void SG_ConfigurationDestroy(sg_configuration_space_t *space)
 {
 	free(space);
@@ -1662,7 +1644,6 @@ static void TestDefaultsBuildFromOverrideWithInhibition(void)
 	configuration_default_calls = 0;
 	semantics_default_calls = 0;
 	visibility_default_calls = 0;
-	configuration_audit_calls = 0;
 	entity_audit_calls = 0;
 	visibility_audit_calls = 0;
 	pmove_evaluator_acquire_calls = 0;
@@ -1674,7 +1655,6 @@ static void TestDefaultsBuildFromOverrideWithInhibition(void)
 	CHECK(configuration_default_calls == 1);
 	CHECK(semantics_default_calls == 1);
 	CHECK(visibility_default_calls == 1);
-	CHECK(configuration_audit_calls == 0);
 	CHECK(entity_audit_calls == 0);
 	CHECK(visibility_audit_calls == 0);
 	CHECK(read_calls == 2);
@@ -2817,13 +2797,11 @@ static void TestDevelopmentAuditPathIsExplicit(void)
 	SetSourceAuthority();
 	read_calls = 0;
 	fail_final_read = 0;
-	configuration_audit_calls = 0;
 	entity_audit_calls = 0;
 	visibility_audit_calls = 0;
 	CHECK(SG_RuneCompactBuilderBuildDevelopmentAudit(&input, &builder,
 		&error));
 	CHECK(builder != NULL);
-	CHECK(configuration_audit_calls == 1);
 	CHECK(entity_audit_calls == 1);
 	CHECK(visibility_audit_calls == 1);
 	SG_RuneCompactBuilderDestroy(builder);
@@ -2920,7 +2898,6 @@ static void TestDependencyAllocationFailuresRemainOom(void)
 	const dependency_failure_t failures_to_try[] = {
 		FAILURE_BSP_LOAD,
 		FAILURE_CONFIGURATION_BUILD,
-		FAILURE_CONFIGURATION_AUDIT,
 		FAILURE_SEMANTICS_BUILD,
 		FAILURE_ENTITY_BUILD,
 		FAILURE_ENTITY_AUDIT,

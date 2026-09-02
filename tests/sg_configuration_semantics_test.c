@@ -5,7 +5,6 @@
 #include <string.h>
 
 #include "../slipgate/sg_configuration_semantics.h"
-#include "../slipgate/sg_configuration_audit.h"
 
 static int failures;
 
