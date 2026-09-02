@@ -103,7 +103,7 @@ replacement runs on a real map.
   relations, chooses defend posts (the floor cells whose lines cover the
   most of a flag's approaches, reachable from the flag, the second where
   the first leaves gaps), and builds the exposure surcharge for a base
-  (every cell its posts and flag can fire into costs two seconds more).
+  (every cell entered under its posts' or flag's lines costs a quarter second more, so a 300-unit crossing under fire costs about as much as a three-second detour).
 - `sg_bot_frame` (game): the driver. The team pass assigns roles once per
   frame per team (recoverers nearest a taken flag, defenders when there
   are enough of us, an escort for the carrier, the rest attack; a held

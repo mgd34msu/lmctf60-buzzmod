@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "sg_cvars.h"
 #include "sg_host_law_owner.h"
 
 #define POST_SLOTS 2
@@ -416,6 +417,10 @@ retry:
 			int other;
 
 			if (!(cost >= 0.0f && cost <= POST_REACH_SECONDS) ||
+				!(sg_rune_level.artifact.complex.cells[cell].semantics &
+					SG_RUNE_CX_CELL_SUPPORTED) ||
+				(sg_rune_level.artifact.complex.cells[cell].semantics &
+					(SG_RUNE_CX_CELL_WATER | SG_RUNE_CX_CELL_HAZARD)) ||
 				Flat(centre, flag_centre) < POST_MIN_FROM_FLAG || covered[cell] == 2U)
 				continue;
 			for (other = 0; other < slot; other++)
@@ -450,6 +455,14 @@ retry:
 			}
 		}
 		set->post[slot] = best;
+		if (sg_cv.debug && sg_cv.debug->value)
+			gi.dprintf("SGPOST flag cell %u post %d: cell %u at (%.0f %.0f %.0f) "
+				"coverage %.1f, %.1f s from the flag\n", (unsigned int)flag_cell,
+				slot, (unsigned int)best,
+				sg_rune_level.router.cell_center[best * 3U],
+				sg_rune_level.router.cell_center[best * 3U + 1U],
+				sg_rune_level.router.cell_center[best * 3U + 2U], best_score,
+				SG_RuneLevelField(best)->cost[SG_RUNE_FIELD_STATE(flag_cell, 0)]);
 		memcpy(set->facing[slot], best_centre, sizeof(set->facing[slot]));
 		MarkCovered(best, covered);
 		set->valid = slot + 1;
@@ -497,7 +510,7 @@ int SG_RuneLevelDefendPost(uint32_t flag_cell, int slot, float point_out[3],
 
 /* ---- exposure ------------------------------------------------------------------- */
 
-#define EXPOSURE_SECONDS 2.0f      /* a cell under a defender's line costs this */
+#define EXPOSURE_SECONDS 0.25f     /* each cell entered under a defender's line costs this */
 #define EXPOSURE_SETS 2
 
 typedef struct exposure_s

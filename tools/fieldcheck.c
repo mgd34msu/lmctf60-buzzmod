@@ -123,6 +123,20 @@ int main(int argc, char **argv)
 		&violation);
 	printf("from (%g %g %g): cell %u violation %g\n", from[0], from[1], from[2],
 		from_cell, violation);
+	/* "c<N>" as the destination x names cell N directly. */
+	if (argv[5][0] == 'c' && argv[5][1] >= '0' && argv[5][1] <= '9')
+	{
+		to_cell = (uint32_t)strtoul(argv[5] + 1, NULL, 10);
+		if (to_cell < artifact.complex.cell_count)
+		{
+			const sg_rune_cx_cell_t *c = &artifact.complex.cells[to_cell];
+
+			to[0] = (float)(c->bounds.mins.value[0] + c->bounds.maxs.value[0]) / 16.0f;
+			to[1] = (float)(c->bounds.mins.value[1] + c->bounds.maxs.value[1]) / 16.0f;
+			to[2] = (float)c->bounds.mins.value[2] / 8.0f + 1.0f;
+		}
+	}
+	else
 	to_cell = SG_RuneLocate(&locator, to, SG_RUNE_MOVE_STANDING, 8.0f,
 		&violation);
 	printf("to   (%g %g %g): cell %u violation %g\n", to[0], to[1], to[2],
