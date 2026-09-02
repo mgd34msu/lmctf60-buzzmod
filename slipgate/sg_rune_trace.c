@@ -91,6 +91,10 @@ static void ClipBrush(work_t *w, uint32_t brush_index)
 		w->trace.startsolid = 1;
 		if (!ends_out)
 			w->trace.allsolid = 1;
+		/* Name the brush the start sits in: a caller asking why a pose is
+		 * solid gets the answer. */
+		w->trace.brush = brush_index;
+		w->trace.contents = brush->contents;
 		return;
 	}
 	if (enter < leave && enter > -1.0f && enter < w->trace.fraction)

@@ -45,6 +45,23 @@ int main(int argc, char **argv)
 		SG_RUNE_MASK_PLAYER_SOLID, &trace);
 	printf("standing hull at the point: startsolid %d allsolid %d (brush %u contents 0x%x)\n",
 		trace.startsolid, trace.allsolid, trace.brush, trace.contents);
+	if (trace.startsolid && trace.brush < bsp.brush_count)
+	{
+		const sg_rune_bsp_brush_t *br = &bsp.brushes[trace.brush];
+		uint32_t k;
+
+		printf("  solid brush %u contents 0x%x:\n", trace.brush, br->contents);
+		for (k = 0; k < br->side_count; k++)
+		{
+			const sg_rune_bsp_side_t *side = &bsp.sides[br->first_side + k];
+			const sg_rune_bsp_plane_t *pl = &bsp.planes[side->plane];
+
+			printf("    side %u: (%.3f %.3f %.3f) d=%.1f tex %s flags 0x%x\n", k,
+				pl->normal[0], pl->normal[1], pl->normal[2], pl->distance,
+				side->texinfo >= 0 && (uint32_t)side->texinfo < bsp.texinfo_count ? bsp.texinfos[side->texinfo].texture : "-",
+				side->texinfo >= 0 && (uint32_t)side->texinfo < bsp.texinfo_count ? bsp.texinfos[side->texinfo].flags : 0);
+		}
+	}
 	printf("point contents 0x%x\n", SG_RuneTraceContents(&bsp, 0U, NULL, p));
 	SG_RuneBspFree(&bsp);
 	return 0;

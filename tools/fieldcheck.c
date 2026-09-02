@@ -86,9 +86,9 @@ int main(int argc, char **argv)
 	double t0, t1, t2, t3;
 	sg_rune_artifact_status_t status;
 
-	if (argc != 8 && argc != 2 && argc != 3 && argc != 9)
+	if (argc != 8 && argc != 2 && argc != 3 && argc != 9 && argc != 7)
 	{
-		fprintf(stderr, "usage: fieldcheck MAP.rune [x y z x y z | x y z c<cell> 0 0 | d<cell> | f x y z vx vy vz]\n");
+		fprintf(stderr, "usage: fieldcheck MAP.rune [x y z x y z | x y z c<cell> 0 0 | d<cell> | f x y z vx vy vz | n x y z r]\n");
 		return 2;
 	}
 	if (argc == 2)
@@ -139,6 +139,36 @@ int main(int argc, char **argv)
 			(unsigned)artifact.complex.portal_count,
 			(unsigned)artifact.movement.capability_count,
 			(unsigned long)artifact.image_size);
+		SG_RuneArtifactRelease(&artifact);
+		return 0;
+	}
+	/* "n x y z r": every cell whose box comes within r of the point. */
+	if (argc == 7 && argv[2][0] == 'n' && argv[2][1] == 0)
+	{
+		double p[3] = { atof(argv[3]), atof(argv[4]), atof(argv[5]) }, r = atof(argv[6]);
+		uint32_t i;
+
+		status = SG_RuneArtifactLoadFile(argv[1], &artifact, &os_error, &fault);
+		if (status != SG_RUNE_ARTIFACT_OK)
+		{
+			fprintf(stderr, "load: %s\n", SG_RuneArtifactStatusString(status));
+			return 1;
+		}
+		for (i = 0; i < artifact.complex.cell_count; i++)
+		{
+			const sg_rune_cx_cell_t *c = &artifact.complex.cells[i];
+			int k, near = 1;
+
+			for (k = 0; k < 3; k++)
+				if (p[k] < c->bounds.mins.value[k] / 8.0 - r || p[k] > c->bounds.maxs.value[k] / 8.0 + r)
+					near = 0;
+			if (near)
+				printf("cell %u: z %g..%g xy %g..%g %g..%g stances %u semantics 0x%x leaf %u contents 0x%x\n", i,
+					(double)c->bounds.mins.value[2] / 8.0, (double)c->bounds.maxs.value[2] / 8.0,
+					(double)c->bounds.mins.value[0] / 8.0, (double)c->bounds.maxs.value[0] / 8.0,
+					(double)c->bounds.mins.value[1] / 8.0, (double)c->bounds.maxs.value[1] / 8.0,
+					c->valid_stances, c->semantics, (unsigned)c->source.leaf, (unsigned)c->contents);
+		}
 		SG_RuneArtifactRelease(&artifact);
 		return 0;
 	}

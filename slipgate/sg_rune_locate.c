@@ -30,6 +30,18 @@ float SG_RuneCellViolation(const sg_rune_artifact_t *artifact, uint32_t cell,
 	if (cell >= cx->cell_count)
 		return INFINITY;
 	record = &cx->cells[cell];
+	/* The box first: a cell with few facets is an unbounded slab between
+	 * them, and a point far along that slab is not inside the cell. */
+	for (slot = 0U; slot < 3U; slot++)
+	{
+		float low = (float)record->bounds.mins.value[slot] / (float)SG_RUNE_CX_Q8_ONE;
+		float high = (float)record->bounds.maxs.value[slot] / (float)SG_RUNE_CX_Q8_ONE;
+
+		if (low - origin[slot] > worst)
+			worst = low - origin[slot];
+		if (origin[slot] - high > worst)
+			worst = origin[slot] - high;
+	}
 	for (slot = 0U; slot < record->incidences.count; slot++)
 	{
 		const sg_rune_cx_incidence_t *incidence =
