@@ -880,7 +880,7 @@ static qboolean HangDropSafe(const sg_bot_t *bot, const edict_t *e)
 	uint32_t k;
 
 	if (bot->cell == SG_RUNE_CX_INDEX_NONE)
-		return true;
+		return false;   /* nowhere known: not a place to let go */
 	/* A body the rope holds against a ceiling sits at the edge of the
 	 * carved space, where the trace cannot fly: the drop is judged from
 	 * the first point below it that it can fly from. */
@@ -1581,9 +1581,14 @@ grounded:
 		return;
 	}
 	bot->flight_capability = SG_RUNE_CX_INDEX_NONE;
-	bot->flight_from = bot->cell;
-	bot->rescue = 0U;
-	bot->rescue_spent = 0U;
+	/* In lava the rope out is the rescue: it stays set for the fire; on a
+	 * floor the fall is over and the count starts again. */
+	if (!(sg_rune_level.artifact.complex.cells[bot->cell].semantics & SG_RUNE_CX_CELL_HAZARD))
+	{
+		bot->flight_from = bot->cell;
+		bot->rescue = 0U;
+		bot->rescue_spent = 0U;
+	}
 	/* Into or out of the enemy base, the route keeps out of the lines the
 	 * enemy's defenders hold where it can. */
 	field = NULL;
@@ -2241,15 +2246,14 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 		 * live check catches a gross deviation, not a marginal one, so it
 		 * runs at the speed the body has. */
 		/* On the floor there is nothing to land: let go.  In the air the
-		 * arc may glance off a wall or a lip on the way down; what matters
-		 * is that it lands on a floor, so clips are allowed here (the
-		 * record's own arc was the clean one). */
+		 * arc must be clean: a glance off a lip sends the body where no
+		 * trace follows, and on this map that is the lava. */
 		if (e->client->hookstate == 2 && bot->cell != SG_RUNE_CX_INDEX_NONE &&
 			!e->groundentity)
 		{
 			let_go = SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.complex,
 				&sg_rune_level.artifact.law, bot->cell, e->s.origin, e->velocity,
-				RELEASE_LIVE_TOLERANCE, 0, &live) ? true : false;
+				RELEASE_LIVE_TOLERANCE, 1, &live) ? true : false;
 			/* A body the rope presses against a wall or a lip sits at the
 			 * edge of the carved space, and the live trace cannot fly from
 			 * there at all.  Then the record's own checked arc is the
