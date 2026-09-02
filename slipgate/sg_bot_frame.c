@@ -570,6 +570,7 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 			VectorCopy(bot->flight_landing, bot->step.target);
 			VectorCopy(record->anchor, bot->step.hook_point);
 			bot->step.hook_point_present = 1U;
+			bot->step.hook_release_distance = record->parameter;
 			return;
 		}
 	}

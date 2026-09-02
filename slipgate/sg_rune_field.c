@@ -494,6 +494,8 @@ static void Fill(const sg_rune_router_t *router, uint32_t capability,
 				router->artifact->movement.capabilities[capability].anchor,
 				sizeof(step_out->hook_point));
 			step_out->hook_point_present = 1U;
+			step_out->hook_release_distance =
+				router->artifact->movement.capabilities[capability].parameter;
 		}
 	}
 	else

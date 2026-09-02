@@ -77,6 +77,7 @@ typedef struct sg_rune_step_s
 	float target[3];          /* portal centre, or the destination point */
 	float cost_to_go;
 	float hook_point[3];
+	float hook_release_distance;  /* eye-to-bite distance to let go at */
 } sg_rune_step_t;
 
 /* The step from (cell, crouching) toward the field's destination; point is

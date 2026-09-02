@@ -466,6 +466,7 @@ int SG_RuneArtifactValid(const sg_rune_artifact_t *artifact,
 			!Finite(capability->launch_velocity[1]) ||
 			!Finite(capability->launch_velocity[2]) ||
 			!Finite(capability->seconds) || capability->seconds < 0.0f ||
+			!Finite(capability->parameter) || capability->parameter < 0.0f ||
 			capability->kind >= SG_RUNE_MOVE_KIND_COUNT ||
 			capability->profile >= move->profile_count ||
 			capability->reserved != 0U ||

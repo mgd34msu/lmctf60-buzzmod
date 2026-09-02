@@ -108,20 +108,25 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 		float flat = sqrtf(dx * dx + dy * dy);
 		float to_bite = INFINITY;
 
+		float let_go = HOOK_RELEASE_AT_BITE;
+
 		if (step->hook_point_present)
 		{
 			float bx = step->hook_point[0] - body->origin[0];
 			float by = step->hook_point[1] - body->origin[1];
-			float bz = step->hook_point[2] - body->origin[2];
+			float bz = step->hook_point[2] - (body->origin[2] + body->view_height);
 
 			to_bite = sqrtf(bx * bx + by * by + bz * bz);
+			if (step->hook_release_distance > 0.0f)
+				let_go = step->hook_release_distance + HOOK_RELEASE_BELOW;
 		}
-		/* Let go once the ride has the body at the landing's height, or
-		 * over the landing and nearly there, or about to meet the bite. */
-		if (!have_direction || body->origin[2] >= step->target[2] - HOOK_RELEASE_BELOW ||
+		/* Let go where the record's flight was traced from (the eye that
+		 * far from the bite), or once the ride has the body at the
+		 * landing's height, or over the landing and nearly there. */
+		if (!have_direction || to_bite <= let_go ||
+			body->origin[2] >= step->target[2] - HOOK_RELEASE_BELOW ||
 			(flat < HOOK_RELEASE_FLAT &&
-			 body->origin[2] >= step->target[2] - 6.0f * HOOK_RELEASE_BELOW) ||
-			to_bite < HOOK_RELEASE_AT_BITE)
+			 body->origin[2] >= step->target[2] - 6.0f * HOOK_RELEASE_BELOW))
 		{
 			command->hook_release = 1U;
 			command->status = SG_TACTIC_COMMAND_MOVE;

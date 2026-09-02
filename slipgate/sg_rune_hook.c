@@ -171,7 +171,27 @@ typedef struct landing_s
 	float seconds;
 	float bite[3];
 	float velocity[3];
+	float release_distance;
 } landing_t;
+
+/* The host's pull: full speed beyond 120 units from the bite, then slower
+ * by bands, to a stop within ten; gravity is off within fifty. */
+static float PullSpeed(float distance)
+{
+	if (distance > 120.0f)
+		return (float)SG_HOST_HOOK_PULL_SPEED;
+	if (distance > 100.0f)
+		return distance * 5.0f;
+	if (distance > 80.0f)
+		return distance * 4.0f;
+	if (distance > 40.0f)
+		return distance * 3.0f;
+	if (distance > 20.0f)
+		return distance * 2.0f;
+	if (distance > 10.0f)
+		return distance;
+	return 0.0f;
+}
 
 static int RidesFromCell(hook_build_t *build, uint32_t cell,
 	landing_t *landings, uint32_t *landing_count)
@@ -269,12 +289,24 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 			uint32_t k;
 			float seconds;
 
+			float pull[3], remaining, speed, release_distance;
+
 			release[0] = stand[0] + direction[0] * clear * fractions[f];
 			release[1] = stand[1] + direction[1] * clear * fractions[f];
 			release[2] = stand[2] + direction[2] * clear * fractions[f];
-			velocity[0] = direction[0] * (float)SG_HOST_HOOK_PULL_SPEED;
-			velocity[1] = direction[1] * (float)SG_HOST_HOOK_PULL_SPEED;
-			velocity[2] = direction[2] * (float)SG_HOST_HOOK_PULL_SPEED;
+			/* The pull at the release point: from the eye toward the bite,
+			 * at the host's speed for that distance. */
+			pull[0] = bite->point[0] - release[0];
+			pull[1] = bite->point[1] - release[1];
+			pull[2] = bite->point[2] - (release[2] + EYE_HEIGHT);
+			remaining = sqrtf(pull[0] * pull[0] + pull[1] * pull[1] + pull[2] * pull[2]);
+			speed = PullSpeed(remaining);
+			if (remaining < 1.0f || speed <= 0.0f)
+				continue;
+			release_distance = remaining;
+			velocity[0] = pull[0] / remaining * speed;
+			velocity[1] = pull[1] / remaining * speed;
+			velocity[2] = pull[2] / remaining * speed;
 			start = SG_RuneLocate(&build->locator, release, 0U, 8.0f, NULL);
 			if (start == SG_RUNE_CX_INDEX_NONE)
 				continue;
@@ -317,6 +349,7 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 			slot->cell = flight.landing_cell;
 			slot->seconds = seconds;
 			memcpy(slot->bite, bite->point, sizeof(slot->bite));
+			slot->release_distance = release_distance;
 			memcpy(slot->velocity, velocity, sizeof(slot->velocity));
 		}
 	}
@@ -370,7 +403,8 @@ int SG_RuneHookEmit(const sg_bsp_world_t *bsp,
 			goto done;
 		for (k = 0U; k < landing_count; k++)
 			if (!SG_RuneMoveAppendHook(movement, cell, landings[k].cell, stances,
-				landings[k].bite, landings[k].velocity, landings[k].seconds))
+				landings[k].bite, landings[k].velocity, landings[k].release_distance,
+				landings[k].seconds))
 				goto done;
 		if (landing_count)
 		{

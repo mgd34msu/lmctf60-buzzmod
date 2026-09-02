@@ -72,6 +72,7 @@ typedef struct sg_rune_move_capability_s
 	float launch_velocity[3];
 	float anchor[3];          /* hook: the bite point; lift: unused */
 	float seconds;
+	float parameter;          /* hook: eye-to-bite distance at release; else 0 */
 } sg_rune_move_capability_t;
 
 typedef struct sg_rune_move_table_s
@@ -159,7 +160,7 @@ void SG_RuneMoveGate(sg_rune_move_store_t *store, const uint32_t *cells,
  * destination. */
 int SG_RuneMoveAppendHook(sg_rune_move_store_t *store, uint32_t cell,
 	uint32_t destination, uint8_t stances, const float anchor[3],
-	const float release_velocity[3], float seconds);
+	const float release_velocity[3], float release_distance, float seconds);
 
 /* Launch speeds the flights are traced with. */
 float SG_RuneMoveJumpVelocity(const sg_rune_move_store_t *store);
