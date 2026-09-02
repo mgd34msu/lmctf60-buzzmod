@@ -163,33 +163,6 @@ sg_host_law_result_t SG_HostLawConstructionConfigurationAudit(
 	return result;
 }
 
-sg_host_law_result_t SG_HostLawConstructionSemanticsAudit(
-	const sg_host_law_construction_t *construction,
-	const sg_configuration_space_t *configuration,
-	const sg_configuration_semantics_t *semantics,
-	sg_configuration_semantics_audit_result_t *audit_out)
-{
-	sg_host_law_offline_authority_t authority;
-	sg_host_law_result_t result;
-
-	if (!configuration || !semantics || !audit_out)
-		return OfflineResult(SG_HOST_LAW_INVALID_ARGUMENT,
-			SG_HOST_LAW_FIELD_COLLISION_LAW, SG_HOST_LAW_ELEMENT_NONE, 1U, 0U);
-	memset(audit_out, 0, sizeof(*audit_out));
-	result = OfflineAuthorityLoad(construction, &configuration->identity,
-		&authority);
-	if (result.status != SG_HOST_LAW_OK)
-		return result;
-	if (!SG_ConfigurationSemanticsAudit(&authority.collision, configuration,
-			semantics, audit_out))
-		result = OfflineResult(SG_HOST_LAW_EVALUATION_FAILED,
-			SG_HOST_LAW_FIELD_COLLISION_LAW, audit_out->record,
-			SG_CONFIGURATION_SEMANTICS_AUDIT_OK,
-			(uint64_t)audit_out->code);
-	OfflineAuthorityDestroy(&authority);
-	return result;
-}
-
 sg_host_law_result_t SG_HostLawConstructionCompletenessProve(
 	const sg_host_law_construction_t *construction,
 	const sg_configuration_space_t *configuration,

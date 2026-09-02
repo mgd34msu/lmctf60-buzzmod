@@ -39,12 +39,19 @@ typedef struct sg_rune_compact_builder_error_s
 	uint64_t observed;
 } sg_rune_compact_builder_error_t;
 
+/* Construction progress: phase name, and done/total within it (0/0 when a
+ * phase only starts). */
+typedef void (*sg_rune_compact_builder_progress_fn)(void *context,
+	const char *phase, uint32_t done, uint32_t total);
+
 typedef struct sg_rune_compact_builder_input_s
 {
 	const sg_host_law_construction_t *construction;
 	const sg_configuration_limits_t *configuration_limits;
 	const sg_configuration_semantics_limits_t *semantics_limits;
 	const sg_static_visibility_limits_t *visibility_limits;
+	sg_rune_compact_builder_progress_fn progress;
+	void *progress_context;
 } sg_rune_compact_builder_input_t;
 
 /* Arrays are borrowed from the builder and remain valid until destroy. */

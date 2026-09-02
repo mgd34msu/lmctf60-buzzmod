@@ -195,8 +195,17 @@ typedef struct sg_configuration_space_s
 } sg_configuration_space_t;
 
 void SG_ConfigurationDefaultLimits(sg_configuration_limits_t *limits_out);
+/* Carve progress: leaves carved so far over all stances' leaves. */
+typedef void (*sg_configuration_progress_fn)(void *context, uint32_t done,
+	uint32_t total);
+
 int SG_ConfigurationBuild(const sg_host_collision_authority_t *authority,
 	const sg_configuration_limits_t *limits,
+	sg_configuration_space_t **space_out, sg_configuration_error_t *error_out);
+int SG_ConfigurationBuildWithProgress(
+	const sg_host_collision_authority_t *authority,
+	const sg_configuration_limits_t *limits,
+	sg_configuration_progress_fn progress, void *progress_context,
 	sg_configuration_space_t **space_out, sg_configuration_error_t *error_out);
 void SG_ConfigurationDestroy(sg_configuration_space_t *space);
 const char *SG_ConfigurationErrorString(sg_configuration_error_code_t code);

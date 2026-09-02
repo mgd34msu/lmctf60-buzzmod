@@ -73,6 +73,11 @@ typedef struct config_build_s
 	config_topology_portal_t *topology_portals;
 	uint32_t topology_portal_count;
 	uint32_t topology_portal_capacity;
+	sg_configuration_progress_fn progress;
+	void *progress_context;
+	uint32_t leaves_done;
+	uint32_t leaves_total;
+	uint32_t last_percent;
 	sg_configuration_error_t error;
 } config_build_t;
 
@@ -2385,6 +2390,24 @@ failure:
 	return 0;
 }
 
+/* One leaf carved.  Report whole-percent changes over every stance's leaves
+ * so a long carve is visibly moving. */
+static void ReportLeaf(config_build_t *build)
+{
+	uint32_t percent;
+
+	build->leaves_done++;
+	if (build->progress == NULL || build->leaves_total == 0U)
+		return;
+	percent = (uint32_t)(((uint64_t)build->leaves_done * 100U) /
+		build->leaves_total);
+	if (percent == build->last_percent)
+		return;
+	build->last_percent = percent;
+	build->progress(build->progress_context, build->leaves_done,
+		build->leaves_total);
+}
+
 static int BuildBsp(config_build_t *build, config_poly_t *poly,
 	sg_rune_stance_t stance, uint32_t region, int32_t child, uint32_t *node_out)
 {
@@ -2397,8 +2420,11 @@ static int BuildBsp(config_build_t *build, config_poly_t *poly,
 	if (child < 0)
 	{
 		uint32_t leaf = (uint32_t)(-1 - child);
+		int carved = CarveBrushes(build, poly, stance, leaf, region, 0U,
+			node_out);
 
-		return CarveBrushes(build, poly, stance, leaf, region, 0U, node_out);
+		ReportLeaf(build);
+		return carved;
 	}
 	plane = BspPlane(world, world->nodes[(uint32_t)child].plane);
 	split = SplitPoly(build, poly, &plane, &front, &back);
@@ -4208,6 +4234,16 @@ int SG_ConfigurationBuild(const sg_host_collision_authority_t *authority,
 	const sg_configuration_limits_t *limits,
 	sg_configuration_space_t **space_out, sg_configuration_error_t *error_out)
 {
+	return SG_ConfigurationBuildWithProgress(authority, limits, NULL, NULL,
+		space_out, error_out);
+}
+
+int SG_ConfigurationBuildWithProgress(
+	const sg_host_collision_authority_t *authority,
+	const sg_configuration_limits_t *limits,
+	sg_configuration_progress_fn progress, void *progress_context,
+	sg_configuration_space_t **space_out, sg_configuration_error_t *error_out)
+{
 	config_build_t build;
 	sg_configuration_limits_t defaults;
 	config_poly_t domain;
@@ -4238,6 +4274,10 @@ int SG_ConfigurationBuild(const sg_host_collision_authority_t *authority,
 		return 0;
 	}
 	build.authority = authority;
+	build.progress = progress;
+	build.progress_context = progress_context;
+	build.leaves_total = (uint32_t)SG_RUNE_STANCE_COUNT *
+		authority->world->leaf_count;
 	build.error.source_index = SG_CONFIGURATION_INDEX_NONE;
 	build.space = calloc(1, sizeof(*build.space));
 	if (!build.space)

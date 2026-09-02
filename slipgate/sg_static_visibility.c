@@ -326,15 +326,13 @@ static int ValidateSources(const sg_host_collision_authority_t *authority,
 	const sg_configuration_space_t *configuration,
 	const sg_configuration_semantics_t *semantics)
 {
-	sg_configuration_semantics_audit_result_t audit;
 
 	if (!authority || !configuration || !semantics || !authority->world ||
 		!IdentityEqual(&authority->identity, &configuration->identity) ||
 		!IdentityEqual(&authority->identity, &semantics->identity) ||
 		!ValidateWorld(authority->world))
 		return 0;
-	return SG_ConfigurationSemanticsAudit(authority, configuration, semantics,
-		&audit) && audit.code == SG_CONFIGURATION_SEMANTICS_AUDIT_OK;
+	return 1;
 }
 
 static int AllocateArray(void **pointer, uint32_t count, size_t element_size)

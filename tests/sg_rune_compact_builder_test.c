@@ -34,7 +34,6 @@ static int configuration_default_calls;
 static int semantics_default_calls;
 static int visibility_default_calls;
 static int configuration_audit_calls;
-static int semantics_audit_calls;
 static int entity_audit_calls;
 static int visibility_audit_calls;
 static sg_host_law_construction_view_t host_view;
@@ -112,7 +111,6 @@ typedef enum dependency_failure_e
 	FAILURE_CONFIGURATION_BUILD,
 	FAILURE_CONFIGURATION_AUDIT,
 	FAILURE_SEMANTICS_BUILD,
-	FAILURE_SEMANTICS_AUDIT,
 	FAILURE_ENTITY_BUILD,
 	FAILURE_ENTITY_AUDIT,
 	FAILURE_VISIBILITY_BUILD,
@@ -925,6 +923,17 @@ void SG_ConfigurationDefaultLimits(sg_configuration_limits_t *limits_out)
 	memset(limits_out, UINT8_MAX, sizeof(*limits_out));
 }
 
+int SG_ConfigurationBuildWithProgress(
+	const sg_host_collision_authority_t *authority,
+	const sg_configuration_limits_t *limits,
+	sg_configuration_progress_fn progress, void *progress_context,
+	sg_configuration_space_t **space_out, sg_configuration_error_t *error_out)
+{
+	(void)progress;
+	(void)progress_context;
+	return SG_ConfigurationBuild(authority, limits, space_out, error_out);
+}
+
 int SG_ConfigurationBuild(const sg_host_collision_authority_t *authority,
 	const sg_configuration_limits_t *limits,
 	sg_configuration_space_t **space_out, sg_configuration_error_t *error_out)
@@ -993,25 +1002,6 @@ int SG_ConfigurationSemanticsBuild(
 		return 0;
 	(*semantics_out)->identity = configuration->identity;
 	(*semantics_out)->region_count = 1U;
-	return 1;
-}
-
-int SG_ConfigurationSemanticsAudit(
-	const sg_host_collision_authority_t *authority,
-	const sg_configuration_space_t *configuration,
-	const sg_configuration_semantics_t *semantics,
-	sg_configuration_semantics_audit_result_t *result_out)
-{
-	semantics_audit_calls++;
-	(void)authority;
-	(void)configuration;
-	(void)semantics;
-	if (dependency_failure == FAILURE_SEMANTICS_AUDIT) {
-		result_out->code =
-			SG_CONFIGURATION_SEMANTICS_AUDIT_OUT_OF_MEMORY;
-		return 0;
-	}
-	result_out->code = SG_CONFIGURATION_SEMANTICS_AUDIT_OK;
 	return 1;
 }
 
@@ -1673,7 +1663,6 @@ static void TestDefaultsBuildFromOverrideWithInhibition(void)
 	semantics_default_calls = 0;
 	visibility_default_calls = 0;
 	configuration_audit_calls = 0;
-	semantics_audit_calls = 0;
 	entity_audit_calls = 0;
 	visibility_audit_calls = 0;
 	pmove_evaluator_acquire_calls = 0;
@@ -1686,7 +1675,6 @@ static void TestDefaultsBuildFromOverrideWithInhibition(void)
 	CHECK(semantics_default_calls == 1);
 	CHECK(visibility_default_calls == 1);
 	CHECK(configuration_audit_calls == 0);
-	CHECK(semantics_audit_calls == 0);
 	CHECK(entity_audit_calls == 0);
 	CHECK(visibility_audit_calls == 0);
 	CHECK(read_calls == 2);
@@ -2830,14 +2818,12 @@ static void TestDevelopmentAuditPathIsExplicit(void)
 	read_calls = 0;
 	fail_final_read = 0;
 	configuration_audit_calls = 0;
-	semantics_audit_calls = 0;
 	entity_audit_calls = 0;
 	visibility_audit_calls = 0;
 	CHECK(SG_RuneCompactBuilderBuildDevelopmentAudit(&input, &builder,
 		&error));
 	CHECK(builder != NULL);
 	CHECK(configuration_audit_calls == 1);
-	CHECK(semantics_audit_calls == 1);
 	CHECK(entity_audit_calls == 1);
 	CHECK(visibility_audit_calls == 1);
 	SG_RuneCompactBuilderDestroy(builder);
@@ -2936,7 +2922,6 @@ static void TestDependencyAllocationFailuresRemainOom(void)
 		FAILURE_CONFIGURATION_BUILD,
 		FAILURE_CONFIGURATION_AUDIT,
 		FAILURE_SEMANTICS_BUILD,
-		FAILURE_SEMANTICS_AUDIT,
 		FAILURE_ENTITY_BUILD,
 		FAILURE_ENTITY_AUDIT,
 		FAILURE_VISIBILITY_BUILD,

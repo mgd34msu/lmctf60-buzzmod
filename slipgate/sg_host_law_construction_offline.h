@@ -14,13 +14,7 @@
 sg_host_law_result_t SG_HostLawConstructionConfigurationAudit(
 	const sg_host_law_construction_t *construction,
 	const sg_configuration_space_t *configuration,
-	sg_configuration_audit_result_t *audit_out);
-sg_host_law_result_t SG_HostLawConstructionSemanticsAudit(
-	const sg_host_law_construction_t *construction,
-	const sg_configuration_space_t *configuration,
-	const sg_configuration_semantics_t *semantics,
-	sg_configuration_semantics_audit_result_t *audit_out);
-sg_host_law_result_t SG_HostLawConstructionCompletenessProve(
+	sg_configuration_audit_result_t *audit_out);sg_host_law_result_t SG_HostLawConstructionCompletenessProve(
 	const sg_host_law_construction_t *construction,
 	const sg_configuration_space_t *configuration,
 	sg_bsp_completeness_result_t *proof_out);

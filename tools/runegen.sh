@@ -396,7 +396,7 @@ run_engine() {
             cd "$GAMEDIR_ROOT" || exit 1
             printf '%s\t%s\t%s\n' "$BASHPID" "$stage_game" "$stage_dir" \
                 > "$record" || exit 1
-            exec "$Q2DED_REAL" $Q2DED_FLAGS +set game "$stage_game" +set dedicated 1 \
+            exec stdbuf -oL -eL "$Q2DED_REAL" $Q2DED_FLAGS +set game "$stage_game" +set dedicated 1 \
                 +set maxclients "$MAXCLIENTS" +set port "$port" +set net_port "$port" \
                 +exec "$CFG" +map "$map"
         ) > "$logfile" 2>&1 &
@@ -408,7 +408,7 @@ run_engine() {
             cd "$GAMEDIR_ROOT" || exit 1
             printf '%s\t%s\t%s\n' "$BASHPID" "$stage_game" "$stage_dir" \
                 > "$record" || exit 1
-            exec "$Q2DED_REAL" $Q2DED_FLAGS +set game "$stage_game" +set dedicated 1 \
+            exec stdbuf -oL -eL "$Q2DED_REAL" $Q2DED_FLAGS +set game "$stage_game" +set dedicated 1 \
                 +set maxclients "$MAXCLIENTS" +set port "$port" +set net_port "$port" \
                 +exec "$CFG" +map "$map"
         ) > "$logfile" 2>&1 &

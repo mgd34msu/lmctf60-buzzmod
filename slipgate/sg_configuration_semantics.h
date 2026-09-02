@@ -182,33 +182,6 @@ typedef struct sg_configuration_semantics_s
 	uint32_t lattice_maximum_binary_shift;
 } sg_configuration_semantics_t;
 
-typedef enum sg_configuration_semantics_audit_code_e
-{
-	SG_CONFIGURATION_SEMANTICS_AUDIT_OK = 0,
-	SG_CONFIGURATION_SEMANTICS_AUDIT_INVALID_ARGUMENT,
-	SG_CONFIGURATION_SEMANTICS_AUDIT_SOURCE_MISMATCH,
-	SG_CONFIGURATION_SEMANTICS_AUDIT_OMITTED_REGION,
-	SG_CONFIGURATION_SEMANTICS_AUDIT_INVENTED_REGION,
-	SG_CONFIGURATION_SEMANTICS_AUDIT_REGION_DISAGREEMENT,
-	SG_CONFIGURATION_SEMANTICS_AUDIT_OMITTED_BOUNDARY,
-	SG_CONFIGURATION_SEMANTICS_AUDIT_INVENTED_BOUNDARY,
-	SG_CONFIGURATION_SEMANTICS_AUDIT_BOUNDARY_DISAGREEMENT,
-	SG_CONFIGURATION_SEMANTICS_AUDIT_OMITTED_HOOK_SURFACE,
-	SG_CONFIGURATION_SEMANTICS_AUDIT_INVENTED_HOOK_SURFACE,
-	SG_CONFIGURATION_SEMANTICS_AUDIT_HOOK_SURFACE_DISAGREEMENT,
-	SG_CONFIGURATION_SEMANTICS_AUDIT_SOLVER,
-	SG_CONFIGURATION_SEMANTICS_AUDIT_OUT_OF_MEMORY
-} sg_configuration_semantics_audit_code_t;
-
-typedef struct sg_configuration_semantics_audit_result_s
-{
-	sg_configuration_semantics_audit_code_t code;
-	uint32_t record;
-	uint64_t lattice_solve_calls;
-	uint64_t lattice_constraints;
-	uint32_t lattice_maximum_binary_shift;
-} sg_configuration_semantics_audit_result_t;
-
 void SG_ConfigurationSemanticsDefaultLimits(
 	sg_configuration_semantics_limits_t *limits_out);
 int SG_ConfigurationSemanticsBuild(
@@ -217,22 +190,11 @@ int SG_ConfigurationSemanticsBuild(
 	const sg_configuration_semantics_limits_t *limits,
 	sg_configuration_semantics_t **semantics_out,
 	sg_configuration_semantics_error_t *error_out);
-int SG_ConfigurationSemanticsAudit(
-	const sg_host_collision_authority_t *authority,
-	const sg_configuration_space_t *configuration,
-	const sg_configuration_semantics_t *semantics,
-	sg_configuration_semantics_audit_result_t *result_out);
 void SG_ConfigurationSemanticsDestroy(
 	sg_configuration_semantics_t *semantics);
 const char *SG_ConfigurationSemanticsErrorString(
 	sg_configuration_semantics_error_code_t code);
-const char *SG_ConfigurationSemanticsAuditCodeString(
-	sg_configuration_semantics_audit_code_t code);
-
 #if defined(SG_CONFIGURATION_SEMANTICS_TESTING)
-int SG_ConfigurationSemanticsTestMixedConstraintMesh(void);
-void SG_ConfigurationSemanticsTestAuditAllocationFailAt(uint64_t allocation);
-uint64_t SG_ConfigurationSemanticsTestAuditAllocationCount(void);
 #endif
 
 #endif

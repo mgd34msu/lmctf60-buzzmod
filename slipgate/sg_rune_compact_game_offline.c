@@ -12,6 +12,20 @@
 #include "sg_rune_compact_generation.h"
 #include "sg_rune_install.h"
 
+static void BuilderProgress(void *context, const char *phase,
+	uint32_t done, uint32_t total)
+{
+	const char *mapname = context;
+
+	if (total == 0U)
+		gi.dprintf("rune: compact construction map=%s phase=%s begin\n",
+			mapname, phase);
+	else
+		gi.dprintf("rune: compact construction map=%s phase=%s %u/%u (%u%%)\n",
+			mapname, phase, (unsigned int)done, (unsigned int)total,
+			(unsigned int)(((uint64_t)done * 100U) / total));
+}
+
 static void GenerationProgress(void *context,
 	sg_rune_compact_generation_stage_t stage,
 	const sg_rune_compact_generation_counts_t *counts)
@@ -99,6 +113,8 @@ int SG_RuneCompactGameGenerate(const char *mapname)
 	input.builder_input.construction = construction;
 	input.destination = destination;
 	input.collision_scene = &scene;
+	input.builder_input.progress = BuilderProgress;
+	input.builder_input.progress_context = destination;
 	input.progress = GenerationProgress;
 	input.progress_context = destination;
 	memset(&result, 0, sizeof(result));

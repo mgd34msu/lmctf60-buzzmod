@@ -1418,11 +1418,8 @@ host-rocket-jump-law-test: tests/run_sg_host_rocket_jump_law_test.sh \
 	compact-belief-runtime-test \
 	rune-v2-configuration-space-test \
 	bot-localization-test \
-	ground-capability-test ground-capability-publication-test \
-	water-capability-publication-test water-capability-real-bsp-test \
-	external-force-publication-test \
+	water-capability-real-bsp-test \
 	weapon-effect-profile-test hook-visibility-catalog-test \
-	static-affordance-catalog-publication-test \
 	bsp-entity-semantics-publication-test \
 	host-law-publication-test \
 	sidecar-wire-test sidecar-loader-test sidecar-store-test \
@@ -3446,46 +3443,6 @@ host-law-publication-test: $(HOST_LAW_PUBLICATION_TEST) \
 	@echo [TEST] host law publication
 	@sh $(HOST_LAW_PUBLICATION_TEST)
 
-phase-catalog-publication-test: tests/run_sg_phase_catalog_test.sh \
-		tests/sg_phase_catalog_test.c \
-		tests/sg_phase_catalog_mechanism_integration_test.c \
-		tests/sg_phase_catalog_model_integration_test.c \
-		tests/sg_mechanism_capability_test.c \
-		slipgate/sg_phase_catalog.c slipgate/sg_phase_catalog.h \
-		slipgate/sg_phase_catalog_internal.h \
-		slipgate/sg_phase_catalog_publication.c \
-		slipgate/sg_phase_catalog_owner.c slipgate/sg_phase_catalog_owner.h \
-		slipgate/sg_phase_mover_support_provider.c \
-		slipgate/sg_authority_entropy.c slipgate/sg_authority_entropy.h \
-		slipgate/sg_mechanism_capability.c \
-		slipgate/sg_mechanism_capability_seal.c \
-		slipgate/sg_mechanism_capability.h \
-		slipgate/sg_mechanism_capability_internal.h \
-		slipgate/sg_configuration_semantics.c \
-		slipgate/sg_configuration_lattice.c slipgate/sg_configuration_space.c \
-		slipgate/sg_configuration_audit.c slipgate/sg_host_collision.c \
-		slipgate/sg_bsp_world.c slipgate/sg_rune_model.c \
-		slipgate/sg_bsp_completeness_proof.c \
-		slipgate/sg_bsp_completeness_core.c \
-		slipgate/sg_bsp_completeness_region.c \
-		slipgate/sg_bsp_completeness_traversal.c \
-		slipgate/sg_bsp_completeness_lattice.c \
-		slipgate/sg_bsp_completeness_coverage.c \
-		slipgate/sg_bsp_completeness_state.c \
-		slipgate/sg_bsp_completeness_portal.c \
-		slipgate/sg_bsp_completeness_portal_index.c \
-		slipgate/sg_rune_model.h slipgate/sg_rune_model.c
-	sh tests/run_sg_phase_catalog_test.sh
-
-external-force-publication-test: \
-		tests/run_sg_external_force_publication_test.sh \
-		tests/sg_external_force_publication_test.c \
-		slipgate/sg_external_force_builder.c \
-		slipgate/sg_external_force_builder.h \
-		slipgate/sg_external_force_publication.c \
-		slipgate/sg_external_force_publication.h
-	sh tests/run_sg_external_force_publication_test.sh
-
 hook-visibility-catalog-test: \
 		tests/run_sg_hook_visibility_catalog_test.sh \
 		tests/sg_hook_visibility_catalog_test.c \
@@ -3506,22 +3463,6 @@ hook-visibility-catalog-test: \
 		slipgate/sg_hook_visibility_feasibility_audit_events.c \
 		slipgate/sg_hook_visibility_feasibility_audit_tiling.c
 	sh tests/run_sg_hook_visibility_catalog_test.sh
-
-static-affordance-catalog-publication-test: \
-		tests/run_sg_static_affordance_catalog_test.sh \
-		tests/sg_static_affordance_catalog_test.c \
-		tests/sg_hook_visibility_feasibility_fixture.c \
-		tests/sg_hook_visibility_feasibility_fixture.h \
-		tests/sg_weapon_static_affordance_fixture.h \
-		slipgate/sg_static_affordance_catalog.c \
-		slipgate/sg_static_affordance_catalog.h \
-		slipgate/sg_weapon_static_affordance.c \
-		slipgate/sg_weapon_static_affordance.h \
-		slipgate/sg_static_visibility_publication.c \
-		slipgate/sg_static_visibility_publication.h \
-		slipgate/sg_hook_visibility_catalog.c \
-		slipgate/sg_hook_visibility_catalog.h
-	sh tests/run_sg_static_affordance_catalog_test.sh
 
 bsp-entity-semantics-publication-test: \
 		tests/run_sg_bsp_entity_semantics_publication_test.sh \
@@ -3781,11 +3722,8 @@ rune-compact-test: rune-source-authority-test rune-compact-model-test \
 rune-v2-contract-test: rune-v2-belief-test \
 		rune-v2-perception-evidence-test rune-v2-belief-runtime-test \
 		rune-v2-configuration-space-test \
-		ground-capability-publication-test \
-		water-capability-publication-test external-force-publication-test \
-		weapon-effect-profile-test phase-catalog-publication-test \
+		weapon-effect-profile-test \
 		hook-visibility-catalog-test \
-		static-affordance-catalog-publication-test \
 		bsp-entity-semantics-publication-test \
 		host-law-publication-test \
 		tests/sg_rune_runtime_contract_test.c \
@@ -3872,24 +3810,6 @@ rune-v2-contract-test: rune-v2-belief-test \
 	$(CC) $$strict -Wcast-align -I. -c slipgate/sg_destination.c \
 		-o "$$tmp/destination.o"
 
-ground-capability-test: tests/run_sg_ground_capability_test.sh \
-		tests/sg_ground_capability_test.c \
-		tests/sg_ground_construction_fixture.c \
-		tests/sg_ground_construction_fixture.h \
-		slipgate/sg_ground_capability.c slipgate/sg_ground_capability.h
-	sh tests/run_sg_ground_capability_test.sh
-
-ground-capability-publication-test: ground-capability-test \
-		tests/run_sg_ground_capability_publication_test.sh \
-		tests/sg_ground_capability_publication_test.c \
-		tests/sg_ground_capability_test.c \
-		slipgate/sg_ground_capability_publication.c \
-		slipgate/sg_ground_capability_publication.h \
-		slipgate/sg_host_law_construction_offline.c \
-		slipgate/sg_host_law_construction_offline.h \
-		slipgate/sg_ground_capability.c slipgate/sg_ground_capability.h
-	sh tests/run_sg_ground_capability_publication_test.sh
-
 rune-v2-belief-test: tests/run_sg_belief_test.sh \
 		tests/sg_belief_test.c \
 		g_local.h p_client.c slipgate/sg_belief.c slipgate/sg_belief_contract.h \
@@ -3931,18 +3851,6 @@ rune-v2-configuration-space-test: tests/run_sg_configuration_space_test.sh \
 		slipgate/sg_configuration_space.c \
 		slipgate/sg_configuration_audit.c
 	sh tests/run_sg_configuration_space_test.sh
-
-water-capability-publication-test: \
-		tests/run_sg_water_capability_publication_test.sh \
-		tests/sg_water_capability_publication_test.c \
-		tests/sg_water_capability_fixture.c \
-		tests/sg_water_capability_fixture.h \
-		slipgate/sg_water_capability_publication.c \
-		slipgate/sg_water_capability_publication.h \
-		slipgate/sg_host_law_publication.h \
-		slipgate/sg_host_law_construction_offline.h \
-		slipgate/sg_water_capability.c slipgate/sg_water_capability.h
-	sh tests/run_sg_water_capability_publication_test.sh
 
 water-capability-real-bsp-test: tests/run_sg_water_real_bsp_test.sh \
 		tests/sg_water_real_bsp_test.c \

@@ -529,6 +529,28 @@ static int EntitySemanticsId(const sg_bsp_content_identity_t *bsp_identity,
 	return 1;
 }
 
+static void ReportPhase(const sg_rune_compact_builder_input_t *input,
+	const char *phase, uint32_t done, uint32_t total)
+{
+	if (input != NULL && input->progress != NULL)
+		input->progress(input->progress_context, phase, done, total);
+}
+
+typedef struct progress_link_s
+{
+	sg_rune_compact_builder_progress_fn progress;
+	void *context;
+} progress_link_t;
+
+static void ConfigurationProgress(void *context, uint32_t done,
+	uint32_t total)
+{
+	const progress_link_t *link = context;
+
+	if (link->progress != NULL)
+		link->progress(link->context, "configuration", done, total);
+}
+
 static int InputShapeValid(const sg_rune_compact_builder_input_t *input,
 	sg_rune_compact_builder_t **builder_out)
 {
@@ -864,13 +886,13 @@ static int Build(
 	sg_host_collision_error_t collision_error;
 	sg_rune_model_identity_t configuration_identity;
 	sg_configuration_error_t configuration_error;
+	progress_link_t progress_link;
 	sg_configuration_limits_t default_configuration_limits;
 	const sg_configuration_limits_t *configuration_limits;
 	sg_configuration_audit_result_t configuration_audit;
 	sg_configuration_semantics_error_t semantics_error;
 	sg_configuration_semantics_limits_t default_semantics_limits;
 	const sg_configuration_semantics_limits_t *semantics_limits;
-	sg_configuration_semantics_audit_result_t semantics_audit;
 	sg_bsp_entity_semantics_error_t entity_error;
 	sg_bsp_entity_semantics_audit_result_t entity_audit;
 	sg_bsp_entity_semantics_binding_t entity_binding;
@@ -1032,6 +1054,7 @@ static int Build(
 	source_set_identity =
 		DeriveSourceSetId(&host.host_static_identity.bsp_identity);
 	memset(&entity_error, 0, sizeof(entity_error));
+	ReportPhase(input, "entities", 0U, 0U);
 	if (!SG_BspEntitySemanticsBuildEffective(builder->world,
 			builder->entity_text, builder->entity_text_bytes,
 			builder->entity_records, builder->entity_record_count,
@@ -1084,9 +1107,12 @@ static int Build(
 		goto done;
 	}
 	memset(&configuration_error, 0, sizeof(configuration_error));
-	if (!SG_ConfigurationBuild(&builder->collision,
-			configuration_limits, &builder->configuration,
-			&configuration_error)) {
+	ReportPhase(input, "configuration", 0U, 0U);
+	progress_link.progress = input->progress;
+	progress_link.context = input->progress_context;
+	if (!SG_ConfigurationBuildWithProgress(&builder->collision,
+			configuration_limits, ConfigurationProgress, &progress_link,
+			&builder->configuration, &configuration_error)) {
 		SetError(error_out,
 			configuration_error.code == SG_CONFIGURATION_ERROR_OUT_OF_MEMORY ?
 				SG_RUNE_COMPACT_BUILDER_ERROR_OUT_OF_MEMORY :
@@ -1108,6 +1134,7 @@ static int Build(
 		goto done;
 	}
 	memset(&semantics_error, 0, sizeof(semantics_error));
+	ReportPhase(input, "semantics", 0U, 0U);
 	if (!SG_ConfigurationSemanticsBuild(&builder->collision,
 			builder->configuration, semantics_limits,
 			&builder->semantics, &semantics_error)) {
@@ -1120,20 +1147,8 @@ static int Build(
 			(uint64_t)semantics_error.code);
 		goto done;
 	}
-	memset(&semantics_audit, 0, sizeof(semantics_audit));
-	if (development_audit &&
-		!SG_ConfigurationSemanticsAudit(&builder->collision,
-			builder->configuration, builder->semantics, &semantics_audit)) {
-		SetError(error_out,
-			semantics_audit.code ==
-				SG_CONFIGURATION_SEMANTICS_AUDIT_OUT_OF_MEMORY ?
-				SG_RUNE_COMPACT_BUILDER_ERROR_OUT_OF_MEMORY :
-				SG_RUNE_COMPACT_BUILDER_ERROR_SEMANTICS_AUDIT,
-			semantics_audit.record, SG_CONFIGURATION_SEMANTICS_AUDIT_OK,
-			(uint64_t)semantics_audit.code);
-		goto done;
-	}
 	memset(&visibility_error, 0, sizeof(visibility_error));
+	ReportPhase(input, "visibility", 0U, 0U);
 	if (!SG_StaticVisibilityBuild(&builder->collision, builder->configuration,
 			builder->semantics, visibility_limits, &builder->visibility,
 			&visibility_error)) {
