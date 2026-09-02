@@ -543,7 +543,6 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o g_skins.o g_tourney.o \
 	slipgate/sg_rune_game.o slipgate/sg_rune_cx.o slipgate/sg_rune_analytic.o \
 	slipgate/sg_rune_movement.o slipgate/sg_rune_artifact.o \
 	slipgate/sg_rune_locate.o slipgate/sg_rune_field.o slipgate/sg_rune_flight.o \
-	slipgate/sg_rune_mechanisms.o \
 	slipgate/sg_rune_level.o slipgate/sg_bot_frame.o slipgate/sg_bot_orders.o \
 	slipgate/sg_bot_combat.o slipgate/sg_bot_items.o slipgate/sg_bsp_world.o slipgate/sg_host_collision.o \
 	slipgate/sg_bsp_entity_semantics.o \
@@ -652,6 +651,7 @@ RUNE_COMPACT_GENERATOR_OFFLINE_OBJS = \
 	slipgate/sg_configuration_semantics.o \
 	slipgate/sg_rune_cx_build.o \
 	slipgate/sg_rune_movement_build.o \
+	slipgate/sg_rune_mechanisms.o \
 	slipgate/sg_rune_generate.o \
 	slipgate/sg_rune_game_generate.o
 RUNE_COMPACT_GENERATOR_RUNTIME_OBJS = $(filter-out \

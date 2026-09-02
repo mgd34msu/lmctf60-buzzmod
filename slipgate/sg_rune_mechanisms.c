@@ -723,13 +723,3 @@ done:
 	SG_BspEntitySemanticsDestroy(semantics);
 	return ok;
 }
-
-const char *SG_RuneMechKindString(sg_rune_mech_kind_t kind)
-{
-	static const char *const names[SG_RUNE_MECH_KIND_COUNT] = {
-		"door", "platform", "button", "teleporter", "push", "train"
-	};
-
-	return (uint32_t)kind < (uint32_t)SG_RUNE_MECH_KIND_COUNT ? names[kind] :
-		"unknown mechanism";
-}

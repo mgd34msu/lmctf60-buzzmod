@@ -481,6 +481,24 @@ void SG_RuneMoveGate(sg_rune_move_store_t *store, const uint32_t *cells,
 	}
 }
 
+int SG_RuneMoveAppendHook(sg_rune_move_store_t *store, uint32_t cell,
+	uint32_t destination, uint8_t stances, const float anchor[3],
+	const float release_velocity[3], float seconds)
+{
+	sg_rune_move_capability_t *record;
+
+	if (!store || !stances || !anchor || !isfinite(seconds) || seconds < 0.0f)
+		return 0;
+	if (!Append(store, cell, SG_RUNE_FN_INDEX_NONE, destination,
+		SG_RUNE_MOVE_HOOK, stances, stances, PROFILE_AIR, release_velocity,
+		seconds))
+		return 0;
+	record = &store->capabilities[store->capability_count - 1U];
+	memcpy(record->anchor, anchor, sizeof(record->anchor));
+	record->mechanism = SG_RUNE_FN_INDEX_NONE;
+	return 1;
+}
+
 float SG_RuneMoveJumpVelocity(const sg_rune_move_store_t *store)
 {
 	(void)store;

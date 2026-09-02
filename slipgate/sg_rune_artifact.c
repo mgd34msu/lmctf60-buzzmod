@@ -385,7 +385,10 @@ int SG_RuneArtifactValid(const sg_rune_artifact_t *artifact,
 			(capability->portal >= cx->portal_count &&
 				capability->portal != SG_RUNE_CX_INDEX_NONE) ||
 			(capability->portal == SG_RUNE_CX_INDEX_NONE &&
-				capability->mechanism == SG_RUNE_CX_INDEX_NONE) ||
+				capability->mechanism == SG_RUNE_CX_INDEX_NONE &&
+				capability->kind != SG_RUNE_MOVE_HOOK) ||
+			!Finite(capability->anchor[0]) || !Finite(capability->anchor[1]) ||
+			!Finite(capability->anchor[2]) ||
 			capability->destination >= cx->cell_count ||
 			capability->destination == capability->cell ||
 			!Finite(capability->launch_velocity[0]) ||
@@ -573,4 +576,14 @@ const char *SG_RuneArtifactStatusString(sg_rune_artifact_status_t status)
 	case SG_RUNE_ARTIFACT_LAW_MISMATCH: return "law mismatch";
 	default: return "unknown";
 	}
+}
+
+const char *SG_RuneMechKindString(sg_rune_mech_kind_t kind)
+{
+	static const char *const names[SG_RUNE_MECH_KIND_COUNT] = {
+		"door", "platform", "button", "teleporter", "push", "train"
+	};
+
+	return (uint32_t)kind < (uint32_t)SG_RUNE_MECH_KIND_COUNT ? names[kind] :
+		"unknown mechanism";
 }

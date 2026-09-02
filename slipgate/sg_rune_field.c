@@ -472,10 +472,18 @@ int SG_RuneStepSelect(const sg_rune_router_t *router,
 	step_out->crouching_next = field->next_crouching[state];
 	if (step_out->portal == SG_RUNE_CX_INDEX_NONE)
 	{
-		/* A mechanism crossing: the target is the destination's floor. */
+		/* A mechanism or hook crossing: the target is the destination's
+		 * floor; a hook also carries its bite point. */
 		memcpy(step_out->target, &router->cell_center[
 			router->destination[capability] * 3U], sizeof(step_out->target));
 		step_out->target[2] += 24.0f;
+		if (step_out->move_kind == SG_RUNE_MOVE_HOOK)
+		{
+			memcpy(step_out->hook_point,
+				router->artifact->movement.capabilities[capability].anchor,
+				sizeof(step_out->hook_point));
+			step_out->hook_point_present = 1U;
+		}
 	}
 	else
 		memcpy(step_out->target, &router->portal_center[step_out->portal * 3U],

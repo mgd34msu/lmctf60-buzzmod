@@ -70,6 +70,7 @@ typedef struct sg_rune_move_capability_s
 	uint32_t mechanism;       /* the door, lift, teleporter, push, or train
 	                             this crossing goes through; INDEX_NONE */
 	float launch_velocity[3];
+	float anchor[3];          /* hook: the bite point; lift: unused */
 	float seconds;
 } sg_rune_move_capability_t;
 
@@ -153,6 +154,12 @@ int SG_RuneMoveAppendMechanism(sg_rune_move_store_t *store, uint32_t cell,
  * through the mechanism (a door's gate cells). */
 void SG_RuneMoveGate(sg_rune_move_store_t *store, const uint32_t *cells,
 	uint32_t cell_count, uint32_t mechanism);
+
+/* A hook ride: fire at anchor from cell, be pulled, let go, land in
+ * destination. */
+int SG_RuneMoveAppendHook(sg_rune_move_store_t *store, uint32_t cell,
+	uint32_t destination, uint8_t stances, const float anchor[3],
+	const float release_velocity[3], float seconds);
 
 /* Launch speeds the flights are traced with. */
 float SG_RuneMoveJumpVelocity(const sg_rune_move_store_t *store);

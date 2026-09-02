@@ -213,10 +213,18 @@ typedef enum sg_rune_cx_surface_frame_e
 	SG_RUNE_CX_SURFACE_FRAME_COUNT
 } sg_rune_cx_surface_frame_t;
 
+typedef uint32_t sg_rune_cx_surface_flags_t;
+enum
+{
+	SG_RUNE_CX_SURFACE_SKY = UINT32_C(1) << 0,
+	SG_RUNE_CX_SURFACE_HOOKABLE = UINT32_C(1) << 1
+};
+
 typedef struct sg_rune_cx_surface_s
 {
 	sg_rune_cx_brush_side_source_t source;
 	uint32_t frame;                 /* sg_rune_cx_surface_frame_t */
+	uint32_t flags;                 /* sg_rune_cx_surface_flags_t */
 	uint32_t cell;                  /* or INDEX_NONE */
 	uint32_t parent_surface;
 	uint32_t split_ordinal;

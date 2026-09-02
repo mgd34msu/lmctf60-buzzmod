@@ -883,6 +883,14 @@ static int AppendSourceSurface(void *context, uint32_t brush,
 	surface->source.brush = brush;
 	surface->source.brush_side = brush_side;
 	surface->source.plane = world->brush_sides[brush_side].plane;
+	{
+		int32_t texinfo = world->brush_sides[brush_side].texinfo;
+		int32_t flags = texinfo >= 0 && (uint32_t)texinfo < world->texinfo_count ?
+			world->texinfos[texinfo].flags : 0;
+
+		surface->flags = (flags & SG_HOST_SURFACE_SKY) ? SG_RUNE_CX_SURFACE_SKY :
+			SG_RUNE_CX_SURFACE_HOOKABLE;
+	}
 	surface->frame = surface_context->model == 0U ?
 		SG_RUNE_CX_SURFACE_WORLD :
 		SG_RUNE_CX_SURFACE_MODEL_LOCAL;
