@@ -30,6 +30,9 @@
 
 #define SG_HOST_ROCKET_DAMAGE_BASE 100
 #define SG_HOST_ROCKET_DAMAGE_RANDOM_SPAN 20.0
+#define SG_HOST_ROCKET_SPEED 650
+#define SG_HOST_ROCKET_SPLASH_DAMAGE 120
+#define SG_HOST_ROCKET_SPLASH_RADIUS 120
 #define SG_HOST_ROCKET_BALANCED_SPEED 750
 #define SG_HOST_ROCKET_BALANCED_SPLASH_DAMAGE 75
 #define SG_HOST_ROCKET_BALANCED_SPLASH_RADIUS 240
@@ -82,6 +85,27 @@
 
 #define SG_HOST_DAMAGE_QUAD_SCALE 4
 #define SG_HOST_RADIUS_SELF_SCALE 0.5
+
+/* T_Damage momentum: velocity += dir * scale * knockback / mass, with the
+ * self-hit scale being what makes rocket jumps work.  Splash damage falls off
+ * as damage - distance/2 from the blast to the target box centre. */
+#define SG_HOST_KNOCKBACK_SCALE 500.0
+#define SG_HOST_SELF_KNOCKBACK_SCALE 1600.0
+#define SG_HOST_BALANCED_KNOCKBACK_SCALE 800.0
+#define SG_HOST_BALANCED_SELF_KNOCKBACK_SCALE 1800.0
+#define SG_HOST_KNOCKBACK_MIN_MASS 50
+#define SG_HOST_SPLASH_DISTANCE_FALLOFF 0.5
+
+/* P_ProjectSource offset for launcher-class weapons: forward, right, and
+ * below the view height. */
+#define SG_HOST_PROJECTILE_SOURCE_FORWARD 8
+#define SG_HOST_PROJECTILE_SOURCE_RIGHT 8
+#define SG_HOST_PROJECTILE_SOURCE_BELOW_VIEW 8
+
+/* CheckArmor: save = ceil(protection * damage), capped by the armor count. */
+#define SG_HOST_ARMOR_JACKET_PROTECTION 0.30
+#define SG_HOST_ARMOR_COMBAT_PROTECTION 0.60
+#define SG_HOST_ARMOR_BODY_PROTECTION 0.80
 #define SG_HOST_WEAPON_RAY_DISTANCE 8192
 #define SG_HOST_PROJECTILE_RETIRE_DISTANCE 8000
 #define SG_HOST_SERVER_FRAME_MS 100

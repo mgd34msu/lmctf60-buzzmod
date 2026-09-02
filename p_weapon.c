@@ -920,12 +920,12 @@ void Weapon_RocketLauncher_Fire (edict_t *ent)
 	}
 	else
 	{
-		radius_damage = SG_RUNE_PROOF_ROCKETJUMP_RADIUS_DAMAGE;
-		damage_radius = SG_RUNE_PROOF_ROCKETJUMP_DAMAGE_RADIUS;
+		radius_damage = SG_HOST_ROCKET_SPLASH_DAMAGE;
+		damage_radius = SG_HOST_ROCKET_SPLASH_RADIUS;
 	}
 #else
-	radius_damage = SG_RUNE_PROOF_ROCKETJUMP_RADIUS_DAMAGE;
-	damage_radius = SG_RUNE_PROOF_ROCKETJUMP_DAMAGE_RADIUS;
+	radius_damage = SG_HOST_ROCKET_SPLASH_DAMAGE;
+	damage_radius = SG_HOST_ROCKET_SPLASH_RADIUS;
 #endif	
 	
 	if (is_quad)
@@ -948,11 +948,11 @@ void Weapon_RocketLauncher_Fire (edict_t *ent)
 			SG_HOST_ROCKET_BALANCED_SPEED, damage_radius, radius_damage);
 	else
 		fire_rocket (ent, start, forward, damage,
-			SG_RUNE_PROOF_ROCKETJUMP_ROCKET_SPEED, damage_radius,
+			SG_HOST_ROCKET_SPEED, damage_radius,
 			radius_damage); //SURT
 #else
 	fire_rocket (ent, start, forward, damage,
-		SG_RUNE_PROOF_ROCKETJUMP_ROCKET_SPEED, damage_radius,
+		SG_HOST_ROCKET_SPEED, damage_radius,
 		radius_damage); //SURT
 #endif
 

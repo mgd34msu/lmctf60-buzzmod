@@ -540,23 +540,23 @@ void T_Damage(edict_t* targ, edict_t* inflictor, edict_t* attacker, vec3_t dir, 
 			vec3_t	kvel;
 			float	mass;
 
-			if (targ->mass < 50)
-				mass = 50;
+			if (targ->mass < SG_HOST_KNOCKBACK_MIN_MASS)
+				mass = SG_HOST_KNOCKBACK_MIN_MASS;
 			else
 				mass = targ->mass;
 
 			if (targ->client && attacker == targ)
-				VectorScale(dir, 1600.0 * (float)knockback / mass, kvel);	// the rocket jump hack...
+				VectorScale(dir, SG_HOST_SELF_KNOCKBACK_SCALE * (float)knockback / mass, kvel);	// the rocket jump hack...
 			else
-				VectorScale(dir, 500.0 * (float)knockback / mass, kvel);
+				VectorScale(dir, SG_HOST_KNOCKBACK_SCALE * (float)knockback / mass, kvel);
 
 #ifdef WEAP_BALANCE_OK	
 			if ((int)ctfflags->value & CTF_WEAP_BALANCE) //a little extra umph to knockback
 			{
 				if (targ->client && attacker == targ)
-					VectorScale(dir, 1800.0 * (float)knockback / mass, kvel);	// the rocket jump hack...
+					VectorScale(dir, SG_HOST_BALANCED_SELF_KNOCKBACK_SCALE * (float)knockback / mass, kvel);	// the rocket jump hack...
 				else
-					VectorScale(dir, 800.0 * (float)knockback / mass, kvel);
+					VectorScale(dir, SG_HOST_BALANCED_KNOCKBACK_SCALE * (float)knockback / mass, kvel);
 			}
 #endif
 			if (targ->groundentity)

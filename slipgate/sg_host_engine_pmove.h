@@ -39,6 +39,14 @@
 #define SG_HOST_ENGINE_DUCK_SPEED 100.0f
 #define SG_HOST_ENGINE_WATER_SPEED 400.0f
 
+/* The player body the host moves: mass for knockback, the standing box, and
+ * the eye height projectiles launch from. */
+#define SG_HOST_ENGINE_PLAYER_MASS 200.0f
+#define SG_HOST_ENGINE_PLAYER_MINS_Z -24.0f
+#define SG_HOST_ENGINE_PLAYER_MAXS_Z 32.0f
+#define SG_HOST_ENGINE_PLAYER_HALF_WIDTH 16.0f
+#define SG_HOST_ENGINE_PLAYER_VIEWHEIGHT 22.0f
+
 typedef struct sg_host_engine_pmove_abi_s
 {
 	uint32_t version;
