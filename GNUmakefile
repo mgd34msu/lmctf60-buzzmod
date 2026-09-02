@@ -1306,6 +1306,10 @@ RUNE_COMPACT_GENERATOR_OBJS = $(RUNE_COMPACT_GENERATOR_RUNTIME_OBJS) \
 ifneq ($(filter Windows Cygwin,$(PLATFORM)),)
 .PHONY: rune-compact-generator
 
+# The runtime module is what a bare make builds; the generator has its own
+# target and is never the default.
+.DEFAULT_GOAL := all
+
 rune-compact-generator:
 	@echo "rune-compact-generator is unavailable in Windows game builds" >&2
 	@false
