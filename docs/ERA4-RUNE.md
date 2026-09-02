@@ -71,6 +71,17 @@ replacement runs on a real map.
    most of the flag's approaches (the second where the first leaves gaps),
    facing the approaches they cover.  bctf01: 3,365 representatives, 1.56M
    pairs, 698k records, 7 s, 5.3 MB.
+7b. **Faces and flights** (era 4, 2026-09-02). The complex keeps one boundary
+   facet per configuration face (only where the face keeps area beyond its
+   portals) plus one facet per portal; nothing is cut into remainders, so an
+   open face that touches thousands of cells costs one facet, not a square
+   of them (bmap4: 285k facets, 26 s end to end, where the cut version ran
+   for hours on 68M facets). A flight leaving a cell through a plane shared
+   by a portal and its face goes through the portal whose cell beyond
+   contains the exit point (cells are convex, so that is exact with planes
+   alone); otherwise the face is a wall. Flights are lost past 96 crossings
+   or 8 seconds; the fire pass traces the nearest 1,500 targets per source
+   and lobs at the nearest 256 without a line.
 8. **Wire** (era 4, done). `sg_rune_artifact` v4: one image, a header with
    identity and law, seventeen sections of fixed-layout records behind a
    CRC (no facet vertices: each portal carries its foot; bctf01 108 MB), every reference validated on load with the failing record named,
