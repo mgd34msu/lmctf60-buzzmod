@@ -430,8 +430,10 @@ static void ThinkDead(sg_bot_t *bot, edict_t *e)
 static uint32_t StandingCellNear(const vec3_t point)
 {
 	static const float rises[] = { 24.0f, 0.0f, 48.0f, -24.0f, 72.0f, 12.0f };
-	uint32_t index;
+	uint32_t index, first = SG_RUNE_CX_INDEX_NONE;
 
+	/* The first floor cell any probe lands in; failing that, the first
+	 * cell at all (a trigger volume over a floor is not a place to stand). */
 	for (index = 0U; index < sizeof(rises) / sizeof(rises[0]); index++)
 	{
 		vec3_t probe;
@@ -440,10 +442,15 @@ static uint32_t StandingCellNear(const vec3_t point)
 		VectorCopy(point, probe);
 		probe[2] += rises[index];
 		cell = SG_RuneLevelLocate(probe, 0, NULL);
-		if (cell != SG_RUNE_CX_INDEX_NONE)
+		if (cell == SG_RUNE_CX_INDEX_NONE)
+			continue;
+		if (sg_rune_level.artifact.complex.cells[cell].semantics &
+			SG_RUNE_CX_CELL_SUPPORTED)
 			return cell;
+		if (first == SG_RUNE_CX_INDEX_NONE)
+			first = cell;
 	}
-	return SG_RUNE_CX_INDEX_NONE;
+	return first;
 }
 
 /* A crossing that failed on this body is avoided for a while. */
