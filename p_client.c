@@ -5,17 +5,13 @@
 #include "g_ctffunc.h" //surt for some nice wrapper functions
 #include "slipgate/sg_cvars.h"
 #include "slipgate/sg_local.h"
-#include "slipgate/sg_chat.h"
-#include "slipgate/sg_combat.h"
 #include "slipgate/sg_host_law_owner.h"
 #include "ctf_sqlite_unidb.h"	// db_record_t -- ui_boards.h's UI_Records_FormatLine needs it declared first
 #include "ui_boards.h"		// UI_Tick_Dirty -- disconnects change the boards' roster
 
-void SG_NoteDeath(edict_t *victim);
 qboolean	SG_OwnsBot(edict_t *ent);
 qboolean	SG_RetireBotForClient(edict_t *ent);
 qboolean	SG_InternalClientConnect(edict_t *ent);
-void SG_ChatDeath(edict_t *victim, edict_t *attacker, int mod);
 void SpawnLoadout_Give(gclient_t *cl);
 void ClientOldSetSkin(edict_t *e2, char *sk);
 void Observer_Start(edict_t *e);
@@ -794,9 +790,7 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 		/* Railgun elimination is known at this first death edge. It has no
 		 * PutClientInServer successor, so close before any follower can WAIT. */
 		(void)POVLock_HandleRespawnTerminal(self);
-		SG_NoteDeath(self);     /* the obituary is common knowledge */
 		/* Death chat belongs to the first death edge. */
-		SG_ChatDeath(self, attacker, meansOfDeath);
 	}
 	int		n;
 	edict_t	*attacker_flag=NULL, *defender_flag=NULL;  // CTF CODE -- LM_JORM
@@ -1812,9 +1806,6 @@ void spectator_respawn (edict_t *ent)
 	 * Cmd_Observe_f wrapper. Retire every SG fact before PutClientInServer wipes
 	 * and rebuilds the body; failed password/limit changes returned above and do
 	 * not disturb the still-live generation. */
-	SG_ChatResetClient(ent);
-	Caco_ResetClient(ent);
-	Combat_ResetClient(ent);
 	POVLock_Clear(ent);
 
 	// clear client on respawn
@@ -2114,7 +2105,6 @@ void PutClientInServer (edict_t *ent)
 	client->ctf.ctfid = unique_id++;
 	/* Combat aim/error/fire-window state belongs to this exact client life.
 	 * A respawn or recycled slot must not replay its predecessor's sequence. */
-	Combat_ResetClient(ent);
 	client->showctfhud = true; // LM_JORM -- Turn on CTF HUD
 	client->ctf.extra_flags |= CTF_EXTRAFLAGS_RADIO_SOUND; // LM_JORM -- Turn on our radio
 	
@@ -2682,9 +2672,6 @@ void ClientDisconnect (edict_t *ent)
 	 * shared sensor/chat fact before the edict can be reused by a different
 	 * human or fake client; SG-specific callers may already have done this,
 	 * and each reset is deliberately idempotent. */
-	SG_ChatResetClient(ent);
-	Caco_ResetClient(ent);
-	Combat_ResetClient(ent);
 
 	UI_Tick_Dirty();	// a departing player is a roster change on every board
 

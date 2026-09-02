@@ -80,7 +80,7 @@ static const sg_persona_t sg_personas[16] =
 
 /* ------------------------------------------------------------------ bind */
 
-#define SG_PERSONA_MAXCLIENTS	256		/* as sg_combat.c:372 sizes its own */
+#define SG_PERSONA_MAXCLIENTS	256		
 
 static const sg_persona_t	*persona_of[SG_PERSONA_MAXCLIENTS];
 

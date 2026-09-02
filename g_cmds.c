@@ -10,9 +10,8 @@
 #include "bat.h"
 #include "g_vote.h"
 #include "slipgate/sg_net.h"        // SG_ClearBotArgs
-#include "slipgate/sg_chat.h"       // BUZZKILL - SG_ChatHear from Cmd_Say_f
 #include "slipgate/sg_local.h"
-#include "slipgate/sg_combat.h"
+#include "slipgate/sg_bot_orders.h"
 
 void spectator_respawn (edict_t *ent);
 int Team_Observer_OK(int Team_To_View, edict_t *ent);
@@ -2271,6 +2270,8 @@ void Cmd_Say_f (edict_t *ent, qboolean team, qboolean arg0)
 
 	string_replace(ent, temp, temp, sizeof temp);
 	strcat(text, temp);
+	if (team)
+		SG_OrdersHear(ent, temp);   /* humans order bots on team chat */
 
 	// BUZZKILL - bots hear the chat. Before this line no chat reached the bots
 	// at all and no spoken order could be given. SG_ChatHear ignores bot
@@ -2278,7 +2279,6 @@ void Cmd_Say_f (edict_t *ent, qboolean team, qboolean arg0)
 	// of who typed it, which is how a bot's own say_team feeds the team clock.
 	// team carries the say_team flag so bare orders ("defend") only work on
 	// team chat, and so an item call only counts on the channel one team hears.
-	SG_ChatHear(ent, temp, team);
 
 	// BUZZKILL - one line spoken, counted against the speaker for the session
 	// record. Here rather than in the broadcast loop below, which runs once
@@ -2377,9 +2377,6 @@ void Cmd_Observe_f(edict_t *ent, int Observer_Type)
 
 	/* Observer conversion keeps the gclient allocation but ends the combatant
 	 * generation every SG sensor/chat table describes. */
-	SG_ChatResetClient(ent);
-	Caco_ResetClient(ent);
-	Combat_ResetClient(ent);
 	Drop_All(ent);
 	ent->client->ctf.teamnum = Observer_Type;
 	ent->client->chase_target = NULL;

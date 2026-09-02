@@ -15,12 +15,13 @@
 #include <math.h>
 #include <string.h>
 
-#include "sg_chat.h"
-#include "sg_combat.h"
+#include "sg_bot_orders.h"
+#include "sg_bot_combat.h"
 #include "sg_client_ownership.h"
 #include "sg_host_engine_pmove.h"
 #include "sg_host_law_owner.h"
 #include "sg_hooks.h"
+#include "sg_net.h"
 #include "sg_rune_flight.h"
 #include "sg_rune_level.h"
 #include "sg_rune_source_authority_owner.h"
@@ -28,9 +29,7 @@
 #include "sg_util.h"
 
 void Cmd_Hook_f(edict_t *ent);
-void Caco_Frame(void);
-void Clock_Frame(void);
-qboolean SG_HookOffhandReady(edict_t *ent);
+void ClientThink(edict_t *ent, usercmd_t *ucmd);
 
 static qboolean sg_level_setup_attempted;
 
@@ -54,6 +53,8 @@ void SG_LevelChange(void)
 
 	SG_RuneLevelClear();
 	SG_RuneSourceAuthorityReset();
+	SG_OrdersReset();
+	SG_BotCombatReset();
 	sg_level_setup_attempted = false;
 	for (i = 0; i < SG_MAXBOTS; i++)
 		if (sg_bots[i].active)
@@ -114,9 +115,9 @@ static int RoleFor(sg_bot_t *bot, qboolean carrying)
 
 	if (carrying)
 		return SG_ROLE_CARRY;
-	forced = SG_ChatOrderedRole(bot->ent);
+	forced = SG_OrderedRole(bot->ent);
 	if (forced >= 0 && forced < SG_ROLES &&
-		(forced != SG_ROLE_ESCORT || SG_ChatEscortTarget(bot->ent)))
+		(forced != SG_ROLE_ESCORT || SG_OrderEscortTarget(bot->ent)))
 	{
 		if (forced == SG_ROLE_DEFEND)
 			bot->def_stand = true;
@@ -186,7 +187,7 @@ static qboolean DestinationFor(sg_bot_t *bot, int role, vec3_t out)
 	case SG_ROLE_RECOVER:
 		return FlagNow(team, out);
 	case SG_ROLE_ESCORT:
-		target = SG_ChatEscortTarget(e);
+		target = SG_OrderEscortTarget(e);
 		if (!target)
 			target = TeamCarrier(team);
 		if (target)
@@ -247,6 +248,7 @@ static void ThinkDead(sg_bot_t *bot, edict_t *e)
 	bot->step.kind = SG_RUNE_STEP_HOLD;
 	bot->hook_phase = 0;
 	bot->hook_entity = NULL;
+	SG_BotCombatResetClient(e);
 	memset(&cmd, 0, sizeof(cmd));
 	cmd.msec = 100;
 	/* Respawn consumes a fresh latched press, so pulse attack at 5 Hz. */
@@ -338,9 +340,11 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 		 * body leaves the floor. */
 		if (record->seconds > 0.0f)
 		{
+			const float *landing =
+				&sg_rune_level.router.cell_center[record->destination * 3U];
+
 			bot->flight_capability = bot->step.capability;
-			VectorCopy(&sg_rune_level.router.cell_center[record->destination * 3U],
-				bot->flight_landing);
+			VectorCopy(landing, bot->flight_landing);
 		}
 	}
 }
@@ -363,8 +367,8 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	body.waterlevel = (uint8_t)e->waterlevel;
 	body.crouched = (e->client->ps.pmove.pm_flags & PMF_DUCKED) != 0 ? 1U : 0U;
 	body.hook_phase = HookPhase(bot, e);
-	body.launcher_ready = SG_CombatRocketLauncherReady(e) ? 1U : 0U;
-	body.hook_ready = SG_HookOffhandReady(e) ? 1U : 0U;
+	body.launcher_ready = SG_BotLauncherReady(e) ? 1U : 0U;
+	body.hook_ready = SG_BotHookReady(e) ? 1U : 0U;
 	body.gravity = sv_gravity->value;
 	body.frame_ms = SG_HOST_ENGINE_FRAME_MS;
 	body.substep_ms = SG_HOST_ENGINE_PMOVE_SUBSTEP_MS;
@@ -391,7 +395,7 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 			e->client->ps.pmove.delta_angles[PITCH]);
 	}
 	else
-		SG_CombatFrame(e, &cmd, &engaged);
+		SG_BotCombatFrame(e, &cmd, &engaged);
 	bot->engaged_last = engaged;
 	if (moving)
 	{
@@ -411,8 +415,8 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 		cmd.buttons |= BUTTON_ATTACK;
 	ClientThink(e, &cmd);
 	if (command.want_launcher)
-		SG_CombatRequestRocketLauncher(e);
-	if (command.hook_fire && SG_HookOffhandReady(e))
+		SG_BotRequestLauncher(e);
+	if (command.hook_fire && SG_BotHookReady(e))
 	{
 		Cmd_Hook_f(e);
 		bot->hook_phase = 2;
@@ -491,9 +495,7 @@ void SG_RunFrame(void)
 	(void)SG_HostLawProductionEnsureLevel(level.mapname);
 	if (!sg_level_setup_attempted)
 		(void)SG_LevelSetup();
-	Caco_Frame();
 	Botfill_Frame();
-	Clock_Frame();
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		edict_t *ent;

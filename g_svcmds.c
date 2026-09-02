@@ -334,16 +334,10 @@ static void SVCmd_SG_f (void)
 	}
 	else if (Q_stricmp(sub, "list") == 0)
 		SG_ListBots();
-	else if (Q_stricmp(sub, "weights") == 0)
-	{
-		if (Q_stricmp(arg, "reload") == 0)
-			SG_WeightsReload();
-		SG_WeightsPrint();
-	}
 	else
 		gi.cprintf(NULL, PRINT_HIGH,
 		           "usage: sv sg <add [red|blue] | list | remove [name|slot] "
-		           "| kick worst | weights [reload]>\n");
+		           "| kick worst>\n");
 }
 
 static void SVCmd_POVRecord_f(void)
