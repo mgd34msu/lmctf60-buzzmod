@@ -858,6 +858,7 @@ static qboolean FlightSafe(const sg_rune_flight_t *flight)
 
 /* Whether letting go where the body hangs now, with no speed, lands it well. */
 #define HANG_PATIENCE 3.0f
+#define HANG_LIMIT 9.0f           /* a hang over harm ends here whatever the drop */
 
 static qboolean HangDropSafe(const sg_bot_t *bot, const edict_t *e)
 {
@@ -1155,7 +1156,8 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 				 ((bot->hang_since <= 0.0f ||
 				   level.time - bot->hang_since > HANG_PATIENCE) &&
 				  bot->rescue_spent < RESCUE_TRIES &&
-				  AnotherRescue(bot, e))))
+				  AnotherRescue(bot, e)) ||
+				 level.time - bot->ride_since > HANG_LIMIT))
 			{
 				ctf_hook_abort(e);
 				bot->hook_phase = 3;
@@ -1289,12 +1291,19 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 								e->s.origin[0], e->s.origin[1], e->s.origin[2], (unsigned)bot->cell,
 								(unsigned)bot->rescue_spent);
 						}
-						if (level.time - bot->hang_since < HANG_PATIENCE ||
-							bot->rescue_spent >= RESCUE_TRIES)
+						/* Patience first; then another rope if one can catch the
+						 * fall; past HANG_LIMIT the body lets go regardless: a
+						 * body out of the game for minutes is worth less than
+						 * one that respawns. */
+						if (level.time - bot->hang_since < HANG_PATIENCE)
 							goto ride_on;
-						VectorCopy(record->anchor, bot->rescue_failed);
-						if (!RescueAnchor(bot, e, probe))
-							goto ride_on;
+						if (level.time - bot->hang_since < HANG_LIMIT)
+						{
+							VectorCopy(record->anchor, bot->rescue_failed);
+							if (bot->rescue_spent >= RESCUE_TRIES ||
+								!RescueAnchor(bot, e, probe))
+								goto ride_on;
+						}
 					}
 					{
 						/* Let go at the bite, the body drops where it hangs.
@@ -2108,9 +2117,17 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 		 * record's own arc was the clean one). */
 		if (e->client->hookstate == 2 && bot->cell != SG_RUNE_CX_INDEX_NONE &&
 			!e->groundentity)
+		{
 			let_go = SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.complex,
 				&sg_rune_level.artifact.law, bot->cell, e->s.origin, e->velocity,
 				RELEASE_LIVE_TOLERANCE, 0, &live) ? true : false;
+			/* A body the rope presses against a wall or a lip sits at the
+			 * edge of the carved space, and the live trace cannot fly from
+			 * there at all.  Then the record's own checked arc is the
+			 * evidence: the ride asked to let go here. */
+			if (!let_go && live.seconds < 0.05f)
+				let_go = true;
+		}
 		if (sg_cv.debug && sg_cv.debug->value && !let_go && !bot->release_held_logged)
 		{
 			bot->release_held_logged = 1U;
