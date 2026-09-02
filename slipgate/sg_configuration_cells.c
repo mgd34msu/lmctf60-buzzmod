@@ -730,7 +730,7 @@ static float HullOffset(const sg_cfg_hull_t *hull,
 }
 
 #define SIDE_ORDER_MAX 64U
-#define CLEAR_EPSILON 0.03125f   /* a vertex this far inside a side still counts as on it */
+#define CLEAR_EPSILON 0.75f      /* a piece a side grazes by less than this is outside it: no sub-unit slivers */
 #define SAME_PLANE_DISTANCE 0.0625f /* two expansions of one side this close apart are one plane */
 
 /* The order a brush's sides are cut in: walls first, then ceilings, floors
