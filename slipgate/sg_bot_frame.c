@@ -1032,6 +1032,103 @@ static qboolean NearbyAnchor(const sg_bot_t *bot, const edict_t *e, vec3_t ancho
 /* The step for this frame: on a floor, the field's step; in the air, the
  * flight the body is on (or a fresh trace of where it is falling), steered
  * toward its landing. */
+
+/* A walk through a wall opening aims at the point of the portal nearest
+ * the body, not at the opening's foot: on a staircase the foot of the face
+ * between two stair cells is its far bottom corner, and a body sent there
+ * runs down the stairs and off them.  The point is clamped inside the
+ * portal's polygon, a little in from its edges, at the body's own height. */
+#define PORTAL_AIM_INSET 6.0f
+
+static float PlaneBitsToFloat(uint32_t bits)
+{
+	float value;
+
+	memcpy(&value, &bits, sizeof(value));
+	return value;
+}
+
+static void AimAtPortal(sg_rune_step_t *step, const vec3_t origin)
+{
+	const sg_rune_cx_view_t *cx = &sg_rune_level.artifact.complex;
+	const sg_rune_cx_portal_t *portal;
+	const sg_rune_cx_facet_t *facet;
+	vec3_t normal, point, centre;
+	float distance, along;
+	uint32_t i, count;
+
+	if (step->kind != SG_RUNE_STEP_CROSS || step->portal >= cx->portal_count ||
+		(step->move_kind != SG_RUNE_MOVE_WALK && step->move_kind != SG_RUNE_MOVE_CROUCH &&
+		 step->move_kind != SG_RUNE_MOVE_RAMP))
+		return;
+	portal = &cx->portals[step->portal];
+	if (portal->facet >= cx->facet_count)
+		return;
+	facet = &cx->facets[portal->facet];
+	count = facet->vertices.count;
+	if (count < 3U || facet->vertices.first + count > cx->vertex_count)
+		return;
+	normal[0] = PlaneBitsToFloat(facet->plane.normal_bits[0]);
+	normal[1] = PlaneBitsToFloat(facet->plane.normal_bits[1]);
+	normal[2] = PlaneBitsToFloat(facet->plane.normal_bits[2]);
+	distance = PlaneBitsToFloat(facet->plane.distance_bits);
+	if (fabsf(normal[2]) > 0.7f)
+		return;   /* a floor opening: its foot is flat anyway */
+	/* The body's point on the plane, then inside every edge. */
+	along = DotProduct(normal, origin) - distance;
+	VectorMA(origin, -along, normal, point);
+	VectorClear(centre);
+	for (i = 0U; i < count; i++)
+	{
+		const sg_rune_cx_vec3_t *v = &cx->vertices[facet->vertices.first + i];
+
+		centre[0] += (float)v->value[0] / (float)SG_RUNE_CX_Q8_ONE;
+		centre[1] += (float)v->value[1] / (float)SG_RUNE_CX_Q8_ONE;
+		centre[2] += (float)v->value[2] / (float)SG_RUNE_CX_Q8_ONE;
+	}
+	VectorScale(centre, 1.0f / (float)count, centre);
+	for (i = 0U; i < count; i++)
+	{
+		const sg_rune_cx_vec3_t *va = &cx->vertices[facet->vertices.first + i];
+		const sg_rune_cx_vec3_t *vb = &cx->vertices[facet->vertices.first + (i + 1U) % count];
+		vec3_t a, b, edge, inward;
+		float length, side, want;
+
+		a[0] = (float)va->value[0] / (float)SG_RUNE_CX_Q8_ONE;
+		a[1] = (float)va->value[1] / (float)SG_RUNE_CX_Q8_ONE;
+		a[2] = (float)va->value[2] / (float)SG_RUNE_CX_Q8_ONE;
+		b[0] = (float)vb->value[0] / (float)SG_RUNE_CX_Q8_ONE;
+		b[1] = (float)vb->value[1] / (float)SG_RUNE_CX_Q8_ONE;
+		b[2] = (float)vb->value[2] / (float)SG_RUNE_CX_Q8_ONE;
+		VectorSubtract(b, a, edge);
+		length = VectorLength(edge);
+		if (length < 1.0f)
+			continue;
+		CrossProduct(normal, edge, inward);
+		VectorNormalize(inward);
+		/* Inward is toward the polygon's centre, whatever the winding. */
+		{
+			vec3_t to_centre;
+
+			VectorSubtract(centre, a, to_centre);
+			if (DotProduct(inward, to_centre) < 0.0f)
+				VectorInverse(inward);
+		}
+		{
+			vec3_t rel;
+
+			VectorSubtract(point, a, rel);
+			side = DotProduct(rel, inward);
+		}
+		want = PORTAL_AIM_INSET;
+		if (length < 2.0f * PORTAL_AIM_INSET)
+			want = length * 0.5f;
+		if (side < want)
+			VectorMA(point, want - side, inward, point);
+	}
+	VectorCopy(point, step->target);
+}
+
 static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 {
 	const sg_rune_field_t *field;
@@ -1549,6 +1646,7 @@ grounded:
 		VectorCopy(e->s.origin, bot->step.target);
 	}
 flight:
+	AimAtPortal(&bot->step, e->s.origin);
 	/* Standing where the complex knows no floor (an entity's top, a brush
 	 * model): walk to the nearest floor the field reaches from. */
 	if (bot->step.kind == SG_RUNE_STEP_UNREACHABLE && supported)
