@@ -118,12 +118,12 @@ mechanism authorities and their topology, static transition indices.
 
 1. analytic library and evaluator (done)
 2. movement capabilities (done)
-3. artifact and publication; in-game generation entry `sv rune` (done,
-   not yet run in-game)
-4. runtime: locator, router, field, step, executor (done); level owner in
-   the game and the bot driver over them (next); then the era-1 flood
-   units the old driver carried go
-5. hook reach; mechanisms; weapons
+3. artifact and publication; in-game generation entry `sv rune` (done;
+   bctf01 generates in 19 s in-game and cold-loads)
+4. runtime: locator, router, field, step, executor, level owner, driver,
+   roster, orders, combat, items, team roles (done); the flood is gone
+5. mechanisms (next); hook reach; weapons in the RUNE; callouts; artifact
+   size
 
 After step 4 a bot walks, jumps, drops, and swims on a generated map. That
 is the first end-to-end run and it happens before hook and weapons.
