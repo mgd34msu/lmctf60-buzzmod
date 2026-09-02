@@ -315,3 +315,27 @@ artifact contracts alive to be confused for one another.
 9. **Order.** My proposal: orphans → ground movement → hook body/pull → hook
    occlusion → cost kernels → field service wiring → destination-era policy
    lift → legacy retirement.
+
+---
+
+# Generating on this machine (2026-09-01)
+
+The module demands four `CVAR_NOSET` identity cvars from the engine
+(`sv_rune_mapchecksum`, `sv_rune_physics_id`, `sv_rune_bsp_sha256`,
+`sv_rune_bsp_bytes`). Only the patched Yamagi tree at
+`~/Games/Quake2/engines/yquake2` publishes them; its `release/q2ded` lagged the
+source by two cvars until rebuilt with `make server`. `~/q2linux/q2reproded`
+(q2repro) has none of them, rejects game names containing dots, and does not
+know `-portable`; `tools/runegen.sh` now takes `Q2DED_FLAGS` and names stages
+with `[A-Za-z0-9_-]` only.
+
+Working sequence: `make -f GNUmakefile` (runtime module, now the default goal),
+`make -f GNUmakefile rune-compact-generator runecompactread.gnu`,
+`tools/deploy.sh <runtime .so>` into `~/Games/Quake2/lmctf-hooktest`, then
+`RUNE_GENERATOR_MODULE=<generator .so> RUNE_COMPACT_READER=./runecompactread.gnu
+tools/runegen.sh <map>` with the script defaults. The 175 corpus BSPs are in
+`~/.cache/lmctf06-relay-snapshot-v1/assets`; the live maps directory holds 38.
+
+The `rune-compact-test` family is not part of `host-test`; run it separately.
+Its static test carried a stale fixture (fixed in d32981b9) and its reader
+target lacked two link units (fixed in 54413d98).
