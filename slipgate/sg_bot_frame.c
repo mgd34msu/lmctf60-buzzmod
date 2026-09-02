@@ -109,24 +109,26 @@ static edict_t *TeamCarrier(int team)
 	return NULL;
 }
 
+typedef struct team_pass_s
+{
+	int assigned[SG_MAXBOTS];
+} team_pass_t;
+
+static team_pass_t sg_team_pass;
+
 static int RoleFor(sg_bot_t *bot, qboolean carrying)
 {
-	int forced;
+	int slot = (int)(bot - sg_bots);
+	int role;
 
 	if (carrying)
 		return SG_ROLE_CARRY;
-	forced = SG_OrderedRole(bot->ent);
-	if (forced >= 0 && forced < SG_ROLES &&
-		(forced != SG_ROLE_ESCORT || SG_OrderEscortTarget(bot->ent)))
-	{
-		if (forced == SG_ROLE_DEFEND)
-			bot->def_stand = true;
-		return forced;
-	}
-	if (TeamCarrier(SG_EnemyTeam(bot->ent->client->ctf.teamnum)) &&
-		!TeamCarrier(bot->ent->client->ctf.teamnum))
-		return SG_ROLE_RECOVER;
-	return SG_ROLE_ATTACK;
+	role = slot >= 0 && slot < SG_MAXBOTS ? sg_team_pass.assigned[slot] : -1;
+	if (role < 0 || role >= SG_ROLES)
+		role = SG_ROLE_ATTACK;
+	if (role == SG_ROLE_DEFEND)
+		bot->def_stand = true;
+	return role;
 }
 
 /* Where a team's flag is now: with its carrier, or wherever the flag entity
@@ -171,6 +173,118 @@ static qboolean FlagHome(int team, vec3_t out)
 		return false;
 	VectorCopy(flag->s.origin, out);
 	return true;
+}
+
+/* The team pass: once per frame per team, before any bot thinks.  Roles
+ * are assigned across the team's bots so that our flag is never left
+ * unguarded, a taken flag is chased by the bots nearest it, our carrier is
+ * escorted by the bot nearest to it, and the rest attack.  Human orders
+ * override the assignment for the bot they name. */
+static float DistanceTo(const edict_t *e, const vec3_t point)
+{
+	vec3_t delta;
+
+	VectorSubtract(point, e->s.origin, delta);
+	return VectorLength(delta);
+}
+
+static int NearestUnassigned(int team, const vec3_t point)
+{
+	int i, best = -1;
+	float best_distance = 1.0e9f;
+
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		edict_t *e = sg_bots[i].ent;
+		float distance;
+
+		if (!sg_bots[i].active || !e || !e->client || e->deadflag ||
+			e->client->ctf.teamnum != team || sg_team_pass.assigned[i] >= 0)
+			continue;
+		distance = DistanceTo(e, point);
+		if (distance < best_distance)
+		{
+			best_distance = distance;
+			best = i;
+		}
+	}
+	return best;
+}
+
+static void TeamPass(int team)
+{
+	int i, count = 0, defenders = 0;
+	edict_t *our_carrier = TeamCarrier(team);
+	edict_t *their_carrier = TeamCarrier(SG_EnemyTeam(team));
+	vec3_t home, flag_now;
+	qboolean have_home = FlagHome(team, home);
+
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		edict_t *e = sg_bots[i].ent;
+
+		if (!sg_bots[i].active || !e || !e->client ||
+			e->client->ctf.teamnum != team)
+			continue;
+		sg_team_pass.assigned[i] = -1;
+		if (ClientHasFlag(e))
+			sg_team_pass.assigned[i] = SG_ROLE_CARRY;
+		else
+		{
+			int forced = SG_OrderedRole(e);
+
+			if (forced >= 0 && forced < SG_ROLES &&
+				(forced != SG_ROLE_ESCORT || SG_OrderEscortTarget(e)))
+				sg_team_pass.assigned[i] = forced;
+		}
+		if (sg_team_pass.assigned[i] == SG_ROLE_DEFEND)
+			defenders++;
+		count++;
+	}
+	if (count == 0)
+		return;
+	/* Our flag is out: the two bots nearest to it recover. */
+	if (their_carrier && FlagNow(team, flag_now))
+	{
+		int recoverers = count >= 4 ? 2 : 1;
+
+		while (recoverers-- > 0)
+		{
+			int slot = NearestUnassigned(team, flag_now);
+
+			if (slot < 0)
+				break;
+			sg_team_pass.assigned[slot] = SG_ROLE_RECOVER;
+		}
+	}
+	/* Someone stays home when nobody was told to and there are enough of
+	 * us; with three or more, one defender; with five or more, two. */
+	if (have_home && defenders == 0 && count >= 3)
+	{
+		int want = count >= 5 ? 2 : 1;
+
+		while (want-- > 0)
+		{
+			int slot = NearestUnassigned(team, home);
+
+			if (slot < 0)
+				break;
+			sg_team_pass.assigned[slot] = SG_ROLE_DEFEND;
+		}
+	}
+	/* Our carrier gets the nearest free bot as escort. */
+	if (our_carrier)
+	{
+		int slot = NearestUnassigned(team, our_carrier->s.origin);
+
+		if (slot >= 0)
+			sg_team_pass.assigned[slot] = SG_ROLE_ESCORT;
+	}
+	for (i = 0; i < SG_MAXBOTS; i++)
+		if (sg_bots[i].active && sg_bots[i].ent && sg_bots[i].ent->client &&
+			sg_bots[i].ent->client->ctf.teamnum == team &&
+			sg_team_pass.assigned[i] < 0)
+			sg_team_pass.assigned[i] = SG_ROLE_ATTACK;
 }
 
 static qboolean DestinationFor(sg_bot_t *bot, int role, vec3_t out)
@@ -496,6 +610,8 @@ void SG_RunFrame(void)
 	if (!sg_level_setup_attempted)
 		(void)SG_LevelSetup();
 	Botfill_Frame();
+	TeamPass(CTF_TEAM_RED);
+	TeamPass(CTF_TEAM_BLUE);
 	for (i = 0; i < SG_MAXBOTS; i++)
 	{
 		edict_t *ent;

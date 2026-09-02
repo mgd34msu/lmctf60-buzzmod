@@ -228,6 +228,10 @@ sg_host_law_result_t SG_HostLawConstructionReplayFrame(
 	const sg_host_pmove_request_t *request,
 	const sg_host_pmove_replay_workspace_t *workspace,
 	sg_host_pmove_replay_t *replay_out, sg_host_pmove_error_t *error_out);
+/* The construction's own collision authority over the BSP it loaded: what
+ * the RUNE generator carves against. */
+const sg_host_collision_authority_t *SG_HostLawConstructionAuthority(
+	const sg_host_law_construction_t *construction);
 void SG_HostLawConstructionDestroy(sg_host_law_construction_t *construction);
 sg_host_law_result_t SG_HostLawPublicationHookPullVelocity(
 	const sg_host_law_publication_t *publication, const vec3_t start,

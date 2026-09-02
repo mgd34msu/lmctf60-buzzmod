@@ -2026,6 +2026,15 @@ sg_host_law_result_t SG_HostLawConstructionReplayFrame(
 	return Ok();
 }
 
+const sg_host_collision_authority_t *SG_HostLawConstructionAuthority(
+	const sg_host_law_construction_t *construction)
+{
+	if (!construction || construction->self != construction ||
+		!construction->world)
+		return NULL;
+	return &construction->authority;
+}
+
 void SG_HostLawConstructionDestroy(sg_host_law_construction_t *construction)
 {
 	if (!ConstructionShapeValid(construction))

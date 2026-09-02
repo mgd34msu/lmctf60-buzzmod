@@ -125,7 +125,7 @@ int SG_RuneGameGenerate(const char *mapname)
 	if (host_result.status == SG_HOST_LAW_OK && construction)
 		host_result = SG_HostLawConstructionRead(construction, &view);
 	if (host_result.status == SG_HOST_LAW_OK)
-		host_result = SG_HostLawProductionCollisionAuthority(&authority);
+		authority = SG_HostLawConstructionAuthority(construction);
 	if (host_result.status != SG_HOST_LAW_OK || !construction || !authority)
 	{
 		gi.dprintf("rune: generation refused stage=construction status=%s "
