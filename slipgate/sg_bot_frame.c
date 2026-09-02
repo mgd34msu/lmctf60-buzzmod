@@ -1962,6 +1962,10 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 			}
 		}
 	}
+	bot->logged_status = (uint8_t)command.status;
+	VectorCopy(command.direction, bot->logged_direction);
+	bot->logged_speed = command.speed;
+	bot->logged_up = command.up;
 	cmd.upmove = Move(400.0f * command.up);
 	if (command.attack)
 		cmd.buttons |= BUTTON_ATTACK;
@@ -2027,6 +2031,7 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 		bot->rope_bit_at = 0.0f;
 		Cmd_Hook_f(e);
 		bot->hook_phase = 2;
+		bot->release_held_logged = 0U;
 		bot->hook_entity = e->client->hook;
 		bot->fired_capability = bot->rescue ? SG_RUNE_CX_INDEX_NONE : bot->flight_capability;
 		bot->fired_bit = 0U;
@@ -2045,8 +2050,19 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 			let_go = SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.complex,
 				&sg_rune_level.artifact.law, bot->cell, e->s.origin, e->velocity,
 				RELEASE_LIVE_TOLERANCE, 1, &live) ? true : false;
+		if (sg_cv.debug && sg_cv.debug->value && !let_go && !bot->release_held_logged)
+		{
+			bot->release_held_logged = 1U;
+			gi.dprintf("SGROPE %s release held: live arc fails at speed=%.0f from (%.0f %.0f %.0f)\n",
+				e->client->pers.netname, VectorLength(e->velocity),
+				e->s.origin[0], e->s.origin[1], e->s.origin[2]);
+		}
 		if (let_go)
 		{
+			if (sg_cv.debug && sg_cv.debug->value)
+				gi.dprintf("SGROPE %s let go speed=%.0f vz=%.0f ground=%d\n",
+					e->client->pers.netname, VectorLength(e->velocity), e->velocity[2],
+					e->groundentity != NULL);
 			ctf_hook_abort(e);
 			bot->hook_phase = 3;
 			bot->hook_entity = NULL;
@@ -2142,7 +2158,7 @@ void SG_BotThink(sg_bot_t *bot)
 		bot->logged_capability = bot->step.capability;
 		VectorCopy(bot->step.target, bot->logged_target);
 		gi.dprintf("SGBOT %s role=%d cell=%u dest=%u step=%s/%s cap=%u at=(%.0f %.0f %.0f) "
-			"target=(%.0f %.0f %.0f) cost=%.1f st=%c%c v=%.0f hook=%d hp=%d",
+			"target=(%.0f %.0f %.0f) cost=%.1f st=%c%c v=%.0f hook=%d hp=%d cmd=%u(%.2f %.2f %.2f)x%.2f up=%.1f",
 			e->client->pers.netname,
 			bot->role, (unsigned int)bot->cell, (unsigned int)bot->destination_cell,
 			SG_RuneStepKindString(bot->step.kind),
@@ -2153,7 +2169,9 @@ void SG_BotThink(sg_bot_t *bot)
 			bot->step.target[1], bot->step.target[2], bot->step.cost_to_go,
 			(e->client->ps.pmove.pm_flags & PMF_DUCKED) ? 'C' : 'S',
 			bot->step.crouching_next ? 'c' : 's', VectorLength(e->velocity),
-			e->client->hookstate, e->health);
+			e->client->hookstate, e->health, (unsigned)bot->logged_status,
+			bot->logged_direction[0], bot->logged_direction[1], bot->logged_direction[2],
+			bot->logged_speed, bot->logged_up);
 		if (bot->step.hook_point_present)
 			gi.dprintf(" anchor=(%.0f %.0f %.0f) release=%.0f",
 				bot->step.hook_point[0], bot->step.hook_point[1],
