@@ -63,6 +63,8 @@ static float FlightReach(const sg_tactic_body_t *body, float vertical_velocity)
 #define RUN_UP_EASE 64.0f
 #define ARRIVE_STAND 8.0f         /* arrived within this: stand still */
 #define JUMP_PRESS_SLACK 6.0f     /* jump this much before the frame reaches the portal */
+#define JUMP_PRESS_STALL_DISTANCE 40.0f /* this near the portal with no speed: a ledge holds the body */
+#define JUMP_PRESS_STALL_SPEED 60.0f
 #define JUMP_PRESS_SPEED 0.8f     /* and only at this fraction of run speed */
 #define RUN_UP_CLOSE 16.0f
 #define RUN_UP_BEHIND 8.0f
@@ -433,9 +435,12 @@ int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 				body->velocity[1] * body->velocity[1]);
 			float frame = (float)(body->frame_ms ? body->frame_ms : 100U) / 1000.0f;
 
+			/* Stalled at the portal: a ledge stops the body there, and a
+			 * standing jump against it is the only way up. */
 			if (!have_direction ||
 				(distance <= speed * frame + JUMP_PRESS_SLACK &&
-				 speed >= JUMP_PRESS_SPEED * (body->law ? body->law->max_velocity : 300.0f)))
+				 speed >= JUMP_PRESS_SPEED * (body->law ? body->law->max_velocity : 300.0f)) ||
+				(distance <= JUMP_PRESS_STALL_DISTANCE && speed < JUMP_PRESS_STALL_SPEED))
 			{
 				command.up = 1.0f;
 				command.status = SG_TACTIC_COMMAND_MOVE;

@@ -142,6 +142,44 @@ int main(int argc, char **argv)
 		SG_RuneArtifactRelease(&artifact);
 		return 0;
 	}
+	/* "stats": how the cells are shaped. */
+	if (argc == 3 && !strcmp(argv[2], "stats"))
+	{
+		uint32_t i, by_facets[8] = { 0 }, thin = 0, supported = 0, thin_supported = 0, flat = 0;
+
+		status = SG_RuneArtifactLoadFile(argv[1], &artifact, &os_error, &fault);
+		if (status != SG_RUNE_ARTIFACT_OK)
+		{
+			fprintf(stderr, "load: %s\n", SG_RuneArtifactStatusString(status));
+			return 1;
+		}
+		for (i = 0; i < artifact.complex.cell_count; i++)
+		{
+			const sg_rune_cx_cell_t *c = &artifact.complex.cells[i];
+			double dx = (c->bounds.maxs.value[0] - c->bounds.mins.value[0]) / 8.0;
+			double dy = (c->bounds.maxs.value[1] - c->bounds.mins.value[1]) / 8.0;
+			double dz = (c->bounds.maxs.value[2] - c->bounds.mins.value[2]) / 8.0;
+			int sup = (c->semantics & SG_RUNE_CX_CELL_SUPPORTED) != 0;
+
+			by_facets[c->incidences.count < 7U ? c->incidences.count : 7U]++;
+			supported += sup;
+			if (dx < 4.0 || dy < 4.0)
+			{
+				thin++;
+				thin_supported += sup;
+			}
+			if (dz < 4.0)
+				flat++;
+		}
+		printf("cells %u supported %u; thinner than 4 in x or y: %u (%u supported); shorter than 4: %u\n",
+			(unsigned)artifact.complex.cell_count, supported, thin, thin_supported, flat);
+		printf("by facet count:");
+		for (i = 0; i < 8; i++)
+			printf(" %u:%u", i, by_facets[i]);
+		printf(" (7 = seven or more)\n");
+		SG_RuneArtifactRelease(&artifact);
+		return 0;
+	}
 	/* "n x y z r": every cell whose box comes within r of the point. */
 	if (argc == 7 && argv[2][0] == 'n' && argv[2][1] == 0)
 	{
