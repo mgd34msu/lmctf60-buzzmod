@@ -1652,9 +1652,11 @@ static void ApplyMechanism(sg_bot_t *bot, edict_t *e)
 
 #define GIVE_WAY_LOOK 40.0f       /* the step aside is checked this far ahead for floor */
 #define VIEW_FOLLOWS_SPEED 0.3f   /* the view turns with the run only above this command speed */
+#define HOOK_BITE_SLACK 12.0f     /* the bolt may stop this short of the bite (the bite is two units off its face) */
 #define HOP_SPEED 250.0f          /* a bunny hop needs this much run */
 #define HOP_ROUTE_LEFT 1.5f       /* and this much route left, in seconds */
 #define HOP_MAX_SECONDS 0.9f      /* and must land within this */
+#define HOP_RUN_ON_SECONDS 0.15f  /* and the floor must go on under the run after it */
 #define YIELD_REACH 72.0f         /* a standing body this near a teammate carrier steps away */
 
 static void GiveWay(const edict_t *e, float direction[3])
@@ -1897,7 +1899,23 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 			if (SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.complex,
 				&sg_rune_level.artifact.law, bot->cell, e->s.origin, launch,
 				RELEASE_LIVE_TOLERANCE, 1, &hop) && hop.seconds < HOP_MAX_SECONDS)
-				command.up = 1.0f;
+			{
+				/* And the run after the landing stays on floor: a body at hop
+				 * speed covers another body length before it can turn. */
+				vec3_t on, flat;
+				sg_rune_flight_t next;
+
+				VectorCopy(hop.landing, on);
+				on[2] += 1.0f;
+				flat[0] = launch[0];
+				flat[1] = launch[1];
+				flat[2] = 0.0f;
+				if (hop.landing_cell < sg_rune_level.artifact.complex.cell_count &&
+					SG_RuneFlightTrace(&sg_rune_level.artifact.complex,
+						&sg_rune_level.artifact.law, hop.landing_cell, on, flat, &next) &&
+					next.outcome == SG_RUNE_FLIGHT_LANDED && next.seconds < HOP_RUN_ON_SECONDS)
+					command.up = 1.0f;
+			}
 		}
 	}
 	cmd.upmove = Move(400.0f * command.up);
@@ -1925,6 +1943,34 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 		e->client->v_angle[PITCH] = pitch;
 		command.hook_fire = 1U;
 		command.hook_release = 0U;
+	}
+	/* No rope at a bite the eye cannot see: a bolt through a wall is a
+	 * miss and a second of standing for nothing. */
+	if (command.hook_fire && bot->step.hook_point_present)
+	{
+		vec3_t eye;
+		trace_t tr;
+
+		VectorCopy(e->s.origin, eye);
+		eye[2] += (float)e->viewheight;
+		tr = gi.trace(eye, NULL, NULL, bot->step.hook_point, e, MASK_SOLID);
+		if (tr.fraction < 1.0f && VectorLength(tr.endpos) > 0.0f)
+		{
+			vec3_t short_of;
+
+			VectorSubtract(bot->step.hook_point, tr.endpos, short_of);
+			if (VectorLength(short_of) > HOOK_BITE_SLACK)
+			{
+				command.hook_fire = 0U;
+				if (bot->flight_capability != SG_RUNE_CX_INDEX_NONE && !bot->rescue)
+				{
+					Avoid(bot, bot->flight_capability);
+					if (sg_cv.debug && sg_cv.debug->value)
+						gi.dprintf("SGBOT %s bite out of sight: ride avoided\n",
+							e->client->pers.netname);
+				}
+			}
+		}
 	}
 	if (command.hook_fire && SG_BotHookReady(e))
 	{
