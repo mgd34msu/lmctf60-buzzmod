@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 
+#include "sg_rune_compact_model.h"
 #include "sg_tactic_execution.h"
 
 typedef enum sg_tactic_command_status_e
@@ -26,6 +27,7 @@ typedef struct sg_tactic_body_s
 {
 	float origin[3];
 	float velocity[3];
+	float view_height;        /* eye above origin; the hook leaves from here */
 	uint8_t supported;
 	uint8_t waterlevel;
 	uint8_t crouched;
@@ -53,8 +55,16 @@ typedef struct sg_tactic_command_s
 	uint8_t reserved[3];
 } sg_tactic_command_t;
 
-int SG_TacticControl(const sg_tactic_execution_t *execution,
-	const sg_tactic_body_t *body, sg_tactic_command_t *command_out);
+/* The model resolves a hook target to a point to aim at; it may be NULL when
+ * no hook capability can be selected. */
+int SG_TacticControl(const sg_rune_compact_model_t *model,
+	const sg_tactic_execution_t *execution, const sg_tactic_body_t *body,
+	sg_tactic_command_t *command_out);
+
+/* Where a RUNE hook target is aimed at: a certified fact's witness on the
+ * target surface, or the nearest patch centre of a candidate group. */
+int SG_TacticHookTargetAim(const sg_rune_compact_model_t *model,
+	uint32_t hook_target, const float from[3], float aim_out[3]);
 
 const char *SG_TacticCommandStatusString(sg_tactic_command_status_t status);
 

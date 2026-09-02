@@ -44,6 +44,11 @@ typedef struct sg_tactic_execution_s
 	sg_tactic_phase_t target_phase;
 	sg_host_hook_phase_t target_hook_phase;
 	sg_tactic_mechanism_request_t mechanism_handoff;
+	/* The RUNE hook target the selected hook capability attaches to, when the
+	 * winning probe was a hook probe. */
+	uint32_t hook_target;
+	uint8_t hook_target_present;
+	uint8_t hook_reserved[3];
 } sg_tactic_execution_t;
 
 /* Exhaustively converts the six public field-result kinds into one command-

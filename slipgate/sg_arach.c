@@ -2511,6 +2511,13 @@ static qboolean StrategyCommitFrame(sg_bot_t *bot, sg_think_t *tc,
 			selected = status == SG_TACTIC_RUNTIME_OK &&
 				SG_TacticExecutionDispatchSelected(model, &field_result,
 					&prepared.result, execution_out);
+			if (selected && prepared.exact_probe.provenance.kind ==
+				SG_RUNE_COMPACT_FIELD_PROBE_HOOK)
+			{
+				execution_out->hook_target =
+					prepared.exact_probe.provenance.value.hook.hook_target;
+				execution_out->hook_target_present = 1U;
+			}
 			(void)SG_TacticRuntimePreparedStepRelease(&prepared);
 		}
 		if (!selected &&
@@ -3123,6 +3130,7 @@ static void CompactTacticEmit(sg_bot_t *bot, edict_t *e,
 		memset(&body, 0, sizeof(body));
 		VectorCopy(e->s.origin, body.origin);
 		VectorCopy(e->velocity, body.velocity);
+		body.view_height = (float)e->viewheight;
 		body.supported = e->groundentity != NULL ? 1U : 0U;
 		body.waterlevel = (uint8_t)e->waterlevel;
 		body.crouched = (e->client->ps.pmove.pm_flags & PMF_DUCKED) != 0 ?
@@ -3133,7 +3141,8 @@ static void CompactTacticEmit(sg_bot_t *bot, edict_t *e,
 		body.gravity = sv_gravity->value;
 		body.frame_ms = SG_HOST_ENGINE_FRAME_MS;
 		body.substep_ms = SG_HOST_ENGINE_PMOVE_SUBSTEP_MS;
-		if (!SG_TacticControl(execution, &body, &command))
+		if (!SG_TacticControl(sg_compact_production.runtime.accepted_model,
+			execution, &body, &command))
 		{
 			memset(&command, 0, sizeof(command));
 			command.status = SG_TACTIC_COMMAND_HOLD;
