@@ -170,6 +170,24 @@ static qboolean Enemy(const edict_t *self, const edict_t *other)
 /* Look: note every visible enemy; pick the target.  The enemy carrying our
  * flag outranks anything; otherwise the nearest visible one; a target seen
  * within the last two seconds is kept while nothing better shows. */
+#define CARRIER_GUARD_RANGE 600.0f
+
+/* Our team's flag carrier, if any. */
+static edict_t *TeamCarrier(int team)
+{
+	int i;
+
+	for (i = 1; i <= game.maxclients; i++)
+	{
+		edict_t *e = &g_edicts[i];
+
+		if (e->inuse && e->client && e->health > 0 &&
+			e->client->ctf.teamnum == team && ClientHasFlag(e))
+			return e;
+	}
+	return NULL;
+}
+
 static edict_t *Look(edict_t *self, combat_state_t *state)
 {
 	int i, best = 0;
@@ -196,6 +214,19 @@ static edict_t *Look(edict_t *self, combat_state_t *state)
 		score = 4096.0f - distance;
 		if (ClientHasFlag(other))
 			score += 8192.0f;
+		/* An enemy close to our carrier is the one to stop. */
+		{
+			edict_t *carrier = TeamCarrier(self->client->ctf.teamnum);
+
+			if (carrier && carrier != self)
+			{
+				vec3_t to_carrier;
+
+				VectorSubtract(other->s.origin, carrier->s.origin, to_carrier);
+				if (VectorLength(to_carrier) < CARRIER_GUARD_RANGE)
+					score += 4096.0f;
+			}
+		}
 		if (i == state->target)
 			score += 256.0f;    /* stay on the one already engaged */
 		if (score > best_score)

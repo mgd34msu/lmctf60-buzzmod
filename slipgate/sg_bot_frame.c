@@ -125,7 +125,8 @@ static team_pass_t sg_team_pass;
 
 static uint32_t StandingCellNear(const vec3_t point);
 
-#define ESCORT_GAP_SECONDS 1.0f   /* an escort holds this far behind the carrier */
+#define ESCORT_GAP_SECONDS 1.0f   /* an escort holds this far from its point */
+#define ESCORT_AHEAD 128.0f       /* the escort's point runs this far ahead of a moving carrier */
 #define CARRIER_DETOUR_HEALTH 40  /* under this a carrier will go for health */
 
 uint32_t SG_BotStandingCellNear(const vec3_t point)
@@ -337,7 +338,18 @@ static qboolean DestinationFor(sg_bot_t *bot, int role, vec3_t out)
 			target = TeamCarrier(team);
 		if (target)
 		{
+			/* Ahead of a moving carrier, to clear what it is running into;
+			 * on it when it stands. */
+			vec3_t ahead;
+			float speed = VectorLength(target->velocity);
+
 			VectorCopy(target->s.origin, out);
+			if (speed > 50.0f)
+			{
+				VectorScale(target->velocity, ESCORT_AHEAD / speed, ahead);
+				ahead[2] = 0.0f;
+				VectorAdd(out, ahead, out);
+			}
 			return true;
 		}
 		return FlagNow(enemy, out);
