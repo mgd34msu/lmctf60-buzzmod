@@ -3318,7 +3318,8 @@ host-test: $(HOST_TEST_BIN) $(ACTION_TEST_BIN) $(COMPOUND_TEST_BIN) \
 		$(POV_SUPERVISOR_BIN) \
 		era4-portal-movement-test \
 		host-rocket-jump-law-test \
-		tactic-controller-test
+		tactic-controller-test \
+		rune-analytic-test
 	./$(HOST_TEST_BIN)
 	./$(ACTION_TEST_BIN)
 	./$(COMPOUND_TEST_BIN)
@@ -4384,3 +4385,8 @@ $(CELLSDUMP_BIN): tools/cellsdump.c slipgate/sg_configuration_cells.c \
 		slipgate/sg_rune_model.c slipgate/sg_crc32.c -lm -o $@
 .PHONY: cellsdump
 cellsdump: $(CELLSDUMP_BIN)
+
+.PHONY: rune-analytic-test
+rune-analytic-test: tests/run_sg_rune_analytic_test.sh tests/sg_rune_analytic_test.c \
+		slipgate/sg_rune_analytic.c slipgate/sg_rune_analytic.h
+	sh tests/run_sg_rune_analytic_test.sh
