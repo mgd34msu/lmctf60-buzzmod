@@ -17,6 +17,7 @@
 
 #include "sg_bot_orders.h"
 #include "sg_bot_combat.h"
+#include "sg_bot_items.h"
 #include "sg_client_ownership.h"
 #include "sg_host_engine_pmove.h"
 #include "sg_host_law_owner.h"
@@ -35,8 +36,13 @@ static qboolean sg_level_setup_attempted;
 
 /* ---- level ------------------------------------------------------------- */
 
+/* Loads this level's RUNE once; a second call while it is current for
+ * the same map is a no-op, so adding a bot never reloads the artifact. */
 qboolean SG_LevelSetup(void)
 {
+	if (SG_RuneLevelCurrent() &&
+		!strcmp(sg_rune_level.mapname, level.mapname))
+		return true;
 	sg_level_setup_attempted = true;
 	return SG_RuneLevelBegin(level.mapname) ? true : false;
 }
@@ -440,8 +446,29 @@ static void SelectStep(sg_bot_t *bot, edict_t *e, const vec3_t destination)
 	field = SG_RuneLevelField(bot->destination_cell);
 	if (!field)
 		return;
+	/* An item worth the detour becomes the destination for now; the goal's
+	 * own field prices the detour.  A carrier never detours. */
+	if (bot->role != SG_ROLE_CARRY)
+	{
+		vec3_t item_point;
+
+		if (SG_BotItemDetour(bot, field, item_point))
+		{
+			uint32_t item_cell = SG_RuneLevelLocate(item_point, 0, NULL);
+			const sg_rune_field_t *item_field = item_cell != SG_RUNE_CX_INDEX_NONE ?
+				SG_RuneLevelField(item_cell) : NULL;
+
+			if (item_field)
+			{
+				(void)SG_RuneStepSelect(&sg_rune_level.router, item_field,
+					bot->cell, crouching, item_point, &bot->step);
+				goto flight;
+			}
+		}
+	}
 	(void)SG_RuneStepSelect(&sg_rune_level.router, field, bot->cell, crouching,
 		destination, &bot->step);
+flight:
 	if (bot->step.kind == SG_RUNE_STEP_CROSS &&
 		(bot->step.move_kind == SG_RUNE_MOVE_JUMP ||
 		 bot->step.move_kind == SG_RUNE_MOVE_DROP ||
