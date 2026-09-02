@@ -2102,10 +2102,15 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 		/* The record's arc was checked with margins when it was made; the
 		 * live check catches a gross deviation, not a marginal one, so it
 		 * runs at the speed the body has. */
-		if (e->client->hookstate == 2 && bot->cell != SG_RUNE_CX_INDEX_NONE)
+		/* On the floor there is nothing to land: let go.  In the air the
+		 * arc may glance off a wall or a lip on the way down; what matters
+		 * is that it lands on a floor, so clips are allowed here (the
+		 * record's own arc was the clean one). */
+		if (e->client->hookstate == 2 && bot->cell != SG_RUNE_CX_INDEX_NONE &&
+			!e->groundentity)
 			let_go = SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.complex,
 				&sg_rune_level.artifact.law, bot->cell, e->s.origin, e->velocity,
-				RELEASE_LIVE_TOLERANCE, 1, &live) ? true : false;
+				RELEASE_LIVE_TOLERANCE, 0, &live) ? true : false;
 		if (sg_cv.debug && sg_cv.debug->value && !let_go && !bot->release_held_logged)
 		{
 			bot->release_held_logged = 1U;
