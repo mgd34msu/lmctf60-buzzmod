@@ -54,8 +54,21 @@ static float Worth(const edict_t *self, const edict_t *item)
 	if (it->flags & IT_AMMO)
 	{
 		int have = client->pers.inventory[ITEM_INDEX(it)];
+		int i, useful = 0;
 
 		if (have >= 30)
+			return 0.0f;
+		/* Ammo is worth what the weapons in hand can fire. */
+		for (i = 1; i < game.num_items && !useful; i++)
+		{
+			const gitem_t *weapon = &itemlist[i];
+
+			if ((weapon->flags & IT_WEAPON) && weapon->ammo &&
+				client->pers.inventory[i] > 0 && it->pickup_name &&
+				!strcmp(weapon->ammo, it->pickup_name))
+				useful = 1;
+		}
+		if (!useful)
 			return 0.0f;
 		return 20.0f * (1.0f - (float)have / 30.0f);
 	}
@@ -74,7 +87,15 @@ static float Worth(const edict_t *self, const edict_t *item)
 		return (float)gain * 0.6f;
 	}
 	if (it->flags & IT_POWERUP)
-		return 80.0f;
+	{
+		/* Quad, invulnerability and the techs change a fight; the rest of
+		 * the powerup class (silencer, breather, suit) is not worth a step. */
+		if (it->classname && (!strcmp(it->classname, "item_quad") ||
+			!strcmp(it->classname, "item_invulnerability") ||
+			strstr(it->classname, "rune") || strstr(it->classname, "tech")))
+			return 80.0f;
+		return 0.0f;
+	}
 	if (it->classname && !strncmp(it->classname, "item_health", 11))
 	{
 		int gain = item->count > 0 ? item->count : 10;
