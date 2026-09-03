@@ -2000,13 +2000,14 @@ static qboolean FloorAhead(const edict_t *e, const vec3_t direction, float dista
 #define DODGE_RANGE 1200.0f
 #define DODGE_FLOOR_LOOK 48.0f
 #define DODGE_HOP_SPEED 200.0f
+#define DODGE_FLOOR_FAR 256.0f     /* the farthest the floor is checked for a dodge */
 
 static void Dodge(sg_bot_t *bot, edict_t *e, sg_tactic_command_t *command, qboolean *moving)
 {
 	edict_t *enemy = SG_BotCombatTarget(e);
 	const sg_bot_persona_t *persona = SG_BotPersona(e);
 	vec3_t to, side, want;
-	float flat, speed;
+	float flat, speed, look;
 
 	if (!enemy || !e->groundentity || e->client->hookstate != 0 || e->waterlevel >= 2 ||
 		bot->step.run_up_present || bot->step.launch_present ||
@@ -2034,12 +2035,20 @@ static void Dodge(sg_bot_t *bot, edict_t *e, sg_tactic_command_t *command, qbool
 		bot->dodge_hop_at = level.time;
 	}
 	VectorScale(side, (float)bot->dodge_sign, side);
+	/* The body commits to the way for the whole hold, and a hop flies
+	 * with no air control: the floor must reach as far as that carries. */
+	speed = sqrtf(e->velocity[0] * e->velocity[0] + e->velocity[1] * e->velocity[1]);
+	if (speed < DODGE_HOP_SPEED)
+		speed = DODGE_HOP_SPEED;
+	look = speed * (DODGE_HOLD_MIN + DODGE_HOLD_SPAN) + DODGE_FLOOR_LOOK;
+	if (look > DODGE_FLOOR_FAR)
+		look = DODGE_FLOOR_FAR;
 	/* No floor that way: go the other way now. */
-	if (!FloorAhead(e, side, DODGE_FLOOR_LOOK))
+	if (!FloorAhead(e, side, DODGE_FLOOR_LOOK) || !FloorAhead(e, side, look))
 	{
 		bot->dodge_sign = (int8_t)-bot->dodge_sign;
 		VectorInverse(side);
-		if (!FloorAhead(e, side, DODGE_FLOOR_LOOK))
+		if (!FloorAhead(e, side, DODGE_FLOOR_LOOK) || !FloorAhead(e, side, look))
 			return;
 	}
 	if (*moving && command->speed > 0.0f)
@@ -2049,8 +2058,8 @@ static void Dodge(sg_bot_t *bot, edict_t *e, sg_tactic_command_t *command, qbool
 		want[2] = 0.0f;
 		if (VectorNormalize(want) < 0.01f)
 			return;
-		/* The blend must still have floor. */
-		if (!FloorAhead(e, want, DODGE_FLOOR_LOOK))
+		/* The blend must still have floor as far as the hold carries. */
+		if (!FloorAhead(e, want, DODGE_FLOOR_LOOK) || !FloorAhead(e, want, look))
 			return;
 		VectorCopy(want, command->direction);
 	}
@@ -2061,8 +2070,9 @@ static void Dodge(sg_bot_t *bot, edict_t *e, sg_tactic_command_t *command, qbool
 		command->status = SG_TACTIC_COMMAND_MOVE;
 		*moving = true;
 	}
-	speed = sqrtf(e->velocity[0] * e->velocity[0] + e->velocity[1] * e->velocity[1]);
-	if (bot->dodge_hop_at == level.time && speed >= DODGE_HOP_SPEED && command->up == 0.0f)
+	/* The hop flies for half a second: floor must reach its landing. */
+	if (bot->dodge_hop_at == level.time && speed >= DODGE_HOP_SPEED && command->up == 0.0f &&
+		FloorAhead(e, command->direction, speed * 0.6f + DODGE_FLOOR_LOOK))
 		command->up = 1.0f;
 }
 
