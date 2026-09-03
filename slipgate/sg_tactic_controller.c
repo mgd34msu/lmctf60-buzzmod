@@ -265,8 +265,11 @@ static void HookControl(const sg_rune_step_t *step, const sg_tactic_body_t *body
 	{
 		float dx = step->target[0] - body->origin[0];
 
-		/* The ride was swept with the crouch hull: ride crouched. */
-		command->up = -1.0f;
+		/* On the floor the pull is dragged against ground friction and
+		 * arrives at half speed: hop, and the rope carries the body in the
+		 * air.  Off the floor the ride was swept with the crouch hull: ride
+		 * crouched. */
+		command->up = body->supported ? 1.0f : -1.0f;
 		float dy = step->target[1] - body->origin[1];
 		float flat = sqrtf(dx * dx + dy * dy);
 		float to_bite = INFINITY;
