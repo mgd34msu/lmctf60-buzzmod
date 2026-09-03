@@ -65,6 +65,11 @@ typedef struct sg_bot_s
 	int8_t dodge_sign;          /* which way it goes now: +1 or -1 */
 	float dodge_hop_at;         /* the last hop with a reversal */
 	uint8_t footwork;           /* this frame's movement is idle footwork: the view need not follow */
+	vec3_t still_origin;        /* where the body was last seen to have moved from */
+	float still_since;
+	uint8_t dislodge_stage;     /* 0 free, 1 backing off, 2 roped, 3 rerouted */
+	float dislodge_until;
+	vec3_t dislodge_direction;
 	uint8_t logged_status;      /* the last command, for the log line */
 	float logged_direction[3];
 	float logged_speed;

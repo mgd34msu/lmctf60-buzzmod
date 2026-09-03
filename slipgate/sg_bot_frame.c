@@ -2143,6 +2143,88 @@ static void IdleFootwork(sg_bot_t *bot, edict_t *e, sg_tactic_command_t *command
 	bot->footwork = 1U;
 }
 
+
+/* A body that has not moved a body length in a few seconds is stuck,
+ * whatever it thinks it is doing.  It dislodges itself in stages: back off
+ * with a hop; then rope to the nearest bite it knows; then forget the
+ * destination and the crossing so the field finds another way. */
+#define STILL_DISTANCE 32.0f
+#define STILL_SECONDS 3.0f
+#define DISLODGE_BACK_SECONDS 0.6f
+#define DISLODGE_ROPE_AFTER 5.0f
+#define DISLODGE_REROUTE_AFTER 8.0f
+
+static void Dislodge(sg_bot_t *bot, edict_t *e, sg_tactic_command_t *command, qboolean *moving)
+{
+	vec3_t moved;
+	float still;
+
+	VectorSubtract(e->s.origin, bot->still_origin, moved);
+	if (VectorLength(moved) > STILL_DISTANCE || bot->still_since <= 0.0f ||
+		e->deadflag || e->client->hookstate == 2)
+	{
+		VectorCopy(e->s.origin, bot->still_origin);
+		bot->still_since = level.time;
+		if (e->client->hookstate != 2)
+			bot->dislodge_stage = 0U;
+		return;
+	}
+	still = level.time - bot->still_since;
+	if (bot->dislodge_stage == 0U && still >= STILL_SECONDS)
+	{
+		/* Back off the way the body was pushing, or away from the view. */
+		if (*moving && VectorLength(command->direction) > 0.5f)
+			VectorScale(command->direction, -1.0f, bot->dislodge_direction);
+		else
+		{
+			vec3_t forward;
+
+			AngleVectors(e->client->v_angle, forward, NULL, NULL);
+			forward[2] = 0.0f;
+			VectorNormalize(forward);
+			VectorScale(forward, -1.0f, bot->dislodge_direction);
+		}
+		bot->dislodge_direction[2] = 0.0f;
+		bot->dislodge_stage = 1U;
+		bot->dislodge_until = level.time + DISLODGE_BACK_SECONDS;
+		if (sg_cv.debug && sg_cv.debug->value)
+			gi.dprintf("SGBOT %s still %.1fs at (%.0f %.0f %.0f): backing off\n",
+				e->client->pers.netname, still, e->s.origin[0], e->s.origin[1], e->s.origin[2]);
+	}
+	if (bot->dislodge_stage == 1U && level.time < bot->dislodge_until)
+	{
+		VectorCopy(bot->dislodge_direction, command->direction);
+		command->speed = 1.0f;
+		command->status = SG_TACTIC_COMMAND_MOVE;
+		if (e->groundentity && level.time - (bot->dislodge_until - DISLODGE_BACK_SECONDS) < 0.15f)
+			command->up = 1.0f;
+		*moving = true;
+		return;
+	}
+	if (bot->dislodge_stage == 1U && still >= DISLODGE_ROPE_AFTER)
+	{
+		bot->dislodge_stage = 2U;
+		if (e->client->hookstate == 0 && !bot->rescue && SG_BotHookReady(e) &&
+			NearbyAnchor(bot, e, bot->rescue_anchor))
+		{
+			bot->rescue = 1U;
+			if (sg_cv.debug && sg_cv.debug->value)
+				gi.dprintf("SGBOT %s still %.1fs: rope to a bite nearby\n",
+					e->client->pers.netname, still);
+		}
+	}
+	if (bot->dislodge_stage == 2U && still >= DISLODGE_REROUTE_AFTER)
+	{
+		bot->dislodge_stage = 3U;
+		bot->destination_cell = SG_RUNE_CX_INDEX_NONE;
+		if (bot->step.kind == SG_RUNE_STEP_CROSS && bot->step.capability != SG_RUNE_CX_INDEX_NONE)
+			Avoid(bot, bot->step.capability);
+		if (sg_cv.debug && sg_cv.debug->value)
+			gi.dprintf("SGBOT %s still %.1fs: rerouted\n", e->client->pers.netname, still);
+		bot->still_since = level.time;   /* the stages start over if this fails too */
+	}
+}
+
 static void Emit(sg_bot_t *bot, edict_t *e)
 {
 	usercmd_t cmd;
@@ -2234,6 +2316,7 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	bot->footwork = 0U;
 	Dodge(bot, e, &command, &moving);
 	IdleFootwork(bot, e, &command, &moving);
+	Dislodge(bot, e, &command, &moving);
 	if (moving)
 		GiveWay(e, command.direction);
 	/* The view follows the way the body goes only at a real pace: a nudge
