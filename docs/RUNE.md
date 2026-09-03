@@ -88,8 +88,8 @@ A crossing that the engine would not allow is not recorded.
 Every crossing records its cost in seconds, the stance it needs, and, for
 launches, the run-up point and the launch velocity the flight was traced
 with. Flights shorter than 0.15 s are discarded; a flight must land robustly,
-which means it still lands when its speed is off by ten percent or its line
-by eight units.
+which means it still lands when its speed is off by ten percent (fifteen for
+a rope release) or its line by eight units.
 
 ## Rope rides
 
