@@ -174,7 +174,7 @@ replacement runs on a real map.
    flight, the pull, the release arc, and no fixed penalty; before this a
    walk out-priced the rope on most edges and bots roped eight times a
    minute. The archive-wide numbers (155 demos, about thirty hours of
-   visible movement) are in `docs/ERA4-PLAYERS-STANDARD.txt`: the four best
+   visible movement) are in `docs/PLAYERS-STANDARD.txt`: the four best
    rope 19 to 28 times a minute; the owner 4.6.
 3. **Movement capabilities** (era 4, done). One record per crossing per
    admissible kind: cell, portal, destination cell, kind, source and
@@ -340,7 +340,7 @@ build until the era-4 level owner and bot driver replace the call sites in
 The host-facing units that survived that pass (BSP reader, collision,
 host laws, identity, source authority, hooks bridge, net bridge, weapon
 profiles, personas, cvars, helpers) were rewritten or removed on
-2026-09-02; see ERA4-REVIEW.md.
+2026-09-02; see UNITS.md.
 
 Gone from the artifact: the response projection (fragments, halfspaces,
 patches, splits, facts, candidate and endpoint groups, occluders, seal),
@@ -407,7 +407,7 @@ bctf01 (108 MB, 27.6 s as bmap1, the same geometry) plus:
 
 ## 2026-09-02 afternoon: what the owner's play and the demos exposed, and the fixes
 
-Measured against the players' standard (docs/ERA4-PLAYERS-STANDARD.txt) the
+Measured against the players' standard (docs/PLAYERS-STANDARD.txt) the
 bots were slow on the rope and stuck in places the owner runs through.  The
 causes, each found against the BSP with the tools below:
 
@@ -457,7 +457,7 @@ releases.
 ## 2026-09-02 evening: the players as the model
 
 - Every player in the 155 beatdown demos is measured by entity track
-  ($CLAUDE_JOB_DIR/tmp/demoplayers.py; docs/ERA4-PLAYERS-STANDARD.txt).  Zest
+  ($CLAUDE_JOB_DIR/tmp/demoplayers.py; docs/PLAYERS-STANDARD.txt).  Zest
   is the target (30 ropes a minute, 36 sharp turns a minute, 9 steals and 4
   captures per ten minutes); Lequin ("leq", "lequen") second.  vereke is not
   a model (owner).

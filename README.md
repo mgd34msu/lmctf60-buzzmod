@@ -30,7 +30,7 @@ The database creates itself. `1` gives one file per player instead; `0` is off.
 
 Stats are viewable on the web via [q2lmstats](https://github.com/mgd34msu/q2lmstats).
 
-## SLIPGATE bots (v1.0.0)
+## SLIPGATE bots
 
 SLIPGATE is the mod's from-scratch bot system, built into the game module.
 It plays LMCTF the way the best players do: the rope on nearly every move,
@@ -38,8 +38,8 @@ released at speed in the air; strafing and reversing in fights; a team goal
 that every bot follows and falls back on.  The bots are measured against the
 top players' demos (Zest, Lequin, seed, Em, sinsemilla): the rope rate,
 release speed, air time, turn rate and objective rates in
-`docs/ERA4-PLAYERS-STANDARD.txt` are the targets, and the numbers the bots
-reach are in `docs/ERA4-RUNE.md`.
+`docs/PLAYERS-STANDARD.txt` are the targets, and the numbers the bots
+reach are in `docs/RUNE.md`.
 
 **Nothing to run by hand.**  The first time a map loads, its routes (the
 RUNE, `maps/<map>.rune`) are built in the background while the server plays
@@ -80,15 +80,15 @@ destination dies falls back on the goal.  See `SLIPGATE.md`.
 - `tools/demobites.py DEMOS... -o maps/` and `tools/logbites.py LOGS... -o maps/`
   add rope bites from demos or from server logs to the maps' bite files.
 - `tools/dm2trace.py`, `fieldcheck`, `bsppoint`, `cellsdump.gnu` for looking at
-  demos and at a map's routes (`docs/ERA4-RUNE.md`).
+  demos and at a map's routes (`docs/RUNE.md`).
 
 ### Documents
 
-- `docs/RELEASE-ERA4.md` -- the release notes.
+- `docs/RELEASE-v1.0.0.md` -- the release notes.
 - `SLIPGATE.md` -- the design.
-- `docs/ERA4-RUNE.md` -- the RUNE in detail and the day-by-day record of what
-  the play data changed.
-- `docs/ERA4-PLAYERS-STANDARD.txt` -- the players the bots are measured against.
+- `docs/RUNE.md` -- the routes in detail and the record of what the play data
+  changed.
+- `docs/PLAYERS-STANDARD.txt` -- the players the bots are measured against.
 - `docs/README.md` -- which documents are current and which are history.
 
 ## What's tracked

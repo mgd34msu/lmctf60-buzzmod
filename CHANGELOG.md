@@ -2,8 +2,7 @@
 
 ## v1.0.0 -- 2026-09-02
 
-The first release of the era-4 bots.  Everything below is new code; the
-earlier bot eras are gone.
+The first release with the SLIPGATE bots.  Everything below is new code.
 
 Routes
 - The map carved into a cell complex with the player's hull; crossings

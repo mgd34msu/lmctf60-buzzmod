@@ -1,11 +1,13 @@
 # Documents
 
+The files named ERA4-*, HANDOFF-* and the design notes are internal development records; the public documents are README.md, SLIPGATE.md, CHANGELOG.md, ROADMAP.md and RELEASE-v1.0.0.md.
+
 Current (v1.0.0):
-- RELEASE-ERA4.md -- release notes: what ships, first run, console variables.
-- ERA4-RUNE.md -- the RUNE in detail and the record of what the play data
+- RELEASE-v1.0.0.md -- release notes: what ships, first run, console variables.
+- RUNE.md -- the RUNE in detail and the record of what the play data
   changed, section by section through 2026-09-02.
-- ERA4-PLAYERS-STANDARD.txt -- the players the bots are measured against.
-- ERA4-REVIEW.md -- each unit under slipgate/ and its origin.
+- PLAYERS-STANDARD.txt -- the players the bots are measured against.
+- UNITS.md -- each unit under slipgate/ and its origin.
 - LAYOUT.md, layout-isa.md -- the scoreboard layout compiler and its wire
   budget.
 - repository-hygiene.md -- how the repository is kept.

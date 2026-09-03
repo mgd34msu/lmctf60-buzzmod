@@ -1,8 +1,8 @@
-# Slipgate era 4 -- initial release notes (2026-09-02)
+# LMCTF BuzzMod v1.0.0 -- release notes (2026-09-02)
 
 What ships
-- The game module (gamex86_64.so / gamex86_64.dll): the LMCTF game with the
-  era-4 bots and the RUNE generator inside it.
+- The game module (gamex86_64.so / gamex86_64.dll): LMCTF with the SLIPGATE
+  bots and their route builder inside it.
 - maps/<map>.bites: the players' rope bites per map (47 maps from the
   beatdown demos), read by the generator.  Optional; a map without one gets
   geometry-only rides.
