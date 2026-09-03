@@ -1,5 +1,6 @@
 
 #include "g_local.h"
+#include "p_stats.h"
 #include "ctf_sqlite_unidb.h"
 #include "ctf_file_io.h"
 #include "g_ctffunc.h" //surt for some nice wrapper functions
@@ -36,6 +37,7 @@ cvar_t	*dmflags;
 cvar_t	*skill;
 cvar_t	*fraglimit;
 cvar_t	*timelimit;
+cvar_t	*capturelimit;   /* captures that end a map, 0 for none */
 cvar_t	*railtime;
 cvar_t	*password;
 cvar_t	*spectator_password;
@@ -686,6 +688,28 @@ void CheckDMRules (void)
 		{
 			ctf_BSafePrint(PRINT_HIGH, "Timelimit hit.\n");
 			EndDMLevel ();
+			return;
+		}
+	}
+
+	if (capturelimit && capturelimit->value && !Match_Mode())
+	{
+		int red = 0, blue = 0;
+
+		for (i = 0; i < maxclients->value; i++)
+		{
+			player = g_edicts + 1 + i;
+			if (!player->inuse || !player->client)
+				continue;
+			if (player->client->ctf.teamnum == CTF_TEAM_RED)
+				red += stats_get(player, STATS_CAPTURES);
+			else if (player->client->ctf.teamnum == CTF_TEAM_BLUE)
+				blue += stats_get(player, STATS_CAPTURES);
+		}
+		if (red >= capturelimit->value || blue >= capturelimit->value)
+		{
+			ctf_BSafePrint(PRINT_HIGH, "Capturelimit hit.\n");
+			EndDMLevel();
 			return;
 		}
 	}

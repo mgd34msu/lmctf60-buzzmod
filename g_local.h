@@ -613,6 +613,7 @@ extern	cvar_t	*dmflags;
 extern	cvar_t	*skill;
 extern	cvar_t	*fraglimit;
 extern	cvar_t	*timelimit;
+extern	cvar_t	*capturelimit;
 extern	cvar_t	*railtime;
 extern	cvar_t	*password;
 extern	cvar_t	*spectator_password;

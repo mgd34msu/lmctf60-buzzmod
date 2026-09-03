@@ -202,6 +202,7 @@ void InitGame(void)
 	dmflags = gi.cvar("dmflags", "0", CVAR_SERVERINFO);
 	fraglimit = gi.cvar("fraglimit", "0", CVAR_SERVERINFO);
 	timelimit = gi.cvar("timelimit", "0", CVAR_SERVERINFO);
+	capturelimit = gi.cvar("capturelimit", "0", CVAR_SERVERINFO);
 	railtime = gi.cvar("railtime", "0", CVAR_SERVERINFO);
 	password = gi.cvar("password", "", CVAR_USERINFO);
 	spectator_password = gi.cvar("spectator_password", "", CVAR_USERINFO);
