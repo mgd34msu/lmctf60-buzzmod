@@ -44,7 +44,7 @@
 // silent-drop-on-unicast failure docs/LAYOUT.md describes, so every
 // current producer's manual guard already stops short of it (1380,
 // one board at 1000). This is that same interim margin, in one place.
-#define UI_LAYOUT_BUDGET 1380
+#define UI_LAYOUT_BUDGET 1000
 
 // Per-cell scratch size a table row callback formats into. Generous
 // against every field width any current board packs into one row
