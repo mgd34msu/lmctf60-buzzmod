@@ -21,6 +21,7 @@ typedef enum
 	SG_GOAL_BRING_IT_HOME,      /* we carry: escort the carrier, hold the base */
 	SG_GOAL_RECOVER_OURS,       /* they carry ours: hunt the carrier down */
 	SG_GOAL_HOLD_AND_RETAKE,    /* both out: keep ours alive, get theirs back */
+	SG_GOAL_TURTLE,             /* well ahead: everyone defends but one runner */
 	SG_GOALS
 } sg_team_goal_t;
 int SG_TeamGoal(int team);

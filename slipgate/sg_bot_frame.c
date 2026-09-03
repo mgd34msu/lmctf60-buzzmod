@@ -20,6 +20,7 @@
 #include "sg_bot_host.h"
 #include "sg_bot_combat.h"
 #include "sg_bot_persona.h"
+#include "../p_stats.h"
 #include "sg_bot_items.h"
 #include "sg_bot_cvars.h"
 #include "sg_engine_facts.h"
@@ -132,7 +133,24 @@ typedef struct team_pass_s
 
 static team_pass_t sg_team_pass;
 
-static int GoalFor(const edict_t *our_carrier, const edict_t *their_carrier)
+/* A team's captures: the sum over its players. */
+static int TeamCaptures(int team)
+{
+	int client, total = 0;
+
+	for (client = 0; client < game.maxclients; client++)
+	{
+		edict_t *entity = &g_edicts[client + 1];
+
+		if (entity->inuse && entity->client && entity->client->ctf.teamnum == team)
+			total += stats_get(entity, STATS_CAPTURES);
+	}
+	return total;
+}
+
+#define TURTLE_LEAD 2             /* more captures ahead than this: turtle */
+
+static int GoalFor(int team, const edict_t *our_carrier, const edict_t *their_carrier)
 {
 	if (our_carrier && their_carrier)
 		return SG_GOAL_HOLD_AND_RETAKE;
@@ -140,6 +158,8 @@ static int GoalFor(const edict_t *our_carrier, const edict_t *their_carrier)
 		return SG_GOAL_BRING_IT_HOME;
 	if (their_carrier)
 		return SG_GOAL_RECOVER_OURS;
+	if (TeamCaptures(team) - TeamCaptures(SG_EnemyTeam(team)) > TURTLE_LEAD)
+		return SG_GOAL_TURTLE;
 	return SG_GOAL_TAKE_THEIRS;
 }
 
@@ -156,6 +176,7 @@ const char *SG_TeamGoalName(int goal)
 	case SG_GOAL_BRING_IT_HOME: return "bring it home: escort the carrier";
 	case SG_GOAL_RECOVER_OURS: return "recover our flag: hunt the carrier";
 	case SG_GOAL_HOLD_AND_RETAKE: return "hold ours alive and get theirs back";
+	case SG_GOAL_TURTLE: return "turtle: everyone defends, one runner";
 	default: return "?";
 	}
 }
@@ -168,12 +189,16 @@ static int GoalRole(int team)
 	case SG_GOAL_BRING_IT_HOME: return TeamCarrier(team) ? SG_ROLE_ESCORT : SG_ROLE_ATTACK;
 	case SG_GOAL_RECOVER_OURS: return SG_ROLE_RECOVER;
 	case SG_GOAL_HOLD_AND_RETAKE: return SG_ROLE_RECOVER;
+	case SG_GOAL_TURTLE: return SG_ROLE_DEFEND;
 	default: return SG_ROLE_ATTACK;
 	}
 }
 
 static unsigned TeamSituation(int team)
 {
+	/* The lead matters only across the turtle line. */
+	unsigned turtle = (unsigned)(TeamCaptures(team) - TeamCaptures(SG_EnemyTeam(team)) > TURTLE_LEAD);
+
 	unsigned key = 2166136261U;
 	int i;
 	edict_t *ours = TeamCarrier(SG_EnemyTeam(team));    /* carries our flag */
@@ -187,6 +212,7 @@ static unsigned TeamSituation(int team)
 
 	key = (key ^ (unsigned)our_state) * 16777619U;
 	key = (key ^ (unsigned)their_state) * 16777619U;
+	key = (key ^ turtle) * 16777619U;
 	key = (key ^ (unsigned)(ours ? ours->s.number : 0)) * 16777619U;
 	key = (key ^ (unsigned)(theirs ? theirs->s.number : 0)) * 16777619U;
 	key = (key ^ (unsigned)(sg_team_pass.powerup[SG_TeamIdx(team) ? 1 : 0] ?
@@ -416,7 +442,7 @@ static void TeamPass(int team)
 	SightPowerups(team);
 	situation = TeamSituation(team);
 	{
-		int goal = GoalFor(our_carrier, their_carrier);
+		int goal = GoalFor(team, our_carrier, their_carrier);
 
 		if (goal != sg_team_pass.goal[side] || sg_team_pass.goal_since[side] <= 0.0f)
 		{
@@ -563,6 +589,22 @@ static void TeamPass(int team)
 				break;
 			sg_team_pass.assigned[slot] = SG_ROLE_ESCORT;
 		}
+	}
+	/* Turtling: one runner keeps their defenders honest, everyone else
+	 * defends. */
+	if (sg_team_pass.goal[side] == SG_GOAL_TURTLE)
+	{
+		vec3_t theirs;
+		int runner = FlagHome(SG_EnemyTeam(team), theirs) ?
+			NearestUnassigned(team, theirs, SG_ROLE_ATTACK) : -1;
+
+		if (runner >= 0)
+			sg_team_pass.assigned[runner] = SG_ROLE_ATTACK;
+		for (i = 0; i < SG_MAXBOTS; i++)
+			if (sg_bots[i].active && sg_bots[i].ent && sg_bots[i].ent->client &&
+				sg_bots[i].ent->client->ctf.teamnum == team &&
+				sg_team_pass.assigned[i] < 0)
+				sg_team_pass.assigned[i] = SG_ROLE_DEFEND;
 	}
 	for (i = 0; i < SG_MAXBOTS; i++)
 		if (sg_bots[i].active && sg_bots[i].ent && sg_bots[i].ent->client &&
