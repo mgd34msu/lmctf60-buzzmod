@@ -4,3 +4,14 @@ seed        459.5 min  speed mean 326 median 310 p90 688 over300 58%  rope 19.4/
 zest        382.3 min  speed mean 321 median 302 p90 662 over300 52%  rope 28.3/min out 0.51s fire 367 release 470
 buzz        289.1 min  speed mean 256 median 293 p90 386 over300 44%  rope  4.6/min out 0.64s fire 299 release 485
 em          280.2 min  speed mean 305 median 303 p90 660 over300 52%  rope 20.7/min out 0.53s fire 361 release 503
+
+Entity tracks (every player in the 155 beatdown demos, 10 Hz; rope 'out' = cable visible; $CLAUDE_JOB_DIR/tmp/demoplayers.py, full table /tmp/sg_scratch/players-all.txt):
+player        min  mean   p90  >300 rope/m   out  fire release turn/m nearE nearO | per 10 min: steal cap return
+zest          356   334   667   53%   29.8  1.05   367     482   36.0   10%   23% |   9.1   3.9   6.0
+leq (Lequin)  422   288   575   48%   21.7  1.33   353     499   31.6   12%   21% |   5.2   1.3   6.0
+seed          389   328   691   58%   19.5  0.67   365     577   35.9   11%   29% |   6.0   1.7   2.7
+em            198   331   680   56%   22.9  1.12   365     532   35.6   10%   19% |  12.1   2.8   6.9
+sinsemilla    519   316   620   57%   19.8  0.71   357     546   34.6   11%   24% |   4.8   1.5   2.3
+buzzkill      286   256   387   44%    4.6  1.82   297     470   23.3    8%   25% |   5.8   0.8   4.5
+The target is Zest (owner: "likely the best player in the world at lmctf"), Lequin a close second; vereke is not a model (owner).
+Owner live on bctf01 (2026-09-02 evening): strafe key 70% of moving time, 30 strafe reversals/min, half of movement >30 deg off the view; bots tonight: speed 323, rope 13.1/bot-min, release 745, no dodging, 1.9 steals and 0.35 captures per bot per 10 min.
