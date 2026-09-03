@@ -436,6 +436,17 @@ static void FeedbackSound(edict_t *event_ent, edict_t *actor, char *sample)
 	int idx = gi.soundindex(sample);
 
 	gi.sound(event_ent, CHAN_AUTO, idx, 1, ATTN_NORM, 0);
+	{
+		static cvar_t *debug;
+
+		if (!debug)
+			debug = gi.cvar("sg_debug", "0", 0);
+		if (debug->value)
+			gi.dprintf("SGSOUND %s at %s (entity %d) for %s index %d\n", sample,
+				event_ent && event_ent->client ? event_ent->client->pers.netname : "?",
+				event_ent ? (int)event_ent->s.number : -1,
+				actor && actor->client ? actor->client->pers.netname : "-", idx);
+	}
 
 	// bots have no connection to deliver the private copy to.  The copy
 	// names the attacker's own entity (SND_ENT, channel auto): a sound on
