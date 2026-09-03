@@ -2930,6 +2930,12 @@ void SG_HumanTrace(edict_t *ent, const usercmd_t *ucmd)
 		ent->client->v_angle[PITCH],
 		(unsigned int)SG_RuneLevelLocate(ent->s.origin,
 			(ent->client->ps.pmove.pm_flags & PMF_DUCKED) != 0, NULL));
+	/* The rope's bite while it holds: the owner's own bites join the map's
+	 * bite file the way the demo players' do. */
+	if (ent->client->hookstate == 2 && ent->client->hook)
+		gi.dprintf("SGHUMAN %s bite=(%.0f %.0f %.0f)\n", ent->client->pers.netname,
+			ent->client->hook->s.origin[0], ent->client->hook->s.origin[1],
+			ent->client->hook->s.origin[2]);
 }
 
 void SG_RunFrame(void)
