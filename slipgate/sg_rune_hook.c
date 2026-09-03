@@ -34,7 +34,31 @@ typedef struct bite_s
 	float normal[3];
 	int32_t cluster;
 	uint32_t next;            /* next bite in the same cluster */
+	uint8_t human;            /* from the players' demos, not a surface centre */
 } bite_t;
+
+/* Keeps the farthest few candidates in a list, by distance. */
+static void InsertCandidate(uint32_t *list, float *distances, uint32_t *count,
+	uint32_t bite, float distance)
+{
+	uint32_t slot;
+
+	for (slot = *count; slot > 0U && distances[slot - 1U] < distance; slot--)
+	{
+		if (slot < CANDIDATES_PER_CELL)
+		{
+			list[slot] = list[slot - 1U];
+			distances[slot] = distances[slot - 1U];
+		}
+	}
+	if (slot < CANDIDATES_PER_CELL)
+	{
+		list[slot] = bite;
+		distances[slot] = distance;
+		if (*count < CANDIDATES_PER_CELL)
+			(*count)++;
+	}
+}
 
 typedef struct hook_build_s
 {
@@ -127,6 +151,7 @@ static void AddHumanBites(hook_build_t *build)
 		bite->point[0] = trace.end[0] + trace.normal[0] * 2.0f;
 		bite->point[1] = trace.end[1] + trace.normal[1] * 2.0f;
 		bite->point[2] = trace.end[2] + trace.normal[2] * 2.0f;
+		bite->human = 1U;
 		bite->cluster = SG_RuneVisClusterAt(build->bsp, bite->point);
 		if (bite->cluster < 0 || (uint32_t)bite->cluster >= build->cluster_count)
 			continue;
@@ -194,6 +219,7 @@ static int CollectBites(hook_build_t *build)
 		bite->point[0] = sum[0] / (float)surface->vertices.count + bite->normal[0] * 2.0f;
 		bite->point[1] = sum[1] / (float)surface->vertices.count + bite->normal[1] * 2.0f;
 		bite->point[2] = sum[2] / (float)surface->vertices.count + bite->normal[2] * 2.0f;
+		bite->human = 0U;
 		bite->cluster = SG_RuneVisClusterAt(build->bsp, bite->point);
 		if (bite->cluster < 0 || (uint32_t)bite->cluster >= build->cluster_count)
 			continue;
@@ -265,9 +291,11 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 	const sg_rune_cx_cell_t *record = &cx->cells[cell];
 	float stand[3], eye[3];
 	int32_t cluster;
-	uint32_t candidates[CANDIDATES_PER_CELL];
-	float candidate_distance[CANDIDATES_PER_CELL];
-	uint32_t candidate_count = 0U, c, i;
+	uint32_t candidates[2U * CANDIDATES_PER_CELL];
+	float candidate_distance[2U * CANDIDATES_PER_CELL];
+	uint32_t human_candidates[CANDIDATES_PER_CELL];
+	float human_distance[CANDIDATES_PER_CELL];
+	uint32_t candidate_count = 0U, human_count = 0U, c, i;
 
 	stand[0] = (float)((double)record->bounds.mins.value[0] +
 		(double)record->bounds.maxs.value[0]) / (2.0f * (float)SG_RUNE_CX_Q8_ONE);
@@ -293,7 +321,6 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 			float dx = bite->point[0] - eye[0], dy = bite->point[1] - eye[1];
 			float dz = bite->point[2] - eye[2];
 			float distance = sqrtf(dx * dx + dy * dy + dz * dz);
-			uint32_t slot;
 
 			/* A bite inside the pull's slow band never carries the body at
 			 * speed; the best players fire far and ride long. */
@@ -302,25 +329,20 @@ static int RidesFromCell(hook_build_t *build, uint32_t cell,
 				continue;
 			if (bite->normal[0] * dx + bite->normal[1] * dy + bite->normal[2] * dz > 0.0f)
 				continue;   /* the surface faces away */
-			/* Insert by distance, keeping the farthest few: a long pull at
-			 * full speed is what the rope is for. */
-			for (slot = candidate_count; slot > 0U &&
-				candidate_distance[slot - 1U] < distance; slot--)
-			{
-				if (slot < CANDIDATES_PER_CELL)
-				{
-					candidates[slot] = candidates[slot - 1U];
-					candidate_distance[slot] = candidate_distance[slot - 1U];
-				}
-			}
-			if (slot < CANDIDATES_PER_CELL)
-			{
-				candidates[slot] = b;
-				candidate_distance[slot] = distance;
-				if (candidate_count < CANDIDATES_PER_CELL)
-					candidate_count++;
-			}
+			/* Keep the farthest few: a long pull at full speed is what the
+			 * rope is for.  The players' bites have a pool of their own, so
+			 * they never crowd the surfaces' out nor are crowded out. */
+			if (bite->human)
+				InsertCandidate(human_candidates, human_distance, &human_count, b, distance);
+			else
+				InsertCandidate(candidates, candidate_distance, &candidate_count, b, distance);
 		}
+	}
+	for (i = 0U; i < human_count; i++)
+	{
+		candidates[candidate_count] = human_candidates[i];
+		candidate_distance[candidate_count] = human_distance[i];
+		candidate_count++;
 	}
 	*landing_count = 0U;
 	for (i = 0U; i < candidate_count; i++)
