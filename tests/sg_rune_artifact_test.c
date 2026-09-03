@@ -92,13 +92,13 @@ int main(int argc, char **argv)
 	source.law.crouching_maxs[2] = 4.0f;
 	SG_RuneLawEngine(&source.law, 800.0f);
 	source.identity.law_crc32 = SG_RuneLawCrc(&source.law);
-	source.complex.cells = cells; source.complex.cell_count = 2U;
-	source.complex.facets = &facet; source.complex.facet_count = 1U;
-	source.complex.incidences = incidences; source.complex.incidence_count = 2U;
-	source.complex.cell_incidences = cell_incidences;
-	source.complex.cell_incidence_count = 2U;
-	source.complex.vertices = vertices; source.complex.vertex_count = 4U;
-	source.complex.portals = &portal; source.complex.portal_count = 1U;
+	source.cx.cells = cells; source.cx.cell_count = 2U;
+	source.cx.facets = &facet; source.cx.facet_count = 1U;
+	source.cx.incidences = incidences; source.cx.incidence_count = 2U;
+	source.cx.cell_incidences = cell_incidences;
+	source.cx.cell_incidence_count = 2U;
+	source.cx.vertices = vertices; source.cx.vertex_count = 4U;
+	source.cx.portals = &portal; source.cx.portal_count = 1U;
 	SG_RuneMoveStoreView(&store, &source.movement);
 	CHECK(source.movement.capability_count >= 2U);
 	CHECK(SG_RuneArtifactValid(&source, NULL));
@@ -108,8 +108,8 @@ int main(int argc, char **argv)
 	CHECK(image && image_size > 0U);
 	CHECK(SG_RuneArtifactDecode(image, image_size, &decoded, NULL) ==
 		SG_RUNE_ARTIFACT_OK);
-	CHECK(decoded.complex.cell_count == 2U);
-	CHECK(decoded.complex.portal_count == 1U);
+	CHECK(decoded.cx.cell_count == 2U);
+	CHECK(decoded.cx.portal_count == 1U);
 	CHECK(decoded.movement.capability_count == source.movement.capability_count);
 	CHECK(decoded.movement.profile_count == source.movement.profile_count);
 	CHECK(decoded.movement.analytic.function_count ==
@@ -117,7 +117,7 @@ int main(int argc, char **argv)
 	CHECK(decoded.law.gravity == 800.0f);
 	CHECK(SG_RuneIdentityMatches(&decoded.identity, &source.identity));
 	CHECK(SG_RuneLawMatches(&decoded.law, &source.law));
-	CHECK(memcmp(decoded.complex.cells, cells, sizeof(cells)) == 0);
+	CHECK(memcmp(decoded.cx.cells, cells, sizeof(cells)) == 0);
 	{
 		float inputs[SG_RUNE_FN_INPUT_COUNT];
 		float cost = 0.0f;
@@ -158,7 +158,7 @@ int main(int argc, char **argv)
 		SG_RUNE_ARTIFACT_OK);
 	CHECK(loaded.owned != NULL);
 	CHECK(loaded.image_size == image_size);
-	CHECK(loaded.complex.portal_count == 1U);
+	CHECK(loaded.cx.portal_count == 1U);
 	SG_RuneArtifactRelease(&loaded);
 	remove(path);
 	CHECK(SG_RuneArtifactLoadFile(path, &loaded, &os_error, NULL) ==

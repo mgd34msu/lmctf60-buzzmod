@@ -261,7 +261,7 @@ int main(int argc, char **argv)
 				source.identity.bsp_bytes = world->file_bytes;
 				source.identity.law_crc32 = SG_RuneLawCrc(&law4);
 				source.law = law4;
-				source.complex = view;
+				source.cx = view;
 				SG_RuneMoveStoreView(&movement, &source.movement);
 				SG_RuneMechStoreView(&mechanisms, &source.mechanisms);
 				SG_RuneFireStoreView(&fires, &source.fires);
@@ -289,8 +289,8 @@ int main(int argc, char **argv)
 					&fault);
 				printf("reload: %s  [%.2fs]  cells %u portals %u capabilities %u\n",
 					SG_RuneArtifactStatusString(status), Now() - t7,
-					(unsigned)loaded.complex.cell_count,
-					(unsigned)loaded.complex.portal_count,
+					(unsigned)loaded.cx.cell_count,
+					(unsigned)loaded.cx.portal_count,
 					(unsigned)loaded.movement.capability_count);
 				if (status != SG_RUNE_ARTIFACT_OK && fault.array)
 					printf("  fault: %s[%u] %s\n", fault.array,

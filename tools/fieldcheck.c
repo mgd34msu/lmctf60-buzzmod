@@ -105,8 +105,8 @@ int main(int argc, char **argv)
 		{
 			uint32_t c, supported = 0U, kinds[SG_RUNE_MOVE_KIND_COUNT] = { 0 }, k;
 
-			for (c = 0U; c < artifact.complex.cell_count; c++)
-				if (artifact.complex.cells[c].semantics & SG_RUNE_CX_CELL_SUPPORTED)
+			for (c = 0U; c < artifact.cx.cell_count; c++)
+				if (artifact.cx.cells[c].semantics & SG_RUNE_CX_CELL_SUPPORTED)
 					supported++;
 			for (c = 0U; c < artifact.movement.capability_count; c++)
 				kinds[artifact.movement.capabilities[c].kind]++;
@@ -117,7 +117,7 @@ int main(int argc, char **argv)
 						(sg_rune_move_kind_t)k), kinds[k]);
 		}
 		{
-			const sg_rune_cx_view_t *cx = &artifact.complex;
+			const sg_rune_cx_view_t *cx = &artifact.cx;
 			const sg_rune_move_table_t *mv = &artifact.movement;
 #define SECTION(name, count, type) printf("  %-18s %9u x %3zu = %6.1f MB\n", name, \
 	(unsigned)(count), sizeof(type), (double)(count) * sizeof(type) / 1048576.0)
@@ -135,8 +135,8 @@ int main(int argc, char **argv)
 #undef SECTION
 		}
 		printf("rune ok: cells %u portals %u capabilities %u bytes %lu\n",
-			(unsigned)artifact.complex.cell_count,
-			(unsigned)artifact.complex.portal_count,
+			(unsigned)artifact.cx.cell_count,
+			(unsigned)artifact.cx.portal_count,
 			(unsigned)artifact.movement.capability_count,
 			(unsigned long)artifact.image_size);
 		SG_RuneArtifactRelease(&artifact);
@@ -153,9 +153,9 @@ int main(int argc, char **argv)
 			fprintf(stderr, "load: %s\n", SG_RuneArtifactStatusString(status));
 			return 1;
 		}
-		for (i = 0; i < artifact.complex.cell_count; i++)
+		for (i = 0; i < artifact.cx.cell_count; i++)
 		{
-			const sg_rune_cx_cell_t *c = &artifact.complex.cells[i];
+			const sg_rune_cx_cell_t *c = &artifact.cx.cells[i];
 			double dx = (c->bounds.maxs.value[0] - c->bounds.mins.value[0]) / 8.0;
 			double dy = (c->bounds.maxs.value[1] - c->bounds.mins.value[1]) / 8.0;
 			double dz = (c->bounds.maxs.value[2] - c->bounds.mins.value[2]) / 8.0;
@@ -172,7 +172,7 @@ int main(int argc, char **argv)
 				flat++;
 		}
 		printf("cells %u supported %u; thinner than 4 in x or y: %u (%u supported); shorter than 4: %u\n",
-			(unsigned)artifact.complex.cell_count, supported, thin, thin_supported, flat);
+			(unsigned)artifact.cx.cell_count, supported, thin, thin_supported, flat);
 		printf("by facet count:");
 		for (i = 0; i < 8; i++)
 			printf(" %u:%u", i, by_facets[i]);
@@ -192,9 +192,9 @@ int main(int argc, char **argv)
 			fprintf(stderr, "load: %s\n", SG_RuneArtifactStatusString(status));
 			return 1;
 		}
-		for (i = 0; i < artifact.complex.cell_count; i++)
+		for (i = 0; i < artifact.cx.cell_count; i++)
 		{
-			const sg_rune_cx_cell_t *c = &artifact.complex.cells[i];
+			const sg_rune_cx_cell_t *c = &artifact.cx.cells[i];
 			int k, near = 1;
 
 			for (k = 0; k < 3; k++)
@@ -222,13 +222,13 @@ int main(int argc, char **argv)
 			return 1;
 		}
 		if (!SG_RuneRouterBuild(&router, &artifact) ||
-			cell_index >= artifact.complex.cell_count)
+			cell_index >= artifact.cx.cell_count)
 		{
 			fprintf(stderr, "no such cell\n");
 			return 1;
 		}
 		{
-			const sg_rune_cx_cell_t *c = &artifact.complex.cells[cell_index];
+			const sg_rune_cx_cell_t *c = &artifact.cx.cells[cell_index];
 
 			printf("cell %u: z %g..%g xy %g..%g %g..%g stances %u semantics 0x%x "
 				"centre (%.0f %.0f %.0f)\n", cell_index,
@@ -240,7 +240,7 @@ int main(int argc, char **argv)
 				router.cell_center[cell_index * 3U + 2U]);
 		}
 		{
-			const sg_rune_cx_view_t *cx = &artifact.complex;
+			const sg_rune_cx_view_t *cx = &artifact.cx;
 			const sg_rune_cx_cell_t *c = &cx->cells[cell_index];
 			uint32_t k;
 
@@ -310,8 +310,8 @@ int main(int argc, char **argv)
 			fprintf(stderr, "load: %s\n", SG_RuneArtifactStatusString(status));
 			return 1;
 		}
-		cells = artifact.complex.cells;
-		count = artifact.complex.cell_count;
+		cells = artifact.cx.cells;
+		count = artifact.cx.cell_count;
 		order = malloc((size_t)count * sizeof(*order));
 		for (a = 0U; a < count; a++)
 			order[a] = a;
@@ -348,8 +348,8 @@ int main(int argc, char **argv)
 					(ca->bounds.mins.value[2] > cb->bounds.mins.value[2] ? ca->bounds.mins.value[2] : cb->bounds.mins.value[2]);
 				if (ox < 8 * 4 || oy < 8 * 4 || oz < 8 * 4)
 					continue;
-				if (!CentreInside(&artifact.complex, order[a], order[b]) &&
-					!CentreInside(&artifact.complex, order[b], order[a]))
+				if (!CentreInside(&artifact.cx, order[a], order[b]) &&
+					!CentreInside(&artifact.cx, order[b], order[a]))
 					continue;
 				found++;
 				if (shown < 12U)
@@ -390,7 +390,7 @@ int main(int argc, char **argv)
 		start = SG_RuneLocate(&locator, origin, 0U, 8.0f, &violation);
 		printf("start cell %u violation %g\n", start, violation);
 		if (start != SG_RUNE_CX_INDEX_NONE &&
-			SG_RuneFlightTrace(&artifact.complex, &artifact.law, start, origin,
+			SG_RuneFlightTrace(&artifact.cx, &artifact.law, start, origin,
 				velocity, &flight))
 			printf("flight: outcome %d landing cell %u at (%.0f %.0f %.0f) after %.2fs, "
 				"%u crossings, velocity (%.0f %.0f %.0f)\n", (int)flight.outcome,
@@ -441,9 +441,9 @@ int main(int argc, char **argv)
 	if (argv[5][0] == 'c' && argv[5][1] >= '0' && argv[5][1] <= '9')
 	{
 		to_cell = (uint32_t)strtoul(argv[5] + 1, NULL, 10);
-		if (to_cell < artifact.complex.cell_count)
+		if (to_cell < artifact.cx.cell_count)
 		{
-			const sg_rune_cx_cell_t *c = &artifact.complex.cells[to_cell];
+			const sg_rune_cx_cell_t *c = &artifact.cx.cells[to_cell];
 
 			to[0] = (float)(c->bounds.mins.value[0] + c->bounds.maxs.value[0]) / 16.0f;
 			to[1] = (float)(c->bounds.mins.value[1] + c->bounds.maxs.value[1]) / 16.0f;
@@ -463,7 +463,7 @@ int main(int argc, char **argv)
 
 		for (i = 0U; i < 2U; i++)
 		{
-			const sg_rune_cx_cell_t *c = &artifact.complex.cells[which[i]];
+			const sg_rune_cx_cell_t *c = &artifact.cx.cells[which[i]];
 
 			printf("  cell %u: z %g..%g xy %g..%g %g..%g stances %u semantics 0x%x "
 				"incidences %u\n", which[i],

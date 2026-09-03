@@ -175,8 +175,8 @@ int SG_RuneLevelBegin(const char *mapname)
 	sg_rune_level.current = 1;
 	gi.dprintf("slipgate: rune ready %s, cells %u portals %u capabilities %u "
 		"bytes %lu\n", mapname,
-		(unsigned int)sg_rune_level.artifact.complex.cell_count,
-		(unsigned int)sg_rune_level.artifact.complex.portal_count,
+		(unsigned int)sg_rune_level.artifact.cx.cell_count,
+		(unsigned int)sg_rune_level.artifact.cx.portal_count,
 		(unsigned int)sg_rune_level.artifact.movement.capability_count,
 		(unsigned long)sg_rune_level.artifact.image_size);
 	return 1;
@@ -197,7 +197,7 @@ static const sg_rune_field_t *FieldVariant(uint32_t destination_cell,
 	uint64_t oldest = UINT64_MAX;
 
 	if (!sg_rune_level.current ||
-		destination_cell >= sg_rune_level.artifact.complex.cell_count)
+		destination_cell >= sg_rune_level.artifact.cx.cell_count)
 		return NULL;
 	sg_rune_level.frame++;
 	for (index = 0U; index < SG_RUNE_LEVEL_FIELDS; index++)
@@ -388,7 +388,7 @@ static void MarkCovered(uint32_t post, uint8_t *covered)
 static int BuildPosts(post_set_t *set, uint32_t flag_cell)
 {
 	const sg_rune_field_t *field = SG_RuneLevelField(flag_cell);
-	uint32_t cell_count = sg_rune_level.artifact.complex.cell_count;
+	uint32_t cell_count = sg_rune_level.artifact.cx.cell_count;
 	const float *flag_centre = &sg_rune_level.router.cell_center[flag_cell * 3U];
 	float *weight = NULL;
 	uint8_t *covered = NULL;
@@ -445,9 +445,9 @@ static int BuildPosts(post_set_t *set, uint32_t flag_cell)
 			if (!(back < POST_REACH_SECONDS * 2.0f))
 				continue;
 			if (!(cost >= 0.0f && cost <= POST_REACH_SECONDS) ||
-				!(sg_rune_level.artifact.complex.cells[cell].semantics &
+				!(sg_rune_level.artifact.cx.cells[cell].semantics &
 					SG_RUNE_CX_CELL_SUPPORTED) ||
-				(sg_rune_level.artifact.complex.cells[cell].semantics &
+				(sg_rune_level.artifact.cx.cells[cell].semantics &
 					(SG_RUNE_CX_CELL_WATER | SG_RUNE_CX_CELL_HAZARD)) ||
 				Flat(centre, flag_centre) < POST_MIN_FROM_FLAG || covered[cell] == 2U)
 				continue;
@@ -505,7 +505,7 @@ int SG_RuneLevelDefendPost(uint32_t flag_cell, int slot, float point_out[3],
 	int index;
 
 	if (!sg_rune_level.current || slot < 0 || slot >= POST_SLOTS ||
-		flag_cell >= sg_rune_level.artifact.complex.cell_count)
+		flag_cell >= sg_rune_level.artifact.cx.cell_count)
 	{
 		if (sg_cv.debug && sg_cv.debug->value && level.framenum % 50 == 0)
 			gi.dprintf("SGPOST flag cell %u slot %d: refused (rune %d)\n",
@@ -570,7 +570,7 @@ static void ExposeFrom(uint32_t post, float *surcharge)
 
 static const float *Exposure(uint32_t enemy_flag_cell)
 {
-	uint32_t cell_count = sg_rune_level.artifact.complex.cell_count;
+	uint32_t cell_count = sg_rune_level.artifact.cx.cell_count;
 	exposure_t *set = NULL;
 	int index, slot;
 
@@ -627,7 +627,7 @@ const sg_rune_field_t *SG_RuneLevelFieldExposed(uint32_t destination_cell,
 	int index;
 
 	if (!sg_rune_level.current ||
-		enemy_flag_cell >= sg_rune_level.artifact.complex.cell_count ||
+		enemy_flag_cell >= sg_rune_level.artifact.cx.cell_count ||
 		sg_rune_level.artifact.fires.cell_count == 0U)
 		return SG_RuneLevelField(destination_cell);
 	surcharge = Exposure(enemy_flag_cell);

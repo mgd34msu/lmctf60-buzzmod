@@ -168,13 +168,13 @@ int SG_RuneGenerate(sg_rune_bsp_t *world,
 	memset(&source, 0, sizeof(source));
 	source.identity = *identity;
 	source.law = *law;
-	SG_RuneCxRead(complex, &source.complex);
-	report.portals = source.complex.portal_count;
-	report.surfaces = source.complex.surface_count;
+	SG_RuneCxRead(complex, &source.cx);
+	report.portals = source.cx.portal_count;
+	report.surfaces = source.cx.surface_count;
 
 	Begin(&link, "movement", &report);
 	if (!SG_RuneMoveStoreInit(&movement, law) ||
-		!SG_RuneMoveEmitComplex(&movement, &source.complex, law))
+		!SG_RuneMoveEmitComplex(&movement, &source.cx, law))
 	{
 		Fail(&report, "movement emission failed");
 		goto done;

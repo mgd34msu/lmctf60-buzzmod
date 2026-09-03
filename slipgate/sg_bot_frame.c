@@ -377,7 +377,7 @@ static qboolean PowerupItem(const edict_t *item)
 		uint32_t cell = SG_BotStandingCellNear(item->s.origin);
 
 		return cell != SG_RUNE_CX_INDEX_NONE &&
-			(sg_rune_level.artifact.complex.cells[cell].semantics & SG_RUNE_CX_CELL_SUPPORTED);
+			(sg_rune_level.artifact.cx.cells[cell].semantics & SG_RUNE_CX_CELL_SUPPORTED);
 	}
 }
 
@@ -878,10 +878,10 @@ static uint32_t StandingCellNear(const vec3_t point)
 		probe[2] += rises[index];
 		cell = SG_RuneLevelLocate(probe, 0, NULL);
 		if (cell == SG_RUNE_CX_INDEX_NONE ||
-			(sg_rune_level.artifact.complex.cells[cell].semantics &
+			(sg_rune_level.artifact.cx.cells[cell].semantics &
 				SG_RUNE_CX_CELL_HAZARD))
 			continue;   /* lava or slime is no place to go */
-		if (sg_rune_level.artifact.complex.cells[cell].semantics &
+		if (sg_rune_level.artifact.cx.cells[cell].semantics &
 			SG_RUNE_CX_CELL_SUPPORTED)
 			return cell;
 		if (first == SG_RUNE_CX_INDEX_NONE)
@@ -895,7 +895,7 @@ static uint32_t StandingCellNear(const vec3_t point)
 
 		VectorCopy(point, down);
 		down[2] -= 1024.0f;
-		tr = gi.trace(point, NULL, NULL, down, NULL, MASK_SOLID);
+		tr = gi.trace((float *)point, NULL, NULL, down, NULL, MASK_SOLID);
 		if (tr.fraction < 1.0f && tr.plane.normal[2] >= 0.7f)
 		{
 			vec3_t on;
@@ -905,7 +905,7 @@ static uint32_t StandingCellNear(const vec3_t point)
 			on[2] += 24.5f;
 			cell = SG_RuneLevelLocate(on, 0, NULL);
 			if (cell != SG_RUNE_CX_INDEX_NONE &&
-				(sg_rune_level.artifact.complex.cells[cell].semantics & SG_RUNE_CX_CELL_SUPPORTED))
+				(sg_rune_level.artifact.cx.cells[cell].semantics & SG_RUNE_CX_CELL_SUPPORTED))
 				return cell;
 		}
 	}
@@ -978,13 +978,13 @@ static int LiveFlight(const sg_bot_t *bot, const edict_t *e, const vec3_t veloci
 {
 	if (bot->cell == SG_RUNE_CX_INDEX_NONE)
 		return 0;
-	return SG_RuneFlightTrace(&sg_rune_level.artifact.complex,
+	return SG_RuneFlightTrace(&sg_rune_level.artifact.cx,
 		&sg_rune_level.artifact.law, bot->cell, e->s.origin, velocity, flight);
 }
 
 static qboolean FlightSafe(const sg_rune_flight_t *flight)
 {
-	const sg_rune_cx_view_t *cx = &sg_rune_level.artifact.complex;
+	const sg_rune_cx_view_t *cx = &sg_rune_level.artifact.cx;
 
 	if (flight->outcome == SG_RUNE_FLIGHT_WATER)
 		return true;
@@ -1022,7 +1022,7 @@ static qboolean HangDropSafe(const sg_bot_t *bot, const edict_t *e)
 		cell = k == 0U ? bot->cell : SG_RuneLevelLocate(from, 0, NULL);
 		if (cell == SG_RUNE_CX_INDEX_NONE)
 			continue;
-		lands = SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.complex,
+		lands = SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.cx,
 			&sg_rune_level.artifact.law, cell, from, still, 0.0f, 0, &drop) ? true : false;
 		if (lands || drop.seconds >= 0.05f)
 			return lands;
@@ -1046,7 +1046,7 @@ static qboolean RescueAnchor(const sg_bot_t *bot, const edict_t *e, vec3_t ancho
 	vec3_t ahead;
 	qboolean found = false;
 
-	if (from == SG_RUNE_CX_INDEX_NONE || from >= sg_rune_level.artifact.complex.cell_count)
+	if (from == SG_RUNE_CX_INDEX_NONE || from >= sg_rune_level.artifact.cx.cell_count)
 		return false;
 	/* A fall straight down has no way ahead: any high bite will do. */
 	VectorCopy(e->velocity, ahead);
@@ -1063,7 +1063,7 @@ static qboolean RescueAnchor(const sg_bot_t *bot, const edict_t *e, vec3_t ancho
 
 		if (record->kind != SG_RUNE_MOVE_HOOK)
 			continue;
-		if (VectorCompare(record->anchor, bot->rescue_failed))
+		if (VectorCompare((float *)record->anchor, (float *)bot->rescue_failed))
 			continue;
 		VectorSubtract(record->anchor, e->s.origin, to);
 		if (to[2] < RESCUE_ABOVE || VectorLength(to) > RESCUE_RANGE)
@@ -1078,11 +1078,11 @@ static qboolean RescueAnchor(const sg_bot_t *bot, const edict_t *e, vec3_t ancho
 			uint32_t hang_cell;
 			sg_rune_flight_t drop;
 
-			VectorMA(record->anchor, -SG_FACT_HOOK_HOLD / length, to, hang);
+			VectorMA((float *)record->anchor, -SG_FACT_HOOK_HOLD / length, to, hang);
 			hang[2] -= (float)e->viewheight;
 			hang_cell = SG_RuneLevelLocate(hang, 0, NULL);
 			if (hang_cell == SG_RUNE_CX_INDEX_NONE ||
-				!SG_RuneFlightTrace(&sg_rune_level.artifact.complex,
+				!SG_RuneFlightTrace(&sg_rune_level.artifact.cx,
 					&sg_rune_level.artifact.law, hang_cell, hang, still, &drop) ||
 				!FlightSafe(&drop))
 				continue;
@@ -1118,7 +1118,7 @@ static qboolean NearbyAnchor(const sg_bot_t *bot, const edict_t *e, vec3_t ancho
 {
 	const sg_rune_router_t *router = &sg_rune_level.router;
 	const sg_rune_move_table_t *move = &sg_rune_level.artifact.movement;
-	uint32_t cell, count = sg_rune_level.artifact.complex.cell_count;
+	uint32_t cell, count = sg_rune_level.artifact.cx.cell_count;
 	float best = -INFINITY;
 	qboolean found = false;
 
@@ -1177,7 +1177,7 @@ static float PlaneBitsToFloat(uint32_t bits)
 
 static void AimAtPortal(sg_rune_step_t *step, const vec3_t origin)
 {
-	const sg_rune_cx_view_t *cx = &sg_rune_level.artifact.complex;
+	const sg_rune_cx_view_t *cx = &sg_rune_level.artifact.cx;
 	const sg_rune_cx_portal_t *portal;
 	const sg_rune_cx_facet_t *facet;
 	vec3_t normal, point, centre;
@@ -1203,7 +1203,7 @@ static void AimAtPortal(sg_rune_step_t *step, const vec3_t origin)
 		return;   /* a floor opening: its foot is flat anyway */
 	/* The body's point on the plane, then inside every edge. */
 	along = DotProduct(normal, origin) - distance;
-	VectorMA(origin, -along, normal, point);
+	VectorMA((float *)origin, -along, normal, point);
 	VectorClear(centre);
 	for (i = 0U; i < count; i++)
 	{
@@ -1616,7 +1616,7 @@ grounded:
 	/* In lava or slime: the rope, at the best bite known from the floor
 	 * the body left, or from any ride recorded around here.  Nothing else
 	 * gets it out. */
-	if ((sg_rune_level.artifact.complex.cells[bot->cell].semantics & SG_RUNE_CX_CELL_HAZARD) &&
+	if ((sg_rune_level.artifact.cx.cells[bot->cell].semantics & SG_RUNE_CX_CELL_HAZARD) &&
 		e->client->hookstate == 0 && !bot->rescue && SG_BotHookReady(e))
 	{
 		if (RescueAnchor(bot, e, bot->rescue_anchor) ||
@@ -1663,8 +1663,8 @@ grounded:
 		 * a human does, and the pull takes the momentum along. */
 		if (bot->flight_capability == SG_RUNE_CX_INDEX_NONE && !bot->rescue &&
 			traced && live.outcome == SG_RUNE_FLIGHT_LANDED &&
-			live.landing_cell < sg_rune_level.artifact.complex.cell_count &&
-			(sg_rune_level.artifact.complex.cells[live.landing_cell].semantics &
+			live.landing_cell < sg_rune_level.artifact.cx.cell_count &&
+			(sg_rune_level.artifact.cx.cells[live.landing_cell].semantics &
 				SG_RUNE_CX_CELL_SUPPORTED) &&
 			bot->destination_cell != SG_RUNE_CX_INDEX_NONE)
 		{
@@ -1710,7 +1710,7 @@ grounded:
 	bot->flight_capability = SG_RUNE_CX_INDEX_NONE;
 	/* In lava the rope out is the rescue: it stays set for the fire; on a
 	 * floor the fall is over and the count starts again. */
-	if (!(sg_rune_level.artifact.complex.cells[bot->cell].semantics & SG_RUNE_CX_CELL_HAZARD))
+	if (!(sg_rune_level.artifact.cx.cells[bot->cell].semantics & SG_RUNE_CX_CELL_HAZARD))
 	{
 		bot->flight_from = bot->cell;
 		bot->rescue = 0U;
@@ -2087,7 +2087,7 @@ static void GiveWay(const edict_t *e, float direction[3])
 				ahead[2] = e->s.origin[2];
 				cell = SG_RuneLevelLocate(ahead, 0, NULL);
 				if (cell == SG_RUNE_CX_INDEX_NONE ||
-					!(sg_rune_level.artifact.complex.cells[cell].semantics &
+					!(sg_rune_level.artifact.cx.cells[cell].semantics &
 						SG_RUNE_CX_CELL_SUPPORTED))
 					continue;
 				direction[0] = sides[side][0];
@@ -2106,10 +2106,10 @@ static qboolean FloorAhead(const edict_t *e, const vec3_t direction, float dista
 	vec3_t ahead;
 	uint32_t cell;
 
-	VectorMA(e->s.origin, distance, direction, ahead);
+	VectorMA((float *)e->s.origin, distance, (float *)direction, ahead);
 	cell = SG_RuneLevelLocate(ahead, 0, NULL);
 	return cell != SG_RUNE_CX_INDEX_NONE &&
-		(sg_rune_level.artifact.complex.cells[cell].semantics &
+		(sg_rune_level.artifact.cx.cells[cell].semantics &
 			(SG_RUNE_CX_CELL_SUPPORTED | SG_RUNE_CX_CELL_HAZARD)) == SG_RUNE_CX_CELL_SUPPORTED;
 }
 
@@ -2393,7 +2393,7 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 				uint32_t cell = SG_RuneLevelLocate(ahead, 0, NULL);
 
 				body.floor_toward_hook = cell != SG_RUNE_CX_INDEX_NONE &&
-					(sg_rune_level.artifact.complex.cells[cell].semantics &
+					(sg_rune_level.artifact.cx.cells[cell].semantics &
 						(SG_RUNE_CX_CELL_SUPPORTED | SG_RUNE_CX_CELL_HAZARD)) ==
 						SG_RUNE_CX_CELL_SUPPORTED ? 1U : 0U;
 			}
@@ -2527,7 +2527,7 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 			launch[0] = e->velocity[0];
 			launch[1] = e->velocity[1];
 			launch[2] = sg_rune_level.artifact.law.jump_velocity;
-			if (SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.complex,
+			if (SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.cx,
 				&sg_rune_level.artifact.law, bot->cell, e->s.origin, launch,
 				RELEASE_LIVE_TOLERANCE, 1, &hop) && hop.seconds < HOP_MAX_SECONDS)
 			{
@@ -2541,8 +2541,8 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 				flat[0] = launch[0];
 				flat[1] = launch[1];
 				flat[2] = 0.0f;
-				if (hop.landing_cell < sg_rune_level.artifact.complex.cell_count &&
-					SG_RuneFlightTrace(&sg_rune_level.artifact.complex,
+				if (hop.landing_cell < sg_rune_level.artifact.cx.cell_count &&
+					SG_RuneFlightTrace(&sg_rune_level.artifact.cx,
 						&sg_rune_level.artifact.law, hop.landing_cell, on, flat, &next) &&
 					next.outcome == SG_RUNE_FLIGHT_LANDED && next.seconds < HOP_RUN_ON_SECONDS)
 					command.up = 1.0f;
@@ -2644,7 +2644,7 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 		if (e->client->hookstate == 2 && bot->cell != SG_RUNE_CX_INDEX_NONE &&
 			!e->groundentity)
 		{
-			let_go = SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.complex,
+			let_go = SG_RuneFlightLandsRobustly(&sg_rune_level.artifact.cx,
 				&sg_rune_level.artifact.law, bot->cell, e->s.origin, e->velocity,
 				RELEASE_LIVE_TOLERANCE, 1, &live) ? true : false;
 			/* A body the rope presses against a wall or a lip sits at the
@@ -2663,8 +2663,8 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 				e->s.origin[0], e->s.origin[1], e->s.origin[2], (unsigned)bot->cell,
 				(int)live.outcome, (unsigned)live.clips, live.landing[0], live.landing[1], live.landing[2],
 				(unsigned)live.landing_cell,
-				live.landing_cell < sg_rune_level.artifact.complex.cell_count ?
-					(unsigned)sg_rune_level.artifact.complex.cells[live.landing_cell].semantics : 0U);
+				live.landing_cell < sg_rune_level.artifact.cx.cell_count ?
+					(unsigned)sg_rune_level.artifact.cx.cells[live.landing_cell].semantics : 0U);
 		}
 		if (let_go)
 		{

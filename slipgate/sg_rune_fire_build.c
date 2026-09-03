@@ -422,7 +422,7 @@ int SG_RuneFireEmit(const sg_rune_bsp_t *bsp,
 	build.bsp = bsp;
 	build.law = law;
 	build.store = store;
-	build.artifact.complex = build.view;
+	build.artifact.cx = build.view;
 	build.artifact.law = *law;
 	SG_RuneFireStoreFree(store);
 	store->cell_count = build.view.cell_count;

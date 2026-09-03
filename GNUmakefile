@@ -1743,3 +1743,7 @@ $(FIELDCHECK_BIN): tools/fieldcheck.c slipgate/sg_rune_locate.c \
 		slipgate/sg_rune_artifact.c slipgate/sg_rune_cx.c \
 		slipgate/sg_rune_movement.c slipgate/sg_rune_analytic.c \
 		slipgate/sg_rune_law.c slipgate/sg_rune_crc.c slipgate/sg_rune_flight.c -lm -o $@
+
+# The tests that exist: the module's units and the generator's, in order.
+.PHONY: check
+check: rune-artifact-test rune-analytic-test rune-movement-test rune-runtime-test tactic-controller-test

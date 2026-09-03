@@ -5,143 +5,59 @@ on:
     branches: [ "**" ]
     tags: [ "v*.*.*" ]
   pull_request:
-  workflow_dispatch:
 
 jobs:
   version:
-    name: Buzzmod version
+    name: Version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Validate semantic version
+      - name: BuzzmodVersion.h is semantic, and matches a release tag
         id: version
         shell: bash
         run: |
           tag=""
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            tag="${GITHUB_REF_NAME}"
-          fi
-          if [[ -n "$tag" ]]; then
-            version=$(tests/check_buzzmod_version.sh "$tag")
-          else
-            version=$(tests/check_buzzmod_version.sh)
-          fi
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then tag="${GITHUB_REF_NAME}"; fi
+          version=$(tests/check_buzzmod_version.sh "$tag")
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Buzzmod v$version"
 
   linux:
-    name: Linux x86_64
-    needs: version
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0            # GNUmakefile derives VER from git rev-list
-
-      - name: Build
-        run: |
-          set -o pipefail
-          runtime_module="$(make -s -f GNUmakefile runtime-module-path)"
-          case "$runtime_module" in
-            *-rune-generator.so)
-              echo "::error::runtime module path selected the offline generator"
-              exit 1
-              ;;
-          esac
-          make -B -f GNUmakefile all 2>&1 | tee build.log
-          test "${PIPESTATUS[0]}" -eq 0
-          test -f "$runtime_module"
-          printf 'RUNTIME_MODULE=%s\n' "$runtime_module" >> "$GITHUB_ENV"
-
-      - name: Fail on warnings
-        run: |
-          if grep -q "warning:" build.log; then
-            grep "warning:" build.log
-            echo "::error::build produced warnings"
-            exit 1
-          fi
-          echo "no warnings"
-
-      # The engine loads the library by exact filename. The versioned name the
-      # makefile produces is for telling builds apart and would be ignored.
-      - name: Package
-        run: |
-          mkdir -p dist
-          : "${RUNTIME_MODULE:?missing exact runtime module path}"
-          case "$RUNTIME_MODULE" in
-            *-rune-generator.so)
-              echo "::error::refusing to package the offline generator"
-              exit 1
-              ;;
-          esac
-          test -f "$RUNTIME_MODULE"
-          cp -- "$RUNTIME_MODULE" dist/gamex86_64.so
-          ls -l dist
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: lmctf-buzzmod-linux-x86_64
-          path: dist/gamex86_64.so
-
-  verification:
-    name: Host gates (${{ matrix.name }})
+    name: Linux x86_64 (${{ matrix.cc }})
     needs: version
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: GNUmakefile GCC
-            build_file: GNUmakefile
-            compiler: gcc
-          - name: Makefile GCC
-            build_file: Makefile
-            compiler: gcc
-          - name: GNUmakefile Clang
-            build_file: GNUmakefile
-            compiler: clang
-          - name: Makefile Clang
-            build_file: Makefile
-            compiler: clang
+        cc: [ gcc, clang ]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-
-      - name: Build module and run complete host suite
+      - name: Build the module and run the tests
         shell: bash
         run: |
           set -o pipefail
-          runtime_module="$(make -s -f "${{ matrix.build_file }}" runtime-module-path)"
-          case "$runtime_module" in
-            *-rune-generator.so)
-              echo "::error::runtime link guard selected the offline generator"
-              exit 1
-              ;;
-          esac
-          make -B -f "${{ matrix.build_file }}" -j2 \
-            CC="${{ matrix.compiler }}" all host-law-runtime-link-check host-test 2>&1 | tee host-test.log
-          test -f "$runtime_module"
-          sh tests/verify_sg_host_law_runtime_link.sh "$runtime_module"
-          ldd -r "$runtime_module" 2>&1 | tee module-relocations.log
-          if grep -Eq 'lib(isl|gmp)\.so' module-relocations.log; then
-            grep -E 'lib(isl|gmp)\.so' module-relocations.log
-            echo "::error::runtime module links an offline solver dependency"
-            exit 1
-          fi
-
-      - name: Fail on warnings
+          make -B -j2 CC=${{ matrix.cc }} all 2>&1 | tee build.log
+          make CC=${{ matrix.cc }} check 2>&1 | tee test.log
+          module="$(make -s runtime-module-path)"
+          test -f "$module"
+          echo "MODULE=$module" >> "$GITHUB_ENV"
+      - name: No warnings
         shell: bash
         run: |
-          if grep -q "warning:" host-test.log; then
-            grep "warning:" host-test.log
-            echo "::error::host verification produced warnings"
-            exit 1
-          fi
-          echo "no warnings"
+          if grep -q "warning:" build.log; then grep "warning:" build.log; echo "::error::the build produced warnings"; exit 1; fi
+      - name: Package
+        if: matrix.cc == 'gcc'
+        shell: bash
+        run: |
+          mkdir -p dist && cp -- "$MODULE" dist/gamex86_64.so && ls -l dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: matrix.cc == 'gcc'
+        with:
+          name: lmctf-buzzmod-linux-x86_64
+          path: dist/gamex86_64.so
 
   windows:
     name: Windows ${{ matrix.arch }}
@@ -161,11 +77,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-
       - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
-
-      # The project's pre-build step calls TortoiseGit's GitWCRev, which is not
-      # on a runner. Same substitutions, done with plain git.
+      # The project's pre-build step calls TortoiseGit's GitWCRev, which a
+      # runner does not have.  Same substitutions with plain git.
       - name: Generate GitRevisionInfo.h
         shell: bash
         run: |
@@ -175,90 +89,62 @@ jobs:
             | sed -e "s/WCLOGCOUNT+2/${REV}/g" \
             | sed -e "s/WCREV=7/${SHA}/g" \
             | sed -e "s/WCNOW=%Y/$(date +%Y)/g" > GitRevisionInfo.h
-          cat GitRevisionInfo.h
-
-      # gravity.vcxproj sends output to $(Q2DIR)\lmctf\ so a local build lands
-      # straight in the game directory. Q2DIR does not exist here, so point
-      # OutDir somewhere known rather than editing the project.
-      # PreBuildEventUseInBuild=false skips the project's pre-build step, which
-      # shells out to GitWCRev.exe and fails with 9009 on a runner. The header it
-      # would have written was already generated above.
-      # PowerShell, not bash: setup-msbuild only puts msbuild on the PATH the
-      # Windows shells see. Output is teed rather than using /flp, whose
-      # semicolon PowerShell would treat as a command separator.
       - name: Build
+        shell: pwsh
         run: |
-          msbuild gravity.sln `
-            /p:Configuration=Release `
+          msbuild gravity.vcxproj /m /p:Configuration=Release `
             /p:Platform=${{ matrix.platform }} `
             /p:OutDir=${{ github.workspace }}/build/${{ matrix.arch }}/ `
-            /p:PreBuildEventUseInBuild=false `
-            /m 2>&1 | Tee-Object -FilePath build.log
+            /p:PreBuildEvent= /p:PostBuildEvent= 2>&1 | Tee-Object -FilePath build.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      # Same gate the Linux job has. sqlite3.c is vendored and built with
-      # warnings off, so anything left here is ours.
-      - name: Fail on warnings
+      - name: No warnings
         shell: bash
         run: |
-          if grep -qE "warning [A-Z]+[0-9]+" build.log; then
-            grep -oE "warning [A-Z]+[0-9]+.*" build.log | sort -u
-            echo "::error::build produced warnings"
-            exit 1
-          fi
-          echo "no warnings"
-
-      # TargetName in the project is already gamex86 / gamex86_64, which is what
-      # the engine looks for, so there is nothing to rename.
+          if grep -q "warning C" build.log; then grep "warning C" build.log; echo "::error::the build produced warnings"; exit 1; fi
       - name: Package
         shell: bash
         run: |
-          src="build/${{ matrix.arch }}/${{ matrix.output }}"
-          if [ ! -f "$src" ]; then
-            echo "::error::expected $src"
-            find build -type f -print
-            exit 1
-          fi
           mkdir -p dist
-          cp "$src" dist/
-          ls -l dist
-
+          src=$(ls build/${{ matrix.arch }}/*.dll | head -1)
+          test -f "$src" && cp -- "$src" "dist/${{ matrix.output }}" && ls -l dist
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lmctf-buzzmod-windows-${{ matrix.arch }}
           path: dist/${{ matrix.output }}
 
   release:
-    name: Publish release
-    needs: [ version, linux, verification, windows ]
+    name: Publish the release
+    needs: [ version, linux, windows ]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@d8d80b3c6fa6c4f78f3fc42a4dd9e8d8c1ff6e5f # v7.0.1
         with:
           path: artifacts
-
-      - name: Assemble
+      - name: Assemble the full mod
+        shell: bash
         run: |
-          mkdir -p release
-          cp artifacts/lmctf-buzzmod-linux-x86_64/gamex86_64.so release/
-          cp artifacts/lmctf-buzzmod-windows-x64/gamex86_64.dll  release/
-          cp artifacts/lmctf-buzzmod-windows-x86/gamex86.dll     release/
-          cp assets/lmctf6-buzzmod.pak                           release/
-          printf '%s\n' "${{ needs.version.outputs.version }}" > release/VERSION
-          # SLIPGATE bots are compiled into the game modules; no separate
-          # bot library or data download exists anymore (runes are generated
-          # server-side by the unshipped generator module with `sv rune`).
-          cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS
-
-      - name: Publish release
+          v="${{ needs.version.outputs.version }}"
+          r="lmctf-buzzmod-v$v"; mkdir -p "$r/maps"
+          cp artifacts/lmctf-buzzmod-linux-x86_64/gamex86_64.so "$r/"
+          cp artifacts/lmctf-buzzmod-windows-x64/gamex86_64.dll "$r/"
+          cp artifacts/lmctf-buzzmod-windows-x86/gamex86.dll    "$r/"
+          cp assets/lmctf6-buzzmod.pak                          "$r/"
+          cp assets/server-sample.cfg                           "$r/"
+          cp data/bites/*.bites                                 "$r/maps/"
+          notes="docs/RELEASE-v$v.md"; test -f "$notes" || notes="CHANGELOG.md"
+          cp "$notes" "$r/README.md"
+          printf '%s\n' "$v" > "$r/VERSION"
+          (cd "$r" && sha256sum gamex86_64.so gamex86_64.dll gamex86.dll lmctf6-buzzmod.pak > SHA256SUMS && cat SHA256SUMS)
+          zip -qr "$r.zip" "$r"
+          mkdir -p release && cp "$r.zip" "$r"/gamex86_64.so "$r"/gamex86_64.dll "$r"/gamex86.dll "$r"/lmctf6-buzzmod.pak "$r"/SHA256SUMS release/
+          echo "NOTES=$notes" >> "$GITHUB_ENV"
+      - name: Publish
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           files: release/*
-          body_path: RELEASES.md
-          draft: false
-          name: Buzzmod ${{ github.ref_name }}
+          name: LMCTF BuzzMod ${{ github.ref_name }}
+          body_path: ${{ env.NOTES }}

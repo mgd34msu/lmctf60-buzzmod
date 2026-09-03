@@ -1149,7 +1149,7 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 				self->client->anim_end = FRAME_death308;
 				break;
 			}
-			gi.sound (self, CHAN_VOICE, gi.soundindex(SG_SexedSound(self, va("death%i.wav", (rand()%4)+1))), 1, ATTN_NORM, 0);
+			gi.sound (self, CHAN_VOICE, gi.soundindex((char *)SG_SexedSound(self, va("death%i.wav", (rand()%4)+1))), 1, ATTN_NORM, 0);
 		}
 	}
 
@@ -3007,7 +3007,7 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 
 		if (ent->groundentity && !pm.groundentity && (pm.cmd.upmove >= 10) && (pm.waterlevel == 0))
 		{
-			gi.sound(ent, CHAN_VOICE, gi.soundindex(SG_SexedSound(ent, "jump1.wav")), 1, ATTN_NORM, 0);
+			gi.sound(ent, CHAN_VOICE, gi.soundindex((char *)SG_SexedSound(ent, "jump1.wav")), 1, ATTN_NORM, 0);
 			PlayerNoise(ent, ent->s.origin, PNOISE_SELF);
 		}
 

@@ -2,7 +2,11 @@
 #undef world
 #include "sg_rune_game.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <pthread.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,7 +35,11 @@ typedef struct job_s
 	size_t log_used;
 	int generated;
 	volatile int done;
+#ifdef _WIN32
+	HANDLE thread;
+#else
 	pthread_t thread;
+#endif
 	int started;
 } job_t;
 
@@ -61,7 +69,11 @@ static void Progress(void *context, const char *stage, uint32_t done, uint32_t t
 	(void)done;
 }
 
+#ifdef _WIN32
+static DWORD WINAPI Worker(LPVOID arg)
+#else
 static void *Worker(void *arg)
+#endif
 {
 	job_t *job = arg;
 	sg_rune_bsp_t bsp;
@@ -81,14 +93,14 @@ static void *Worker(void *arg)
 			bsp_fault.what ? bsp_fault.what : "?", bsp_fault.lump,
 			(unsigned int)bsp_fault.record);
 		job->done = 1;
-		return NULL;
+		return 0;
 	}
 	if (job->entity_text && !SG_RuneBspReplaceEntities(&bsp, job->entity_text))
 	{
 		Log(job, "rune: generation refused stage=entities\n");
 		SG_RuneBspFree(&bsp);
 		job->done = 1;
-		return NULL;
+		return 0;
 	}
 	SG_RuneLawEngine(&law, job->gravity);
 	memset(&identity, 0, sizeof(identity));
@@ -128,7 +140,7 @@ static void *Worker(void *arg)
 	free(image);
 	SG_RuneBspFree(&bsp);
 	job->done = 1;
-	return NULL;
+	return 0;
 }
 
 int SG_RuneGameGenerateBusy(void)
@@ -151,7 +163,12 @@ int SG_RuneGameGenerateStart(const char *mapname)
 	}
 	if (sg_job.started)
 	{
+#ifdef _WIN32
+		WaitForSingleObject(sg_job.thread, INFINITE);
+		CloseHandle(sg_job.thread);
+#else
 		pthread_join(sg_job.thread, NULL);
+#endif
 		free(sg_job.entity_text);
 	}
 	memset(&sg_job, 0, sizeof(sg_job));
@@ -182,7 +199,12 @@ int SG_RuneGameGenerateStart(const char *mapname)
 			strcpy(sg_job.entity_text, text);
 	}
 	sg_job.gravity = sv_gravity ? sv_gravity->value : 800.0f;
+#ifdef _WIN32
+	sg_job.thread = CreateThread(NULL, 0, Worker, &sg_job, 0, NULL);
+	if (sg_job.thread == NULL)
+#else
 	if (pthread_create(&sg_job.thread, NULL, Worker, &sg_job) != 0)
+#endif
 	{
 		gi.dprintf("rune: generation refused stage=thread\n");
 		free(sg_job.entity_text);
@@ -198,7 +220,12 @@ int SG_RuneGameGeneratePoll(void)
 {
 	if (!sg_job.started || !sg_job.done)
 		return 0;
+#ifdef _WIN32
+	WaitForSingleObject(sg_job.thread, INFINITE);
+	CloseHandle(sg_job.thread);
+#else
 	pthread_join(sg_job.thread, NULL);
+#endif
 	sg_job.started = 0;
 	if (sg_job.log_used)
 		gi.dprintf("%s", sg_job.log);

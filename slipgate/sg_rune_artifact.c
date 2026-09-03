@@ -48,7 +48,7 @@ typedef struct layout_s
 static void Layouts(const sg_rune_artifact_t *source,
 	layout_t layouts[SG_RUNE_SECTION_COUNT])
 {
-	const sg_rune_cx_view_t *cx = &source->complex;
+	const sg_rune_cx_view_t *cx = &source->cx;
 	const sg_rune_move_table_t *move = &source->movement;
 #define LAYOUT(kind_, array_, count_) \
 	do { layouts[kind_].data = (array_); layouts[kind_].count = (count_); \
@@ -110,22 +110,22 @@ sg_rune_artifact_status_t SG_RuneArtifactEncode(const sg_rune_artifact_t *source
 	/* The wire carries no facet vertices: the runtime reads planes and
 	 * portal feet only.  Facets go out with their vertex spans cleared. */
 	wire = *source;
-	wire.complex.vertices = NULL;
-	wire.complex.vertex_count = 0U;
+	wire.cx.vertices = NULL;
+	wire.cx.vertex_count = 0U;
 	facets = NULL;
-	if (source->complex.facet_count)
+	if (source->cx.facet_count)
 	{
-		facets = malloc((size_t)source->complex.facet_count * sizeof(*facets));
+		facets = malloc((size_t)source->cx.facet_count * sizeof(*facets));
 		if (!facets)
 			return SG_RUNE_ARTIFACT_OUT_OF_MEMORY;
-		memcpy(facets, source->complex.facets,
-			(size_t)source->complex.facet_count * sizeof(*facets));
-		for (index = 0U; index < source->complex.facet_count; index++)
+		memcpy(facets, source->cx.facets,
+			(size_t)source->cx.facet_count * sizeof(*facets));
+		for (index = 0U; index < source->cx.facet_count; index++)
 		{
 			facets[index].vertices.first = 0U;
 			facets[index].vertices.count = 0U;
 		}
-		wire.complex.facets = facets;
+		wire.cx.facets = facets;
 	}
 	Layouts(&wire, layouts);
 	offset = AlignUp(sizeof(header) + sizeof(sections));
@@ -242,7 +242,7 @@ sg_rune_artifact_status_t SG_RuneArtifactDecode(const unsigned char *image,
 	}
 	artifact_out->identity = header.identity;
 	artifact_out->law = header.law;
-	cx = &artifact_out->complex;
+	cx = &artifact_out->cx;
 	move = &artifact_out->movement;
 	cx->cells = arrays[SG_RUNE_SECTION_CELLS];
 	cx->cell_count = counts[SG_RUNE_SECTION_CELLS];
@@ -336,11 +336,11 @@ int SG_RuneArtifactValid(const sg_rune_artifact_t *artifact,
 		return Fault(fault_out, "law", 0U, "value");
 	if (artifact->identity.schema_id != SG_RUNE_ARTIFACT_SCHEMA_ID)
 		return Fault(fault_out, "identity", 0U, "schema");
-	if (!SG_RuneCxViewValid(&artifact->complex, fault_out))
+	if (!SG_RuneCxViewValid(&artifact->cx, fault_out))
 		return 0;
 	if (!SG_RuneFnTableValid(&artifact->movement.analytic))
 		return Fault(fault_out, "functions", 0U, "table");
-	cx = &artifact->complex;
+	cx = &artifact->cx;
 	move = &artifact->movement;
 	if ((move->capability_count && !move->capabilities) ||
 		(move->profile_count && !move->profiles))

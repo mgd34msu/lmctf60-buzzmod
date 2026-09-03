@@ -93,7 +93,7 @@ int SG_RuneRouterBuild(sg_rune_router_t *router,
 	memset(router, 0, sizeof(*router));
 	if (!artifact)
 		return 0;
-	cx = &artifact->complex;
+	cx = &artifact->cx;
 	move = &artifact->movement;
 	router->artifact = artifact;
 	router->cell_center = malloc((size_t)(cx->cell_count ? cx->cell_count : 1U) *
@@ -300,7 +300,7 @@ int SG_RuneFieldBuildFrom(sg_rune_field_t *field, const sg_rune_router_t *router
 	if (!field || !router || !router->artifact)
 		return 0;
 	artifact = router->artifact;
-	cx = &artifact->complex;
+	cx = &artifact->cx;
 	move = &artifact->movement;
 	if (source_cell >= cx->cell_count)
 		return 0;
@@ -418,7 +418,7 @@ int SG_RuneFieldBuildWeighted(sg_rune_field_t *field,
 	if (!field || !router || !router->artifact)
 		return 0;
 	artifact = router->artifact;
-	cx = &artifact->complex;
+	cx = &artifact->cx;
 	move = &artifact->movement;
 	if (destination_cell >= cx->cell_count)
 		return 0;
@@ -559,8 +559,8 @@ int SG_RuneStepSelect(const sg_rune_router_t *router,
 	step_out->crouching_now = crouching ? 1U : 0U;
 	step_out->cost_to_go = INFINITY;
 	if (!router || !router->artifact || !field || !field->cost ||
-		cell >= router->artifact->complex.cell_count ||
-		field->state_count != router->artifact->complex.cell_count * 2U)
+		cell >= router->artifact->cx.cell_count ||
+		field->state_count != router->artifact->cx.cell_count * 2U)
 		return 0;
 	state = SG_RUNE_FIELD_STATE(cell, crouching);
 	step_out->cost_to_go = field->cost[state];
@@ -642,7 +642,7 @@ static void Lookahead(const sg_rune_router_t *router,
 		uint32_t beyond = router->destination[capability], state, next;
 		uint8_t kind;
 
-		if (beyond >= router->artifact->complex.cell_count ||
+		if (beyond >= router->artifact->cx.cell_count ||
 			beyond == field->destination_cell)
 			return;
 		state = SG_RUNE_FIELD_STATE(beyond, crouching);
@@ -801,7 +801,7 @@ uint32_t SG_RuneFieldNearestReachable(const sg_rune_router_t *router,
 					float dz = center[2] - origin[2];
 					float distance = sqrtf(dx * dx + dy * dy);
 
-					if (!(router->artifact->complex.cells[cell].semantics &
+					if (!(router->artifact->cx.cells[cell].semantics &
 							SG_RUNE_CX_CELL_SUPPORTED) ||
 						fabsf(dz) > 64.0f || distance >= best_distance ||
 						!(field->cost[SG_RUNE_FIELD_STATE(cell, 0)] < INFINITY))
@@ -861,7 +861,7 @@ int SG_RuneStepSelectAvoiding(const sg_rune_router_t *router,
 		 * the other one. */
 		if (!(record->source_stances & here) &&
 			(!(record->source_stances & (crouching ? SG_RUNE_MOVE_STANDING : SG_RUNE_MOVE_CROUCHING)) ||
-			 !(router->artifact->complex.cells[cell].valid_stances &
+			 !(router->artifact->cx.cells[cell].valid_stances &
 				(crouching ? SG_RUNE_CX_STANCE_STANDING : SG_RUNE_CX_STANCE_CROUCHING))))
 			continue;
 		for (arrive = 0; arrive < 2; arrive++)

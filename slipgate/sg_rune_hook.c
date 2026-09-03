@@ -501,7 +501,7 @@ int SG_RuneHookEmit(const sg_rune_bsp_t *bsp,
 	build.bsp = bsp;
 	build.law = law;
 	build.movement = movement;
-	build.artifact.complex = build.view;
+	build.artifact.cx = build.view;
 	build.artifact.law = *law;
 	if (!SG_RuneVisInit(&build.vis, bsp))
 		return 0;

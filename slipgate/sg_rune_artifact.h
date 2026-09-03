@@ -60,7 +60,7 @@ typedef struct sg_rune_artifact_s
 {
 	sg_rune_identity_t identity;
 	sg_rune_law_t law;
-	sg_rune_cx_view_t complex;
+	sg_rune_cx_view_t cx;
 	sg_rune_move_table_t movement;
 	sg_rune_mech_table_t mechanisms;
 	sg_rune_fire_table_t fires;        /* per cell: what can be hit from it */

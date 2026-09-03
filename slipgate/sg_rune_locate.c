@@ -26,7 +26,7 @@ float SG_RuneCellViolation(const sg_rune_artifact_t *artifact, uint32_t cell,
 
 	if (!artifact || !origin)
 		return INFINITY;
-	cx = &artifact->complex;
+	cx = &artifact->cx;
 	if (cell >= cx->cell_count)
 		return INFINITY;
 	record = &cx->cells[cell];
@@ -91,9 +91,9 @@ int SG_RuneLocatorBuild(sg_rune_locator_t *locator,
 	if (!locator)
 		return 0;
 	memset(locator, 0, sizeof(*locator));
-	if (!artifact || artifact->complex.cell_count == 0U)
+	if (!artifact || artifact->cx.cell_count == 0U)
 		return 0;
-	cx = &artifact->complex;
+	cx = &artifact->cx;
 	for (axis = 0U; axis < 3U; axis++)
 	{
 		mins[axis] = cx->cells[0].bounds.mins.value[axis];
@@ -230,7 +230,7 @@ uint32_t SG_RuneLocate(const sg_rune_locator_t *locator,
 		uint32_t cell = locator->entries[slot];
 		float violation = SG_RuneCellViolation(locator->artifact, cell, origin);
 		int stance_ok = wanted == 0U ||
-			(locator->artifact->complex.cells[cell].valid_stances & wanted) != 0U;
+			(locator->artifact->cx.cells[cell].valid_stances & wanted) != 0U;
 
 		if (violation > slack)
 			continue;
@@ -238,7 +238,7 @@ uint32_t SG_RuneLocate(const sg_rune_locator_t *locator,
 		 * cell the body is within a step of its top beats an air cell it
 		 * is exactly inside (a body at rest sits a unit or two over the
 		 * carve's floor level); then nearer beats farther. */
-		supported = (locator->artifact->complex.cells[cell].semantics &
+		supported = (locator->artifact->cx.cells[cell].semantics &
 			SG_RUNE_CX_CELL_SUPPORTED) != 0 && violation <= SG_RUNE_LOCATE_FLOOR_SLACK;
 		if (best == SG_RUNE_CX_INDEX_NONE ||
 			(stance_ok && !best_stance) ||
@@ -270,7 +270,7 @@ uint32_t SG_RuneLocateNearestFloor(const sg_rune_locator_t *locator,
 
 	if (!locator || !locator->artifact || !point)
 		return SG_RUNE_CX_INDEX_NONE;
-	cx = &locator->artifact->complex;
+	cx = &locator->artifact->cx;
 	for (axis = 0U; axis < 3U; axis++)
 	{
 		float reach = axis == 2U ? rise : radius;

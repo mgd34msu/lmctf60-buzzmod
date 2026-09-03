@@ -222,24 +222,24 @@ int main(void)
 	SG_RuneLawEngine(&artifact.law, 800.0f);
 	artifact.law.max_velocity = 2000.0f;
 	artifact.identity.law_crc32 = SG_RuneLawCrc(&artifact.law);
-	artifact.complex.cells = build.cells;
-	artifact.complex.cell_count = build.cell_count;
-	artifact.complex.facets = build.facets;
-	artifact.complex.facet_count = build.facet_count;
-	artifact.complex.incidences = build.incidences;
-	artifact.complex.incidence_count = build.incidence_count;
-	artifact.complex.cell_incidences = build.cell_incidences;
-	artifact.complex.cell_incidence_count = build.cell_incidence_count;
-	artifact.complex.vertices = build.vertices;
-	artifact.complex.vertex_count = build.vertex_count;
-	artifact.complex.portals = build.portals;
-	artifact.complex.portal_count = build.portal_count;
-	CHECK(SG_RuneCxViewValid(&artifact.complex, NULL));
+	artifact.cx.cells = build.cells;
+	artifact.cx.cell_count = build.cell_count;
+	artifact.cx.facets = build.facets;
+	artifact.cx.facet_count = build.facet_count;
+	artifact.cx.incidences = build.incidences;
+	artifact.cx.incidence_count = build.incidence_count;
+	artifact.cx.cell_incidences = build.cell_incidences;
+	artifact.cx.cell_incidence_count = build.cell_incidence_count;
+	artifact.cx.vertices = build.vertices;
+	artifact.cx.vertex_count = build.vertex_count;
+	artifact.cx.portals = build.portals;
+	artifact.cx.portal_count = build.portal_count;
+	CHECK(SG_RuneCxViewValid(&artifact.cx, NULL));
 
 	/* Movement from the complex: walks between the floor cells, a drop and
 	 * a jump off c into the air that land in the lower floor. */
 	CHECK(SG_RuneMoveStoreInit(&store, &movement_law));
-	CHECK(SG_RuneMoveEmitComplex(&store, &artifact.complex, &artifact.law));
+	CHECK(SG_RuneMoveEmitComplex(&store, &artifact.cx, &artifact.law));
 	/* A mechanism crossing has no portal: a teleporter from low back to a. */
 	{
 		memset(&mech, 0, sizeof(mech));
@@ -285,7 +285,7 @@ int main(void)
 	{
 		const float velocity[3] = { 300.0f, 0.0f, 0.0f };
 
-		CHECK(SG_RuneFlightTrace(&artifact.complex, &artifact.law, c, point,
+		CHECK(SG_RuneFlightTrace(&artifact.cx, &artifact.law, c, point,
 			velocity, &flight));
 		CHECK(flight.outcome == SG_RUNE_FLIGHT_LANDED);
 		CHECK(flight.landing_cell == low);

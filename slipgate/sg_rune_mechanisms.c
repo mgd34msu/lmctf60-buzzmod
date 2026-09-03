@@ -323,7 +323,7 @@ typedef struct emit_s
 {
 	const sg_rune_bsp_t *world;
 	const sg_rune_entities_t *semantics;
-	const sg_rune_cx_t *complex;
+	const sg_rune_cx_t *cx;
 	sg_rune_cx_view_t view;
 	const sg_rune_law_t *law;
 	sg_rune_move_store_t *movement;
@@ -621,11 +621,11 @@ int SG_RuneMechEmit(const sg_rune_bsp_t *world,
 		return 1;
 	emit.world = world;
 	emit.semantics = semantics;
-	emit.complex = cx;
+	emit.cx = cx;
 	emit.law = law;
 	emit.movement = movement;
 	emit.store = store;
-	emit.artifact.complex = emit.view;
+	emit.artifact.cx = emit.view;
 	emit.artifact.law = *law;
 	emit.record_of_entity = malloc((size_t)(semantics->count ?
 		semantics->count : 1U) * sizeof(uint32_t));

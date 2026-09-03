@@ -163,7 +163,15 @@ static uint32_t CountLines(const char *path)
 
 static void CountPath(char *out, size_t size, const char *rune_path)
 {
-	snprintf(out, size, "%s.bites-count", rune_path);
+	size_t n = strlen(rune_path);
+
+	if (n + sizeof(".bites-count") > size)
+	{
+		out[0] = 0;
+		return;
+	}
+	memcpy(out, rune_path, n);
+	memcpy(out + n, ".bites-count", sizeof(".bites-count"));
 }
 
 void SG_BitesWriteCountFor(const char *rune_path, const char *bites_path)
