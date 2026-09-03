@@ -1,41 +1,47 @@
-# LMCTF BuzzMod v1.0.0 -- release notes (2026-09-02)
+# LMCTF BuzzMod v1.0.0
 
-What ships
-- The game module (gamex86_64.so / gamex86_64.dll): LMCTF with the SLIPGATE
-  bots and their route builder inside it.
-- maps/<map>.bites: the players' rope bites per map (47 maps from the
-  beatdown demos), read by the generator.  Optional; a map without one gets
-  geometry-only rides.
+Released 2026-09-02.
 
-First run on a server
-- A map's routes (its RUNE, maps/<map>.rune) are built in the background
-  the first time the map loads: "slipgate: building the bots' routes for
-  <map> in the background; the bots wait for it", then "the bots' routes for
-  <map> are ready".  Seconds for small maps, a few minutes for the largest
-  (lmctf29).  Nothing to run by hand.  "sv rune" starts a build on demand.
-- While humans play, their rope bites are added to maps/<map>.bites; when
-  the file has grown enough, the map's routes are rebuilt on its next load.
+## What ships
 
-Console variables
-- sv_botfill N: fill each team to N (rune.cfg sets 5); "sv sg add red|blue",
-  "sv sg list" for individual bots.
-- capturelimit, timelimit (rune.cfg: 10 and 20), maplist_file for the
-  rotation.
-- ctf_hitsound, ctf_killsound: 0 off, 1 carrier events only, 2 all (rune.cfg
-  sets 2 and 2).  The sound plays at the player it happened to and privately
-  to the attacker.
-- spawn_loadout / loadout_<name>: the starting equipment (rune.cfg: rocket
-  launcher and grenades).
-- sg_debug 1: the bots' decisions, the rope log and the human trace in the
-  server log; 2 logs every frame.
+The game module for Linux 64-bit (gamex86_64.so), Windows 64-bit
+(gamex86_64.dll) and Windows 32-bit (gamex86.dll), with the SLIPGATE bots
+and their route builder inside. lmctf6-buzzmod.pak, required for the
+scoreboard artwork and the hit sound. maps/*.bites, the players' rope bites
+for 47 maps from the tournament demos. server-sample.cfg. SHA256SUMS.
 
-Tools (optional)
-- tools/demobites.py DEMOS... -o maps/ [--players a,b]: bites from demos.
-- tools/logbites.py LOG... -o maps/: bites from server logs.
-- fieldcheck, bsppoint, cellsdump.gnu: for looking at a map's routes.
+## First run
 
-Known limits
-- The first load of a map runs the build on one core beside the server; the
-  server keeps its frames, the bots stand until it lands.
-- Team captures for the turtle rule and the capture limit are counted this
-  map; the stats store is not used for them.
+Put the files in the lmctf directory and start the server as usual. The
+first time a map loads, the module builds its routes on a second thread.
+Players see "slipgate: building the bots' routes for <map> in the
+background; the bots wait for it" and then "the bots' routes for <map> are
+ready". Small maps take seconds; lmctf29 takes about three minutes. sv rune
+starts a build on demand. While humans play, their rope bites are added to
+maps/<map>.bites, and a map whose file has grown enough gets its routes
+rebuilt on its next load.
+
+## Server variables
+
+sv_botfill N fills each team to N bots. sv sg add red, sv sg add blue and
+sv sg list handle single bots. capturelimit and timelimit end a map and
+maplist_file names the rotation; the sample config sets 10 captures and 20
+minutes. ctf_hitsound and ctf_killsound take 0, 1 for flag-carrier events
+only, or 2 for every event; the sound plays where it happened and privately
+to the attacker. spawn_loadout and loadout_<name> set the starting
+equipment; the sample gives a rocket launcher and grenades. sg_debug 1 logs
+the bots' decisions, the rope and the human trace to the server log, and 2
+logs every frame.
+
+## Tools
+
+tools/demobites.py adds rope bites from demo files, for every player or for
+named ones. tools/logbites.py adds them from server logs. fieldcheck,
+bsppoint and cellsdump.gnu inspect a map's routes.
+
+## Limits
+
+The first load of a map runs the build on one core beside the server; the
+server keeps its frames and the bots stand until the routes land. Team
+captures for the turtle rule and the capture limit are counted for the
+current map, not from the stats database.

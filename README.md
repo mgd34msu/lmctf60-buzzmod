@@ -9,16 +9,18 @@ server bundle.
 
 ## Install
 
-From [releases](https://github.com/mgd34msu/lmctf60-buzzmod/releases), download
-the release package and unpack it into the `lmctf` directory:
+Download the release package from
+[releases](https://github.com/mgd34msu/lmctf60-buzzmod/releases) and unpack it
+into the `lmctf` directory. It holds:
 
-| | |
+| File | What it is |
 |-|-|
-| `gamex86_64.so` | Linux 64-bit game module (the bots and the route builder are inside it) |
-| `gamex86_64.dll` | Windows 64-bit game module |
-| `maps/<map>.bites` | the players' rope bites per map, read when a map's routes are built (optional) |
-| `slipgate-server-sample.cfg` | a sample server config: bots, limits, sounds, loadout |
-| `lmctf6-buzzmod.pak` | **required** for stats and the hit sound (from an earlier release) |
+| `gamex86_64.so` | the Linux 64-bit game module |
+| `gamex86_64.dll` | the Windows 64-bit game module |
+| `gamex86.dll` | the Windows 32-bit game module |
+| `lmctf6-buzzmod.pak` | required. Scoreboard artwork and the hit sound |
+| `maps/*.bites` | the players' rope bites per map, read when a map's routes are built |
+| `server-sample.cfg` | a sample server config for bots, limits, sounds and loadout |
 
 Then turn stats on:
 
@@ -26,70 +28,72 @@ Then turn stats on:
 set ctf_statsdb 2
 ```
 
-The database creates itself. `1` gives one file per player instead; `0` is off.
-
-Stats are viewable on the web via [q2lmstats](https://github.com/mgd34msu/q2lmstats).
+The database creates itself. `1` keeps one file per player instead; `0` is off.
+Stats are viewable on the web with [q2lmstats](https://github.com/mgd34msu/q2lmstats).
 
 ## SLIPGATE bots
 
-SLIPGATE is the mod's from-scratch bot system, built into the game module.
-It plays LMCTF the way the best players do: the rope on nearly every move,
-released at speed in the air; strafing and reversing in fights; a team goal
-that every bot follows and falls back on.  The bots are measured against the
-top players' demos (Zest, Lequin, seed, Em, sinsemilla): the rope rate,
-release speed, air time, turn rate and objective rates in
-`docs/PLAYERS-STANDARD.txt` are the targets, and the numbers the bots
-reach are in `docs/RUNE.md`.
+SLIPGATE is the mod's own bot system, built into the game module. The bots
+play the way the best LMCTF players play. They rope on nearly every move and
+let go at speed, in the air. They strafe and reverse in fights. Each team
+follows a goal, and a bot whose own job dies falls back on it.
 
-**Nothing to run by hand.**  The first time a map loads, its routes (the
-RUNE, `maps/<map>.rune`) are built in the background while the server plays
-on and the bots wait: "slipgate: building the bots' routes for <map> in the
-background; the bots wait for it", then "the bots' routes for <map> are
-ready".  Seconds for small maps, a few minutes for the largest.  While humans
-play, their rope bites are added to `maps/<map>.bites`, and a map whose file
-has grown enough is rebuilt on its next load.
+They are measured against the top players' demos. `docs/PLAYERS-STANDARD.txt`
+holds the numbers from Zest, Lequin, seed, Em and sinsemilla, and
+`docs/RUNE.md` records what the bots reach after each change. In five-minute
+games on smap26 the bots fire 32 ropes per bot-minute and release at 785
+units per second; Zest fires 30 a minute.
 
-How it works, in short: the map is carved into a complex of cells with the
-player's hull (every place the body can be), every crossing between cells is
-proved by the game's own physics (walks, jumps, drops, swims, rope rides,
-lifts, doors), and a bot follows a cost field over those crossings toward its
-goal.  The team's goal (take their flag together, bring it home, recover
-ours, hold and retake, turtle when well ahead) hands out roles; a role whose
-destination dies falls back on the goal.  See `SLIPGATE.md`.
+There is nothing to run by hand. The first time a map loads, the module builds
+the map's routes (`maps/<map>.rune`) on a second thread. The server keeps
+playing, the bots stand until the routes land, and everyone sees two messages:
+"slipgate: building the bots' routes for <map> in the background; the bots
+wait for it", then "the bots' routes for <map> are ready". Small maps take
+seconds, lmctf29 takes about three minutes. While humans play, their rope
+bites go into `maps/<map>.bites`, and a map whose file has grown enough gets
+its routes rebuilt on its next load.
 
-### Server commands and variables
+The routes come from the map itself. The module carves each map into cells
+with the player's own hull, so a cell is a place the body can be. It proves
+every crossing between cells with the game's movement physics: walks, jumps,
+drops, swims, rope rides, lifts, doors. A bot follows a cost field over those
+crossings toward its goal. `SLIPGATE.md` has the design.
+
+### Server commands
 
 | Command | Effect |
 |-|-|
-| `sv sg add [red\|blue]` | add a bot (the balancer picks the team without one) |
-| `sv sg remove <name>` / `sv sg remove` | remove one bot / every bot |
+| `sv sg add` | add a bot; the balancer picks its team |
+| `sv sg add red`, `sv sg add blue` | add a bot to that team |
+| `sv sg remove <name>` | remove one bot |
+| `sv sg remove` | remove every bot |
 | `sv sg kick worst` | remove the lowest-ranked bot |
-| `sv sg list` | the bot roster |
+| `sv sg list` | print the bot roster |
 | `sv rune` | build this map's routes now, in the background |
+
+### Server variables
 
 | Variable | Effect |
 |-|-|
-| `sv_botfill N` | fill each team to N bots (sample config: 5) |
-| `capturelimit`, `timelimit` | end the map (sample: 10 and 20) and rotate through `maplist.txt` |
-| `ctf_hitsound`, `ctf_killsound` | 0 off, 1 flag-carrier events only, 2 every event (sample: 2, 2); the sound plays where it happened and privately to the attacker |
-| `spawn_loadout "@name"`, `loadout_name "..."` | starting equipment (sample: rocket launcher and grenades) |
-| `sg_debug` | 1 logs the bots' decisions, the rope and the human trace to the server log; 2 every frame |
+| `sv_botfill N` | fill each team to N bots. The sample config sets 5 |
+| `capturelimit`, `timelimit` | end the map and move to the next in `maplist.txt`. The sample sets 10 captures and 20 minutes |
+| `ctf_hitsound`, `ctf_killsound` | 0 off, 1 flag-carrier events only, 2 every event. The sound plays where it happened and privately to the attacker. The sample sets 2 and 2 |
+| `spawn_loadout "@name"` with `loadout_name "..."` | starting equipment. The sample gives a rocket launcher and grenades |
+| `sg_debug` | 1 logs every bot decision, every rope and the human trace to the server log. 2 logs every frame |
 
-### Tools (optional)
+### Tools
 
-- `tools/demobites.py DEMOS... -o maps/` and `tools/logbites.py LOGS... -o maps/`
-  add rope bites from demos or from server logs to the maps' bite files.
-- `tools/dm2trace.py`, `fieldcheck`, `bsppoint`, `cellsdump.gnu` for looking at
-  demos and at a map's routes (`docs/RUNE.md`).
+These are optional. `tools/demobites.py DEMOS... -o maps/` adds rope bites
+from demo files to the maps' bite files, and `tools/logbites.py LOGS... -o maps/`
+does the same from server logs. `fieldcheck`, `bsppoint` and `cellsdump.gnu`
+inspect a map's routes; `docs/RUNE.md` explains them.
 
 ### Documents
 
-- `docs/RELEASE-v1.0.0.md` -- the release notes.
-- `SLIPGATE.md` -- the design.
-- `docs/RUNE.md` -- the routes in detail and the record of what the play data
-  changed.
-- `docs/PLAYERS-STANDARD.txt` -- the players the bots are measured against.
-- `docs/README.md` -- which documents are current and which are history.
+`docs/RELEASE-v1.0.0.md` is the release note. `SLIPGATE.md` is the design.
+`docs/RUNE.md` describes the routes in detail. `docs/PLAYERS-STANDARD.txt`
+lists the players the bots are measured against. `docs/README.md` says which
+documents are current and which are development records.
 
 ## What's tracked
 
