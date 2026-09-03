@@ -18,8 +18,8 @@
 #define BITE_ABOVE_EYE 4.0f       /* level bites too: the players' pulls are mostly forward */
 #define MOMENTUM_SPEED 400.0f     /* a release at this much forward speed carries into the next edge */
 #define MOMENTUM_CREDIT 0.7f
-#define CANDIDATES_PER_CELL 24U
-#define RECORDS_PER_CELL 8U
+#define CANDIDATES_PER_CELL 48U
+#define RECORDS_PER_CELL 16U
 #define EYE_HEIGHT 22.0f
 #define BODY_ORIGIN 24.0f
 #define NEAR_BITE_STOP 40.0f
