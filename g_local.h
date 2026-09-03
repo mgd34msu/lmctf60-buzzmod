@@ -616,6 +616,7 @@ extern	cvar_t	*timelimit;
 extern	cvar_t	*capturelimit;
 extern int ctf_map_captures[3];
 const char *SG_SexedSound(edict_t *ent, const char *base);
+void SG_BitesNote(edict_t *ent);
 extern	cvar_t	*railtime;
 extern	cvar_t	*password;
 extern	cvar_t	*spectator_password;

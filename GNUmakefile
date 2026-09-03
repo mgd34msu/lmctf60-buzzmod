@@ -506,7 +506,12 @@ C_OBJS = g_menu.o g_replace.o g_runes.o g_ctffunc.o g_skins.o g_tourney.o \
 	stdlog.o gslog.o bat.o g_vote.o ctf_file_io.o ctf_sqlite_core.o \
 	ctf_sqlite_player.o ctf_sqlite_unidb.o sqlite3.o slipgate/sg_bot_cvars.o \
 	slipgate/sg_bot_util.o slipgate/sg_bot_persona.o slipgate/sg_bot_roster.o \
-	slipgate/sg_tactic_controller.o slipgate/sg_rune_game.o slipgate/sg_rune_cx.o \
+	slipgate/sg_tactic_controller.o slipgate/sg_bites.o slipgate/sg_rune_cx.o \
+	slipgate/sg_configuration_cells.o slipgate/sg_configuration_semantics.o \
+	slipgate/sg_rune_cx_build.o slipgate/sg_rune_movement_build.o \
+	slipgate/sg_rune_mechanisms.o slipgate/sg_rune_hook.o slipgate/sg_rune_entities.o \
+	slipgate/sg_rune_vis.o slipgate/sg_rune_fire_build.o slipgate/sg_rune_generate.o \
+	slipgate/sg_rune_game_generate.o \
 	slipgate/sg_rune_analytic.o slipgate/sg_rune_movement.o \
 	slipgate/sg_rune_artifact.o slipgate/sg_rune_bsp.o slipgate/sg_rune_crc.o \
 	slipgate/sg_rune_trace.o slipgate/sg_rune_law.o slipgate/sg_bot_host.o \
@@ -596,7 +601,7 @@ endif
 
 # A Windows module (MSYS or a MinGW cross build) has no libdl.
 ifeq ($(PLATFORM),Windows)
-LDFLAGS = -lm
+LDFLAGS = -lm -lpthread
 endif
 
 # Linker flags for building a shared library (*.so).
@@ -627,10 +632,8 @@ RUNE_COMPACT_GENERATOR_OFFLINE_OBJS = \
 	slipgate/sg_rune_fire_build.o \
 	slipgate/sg_rune_generate.o \
 	slipgate/sg_rune_game_generate.o
-RUNE_COMPACT_GENERATOR_RUNTIME_OBJS = $(filter-out \
-	slipgate/sg_rune_game.o,$(OBJS))
-RUNE_COMPACT_GENERATOR_OBJS = $(RUNE_COMPACT_GENERATOR_RUNTIME_OBJS) \
-	$(RUNE_COMPACT_GENERATOR_OFFLINE_OBJS)
+RUNE_COMPACT_GENERATOR_RUNTIME_OBJS = $(OBJS)
+RUNE_COMPACT_GENERATOR_OBJS = $(RUNE_COMPACT_GENERATOR_RUNTIME_OBJS)
 
 # A slipgate header change rebuilds every slipgate object: the record
 # layouts in these headers are shared by the runtime and the generator, and

@@ -20,6 +20,8 @@
 #include "sg_bot_host.h"
 #include "sg_bot_combat.h"
 #include "sg_bot_persona.h"
+#include "sg_rune_game.h"
+#include "sg_bites.h"
 #include "../p_stats.h"
 #include "sg_bot_items.h"
 #include "sg_bot_cvars.h"
@@ -45,7 +47,26 @@ qboolean SG_LevelSetup(void)
 		!strcmp(sg_rune_level.mapname, level.mapname))
 		return true;
 	sg_level_setup_attempted = true;
-	return SG_RuneLevelBegin(level.mapname) ? true : false;
+	SG_BitesLevelBegin(level.mapname);
+	if (!SG_RuneLevelBegin(level.mapname))
+	{
+		/* No rune, or one this host refuses: build it now, in the
+		 * background; the bots wait for it and the map plays on. */
+		if (!SG_RuneGameGenerateBusy() && SG_RuneGameGenerateStart(level.mapname))
+			gi.bprintf(PRINT_HIGH, "slipgate: building the bots' routes for %s "
+				"in the background; the bots wait for it.\n", level.mapname);
+		return false;
+	}
+	/* Built with fewer of the players' bites than the map now has: build
+	 * again in the background, for the next time this map loads. */
+	if (SG_BitesGrown(level.mapname) && !SG_RuneGameGenerateBusy())
+	{
+		if (SG_RuneGameGenerateStart(level.mapname))
+			gi.dprintf("slipgate: %s has more of the players' bites than its "
+				"rune: building again in the background for its next load\n",
+				level.mapname);
+	}
+	return true;
 }
 
 void SG_LevelSetupAfterRuneWrite(void)
@@ -58,6 +79,7 @@ void SG_LevelChange(void)
 {
 	int i;
 
+	SG_BitesFlush(1);
 	SG_RuneLevelClear();
 	SG_OrdersReset();
 	SG_BotCombatReset();
@@ -2950,6 +2972,20 @@ void SG_RunFrame(void)
 	SG_CvarsInit();
 	if (!sg_level_setup_attempted)
 		(void)SG_LevelSetup();
+	/* A background build that finished this frame: its report, and the
+	 * rune loaded if this map still waits for one. */
+	{
+		int polled = SG_RuneGameGeneratePoll();
+
+		if (polled > 0 && !SG_RuneLevelCurrent())
+		{
+			sg_level_setup_attempted = false;
+			if (SG_LevelSetup())
+				gi.bprintf(PRINT_HIGH, "slipgate: the bots' routes for %s are ready.\n",
+					level.mapname);
+		}
+	}
+	SG_BitesFlush(0);
 	Botfill_Frame();
 	TeamPass(CTF_TEAM_RED);
 	TeamPass(CTF_TEAM_BLUE);

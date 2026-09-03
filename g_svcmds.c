@@ -405,8 +405,8 @@ void	ServerCommand (void)
 	{
 		if (gi.argc() == 2)
 		{
-			if (SG_RuneGameGenerate(level.mapname))
-				SG_LevelSetupAfterRuneWrite();
+			if (!SG_RuneGameGenerate(level.mapname))
+				gi.cprintf(NULL, PRINT_HIGH, "rune: not started (a build is running, or the map has no file)\n");
 		}
 		else
 			gi.cprintf(NULL, PRINT_HIGH, "usage: sv rune\n");
