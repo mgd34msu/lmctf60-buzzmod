@@ -484,3 +484,24 @@ The players' bites are mod data, not a local file: data/bites/<map>.bites in
 the repo (47 maps, 1.6 MB), copied to the game's maps/ by tools/deploy.sh, and
 read by the in-game generator on any install.  A release ships them under
 maps/ beside the module.
+
+## Zero friction (2026-09-02 night)
+
+The shipped module carries the generator.  A map whose rune is missing, or
+refused by this host, is built on a thread of its own the moment it loads
+(sg_rune_game_generate.c: the worker gets copies of the map path, the entity
+text and the gravity, keeps its report in a buffer; the frame poll prints it
+and loads the rune; "sv rune" starts the same build).  The players say
+"slipgate: building the bots' routes for <map> in the background; the bots
+wait for it" and, when it lands, "the bots' routes for <map> are ready".
+
+While humans play, every rope that bites is remembered with its fire spot
+(sg_bites.c, from ClientThink, humans only) and written to maps/<map>.bites
+every thirty seconds and at the map's end -- the same file the demo tools
+write and the builder reads.  A rune remembers how many bites it was built
+with (<map>.rune.bites-count); when the file has grown by fifty and ten
+percent, the next load rebuilds it in the background for the load after.
+
+Tools for those with demos or logs: tools/demobites.py (every player in a
+demo directory, or --players) and tools/logbites.py (server logs), both
+merging into maps/<map>.bites.
