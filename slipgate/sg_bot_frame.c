@@ -152,14 +152,16 @@ static int TeamCaptures(int team)
 
 static int GoalFor(int team, const edict_t *our_carrier, const edict_t *their_carrier)
 {
+	/* Well ahead, the team turtles whatever the flags are doing: the
+	 * flags only decide who hunts and who runs. */
+	if (TeamCaptures(team) - TeamCaptures(SG_EnemyTeam(team)) > TURTLE_LEAD)
+		return SG_GOAL_TURTLE;
 	if (our_carrier && their_carrier)
 		return SG_GOAL_HOLD_AND_RETAKE;
 	if (our_carrier)
 		return SG_GOAL_BRING_IT_HOME;
 	if (their_carrier)
 		return SG_GOAL_RECOVER_OURS;
-	if (TeamCaptures(team) - TeamCaptures(SG_EnemyTeam(team)) > TURTLE_LEAD)
-		return SG_GOAL_TURTLE;
 	return SG_GOAL_TAKE_THEIRS;
 }
 
@@ -176,7 +178,7 @@ const char *SG_TeamGoalName(int goal)
 	case SG_GOAL_BRING_IT_HOME: return "bring it home: escort the carrier";
 	case SG_GOAL_RECOVER_OURS: return "recover our flag: hunt the carrier";
 	case SG_GOAL_HOLD_AND_RETAKE: return "hold ours alive and get theirs back";
-	case SG_GOAL_TURTLE: return "turtle: everyone defends, one runner";
+	case SG_GOAL_TURTLE: return "turtle: everyone defends, one runner, no escorts";
 	default: return "?";
 	}
 }
@@ -530,7 +532,8 @@ static void TeamPass(int team)
 	 * defenders recover it (the owner's rule). */
 	if (have_home && defenders == 0 && count >= 3 &&
 		sg_team_pass.goal[side] != SG_GOAL_RECOVER_OURS &&
-		sg_team_pass.goal[side] != SG_GOAL_HOLD_AND_RETAKE)
+		sg_team_pass.goal[side] != SG_GOAL_HOLD_AND_RETAKE &&
+		sg_team_pass.goal[side] != SG_GOAL_TURTLE)
 	{
 		int want = count >= 5 ? 2 : 1;
 
@@ -570,8 +573,9 @@ static void TeamPass(int team)
 	}
 	/* Our carrier gets every free bot but one as escort: the run home is
 	 * the team's whole point while it lasts, and one stays at the enemy's
-	 * stand for the flag's return. */
-	if (our_carrier)
+	 * stand for the flag's return.  Not when turtling: the carrier comes
+	 * home on its own and the base stays manned. */
+	if (our_carrier && sg_team_pass.goal[side] != SG_GOAL_TURTLE)
 	{
 		int free = 0, escorts;
 
