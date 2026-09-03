@@ -2272,8 +2272,10 @@ static void Dislodge(sg_bot_t *bot, edict_t *e, sg_tactic_command_t *command, qb
 	float still;
 
 	VectorSubtract(e->s.origin, bot->still_origin, moved);
+	/* A body that has arrived and waits is still on purpose: the idle
+	 * footwork moves it where it can, and a post on a ledge it cannot. */
 	if (VectorLength(moved) > STILL_DISTANCE || bot->still_since <= 0.0f ||
-		e->deadflag || e->client->hookstate == 2)
+		e->deadflag || e->client->hookstate == 2 || bot->step.kind == SG_RUNE_STEP_ARRIVED)
 	{
 		VectorCopy(e->s.origin, bot->still_origin);
 		bot->still_since = level.time;

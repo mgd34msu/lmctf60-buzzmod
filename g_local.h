@@ -614,6 +614,7 @@ extern	cvar_t	*skill;
 extern	cvar_t	*fraglimit;
 extern	cvar_t	*timelimit;
 extern	cvar_t	*capturelimit;
+const char *SG_SexedSound(edict_t *ent, const char *base);
 extern	cvar_t	*railtime;
 extern	cvar_t	*password;
 extern	cvar_t	*spectator_password;

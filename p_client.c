@@ -1149,7 +1149,7 @@ void player_die (edict_t *self, edict_t *inflictor, edict_t *attacker, int damag
 				self->client->anim_end = FRAME_death308;
 				break;
 			}
-			gi.sound (self, CHAN_VOICE, gi.soundindex(va("*death%i.wav", (rand()%4)+1)), 1, ATTN_NORM, 0);
+			gi.sound (self, CHAN_VOICE, gi.soundindex(SG_SexedSound(self, va("death%i.wav", (rand()%4)+1))), 1, ATTN_NORM, 0);
 		}
 	}
 
@@ -2783,6 +2783,26 @@ This will be called once for each client frame, which will
 usually be a couple times for each server frame.
 ==============
 */
+
+/* A player's sexed sound resolved on the server: "*jump1.wav" becomes
+ * "player/male/jump1.wav" from the skin's model directory.  A client that
+ * cannot see the player has no model for the "*" form and complains. */
+const char *SG_SexedSound(edict_t *ent, const char *base)
+{
+	static char name[64];
+	const char *skin = ent && ent->client ?
+		Info_ValueForKey(ent->client->pers.userinfo, "skin") : "";
+	const char *slash = skin ? strchr(skin, '/') : NULL;
+	size_t n = slash ? (size_t)(slash - skin) : 0;
+
+	if (n == 0 || n >= 16)
+	{
+		skin = "male";
+		n = 4;
+	}
+	Com_sprintf(name, sizeof(name), "player/%.*s/%s", (int)n, skin, base);
+	return name;
+}
 void ClientThink (edict_t *ent, usercmd_t *ucmd)
 {
 	gclient_t	*client;
@@ -2986,7 +3006,7 @@ void ClientThink (edict_t *ent, usercmd_t *ucmd)
 
 		if (ent->groundentity && !pm.groundentity && (pm.cmd.upmove >= 10) && (pm.waterlevel == 0))
 		{
-			gi.sound(ent, CHAN_VOICE, gi.soundindex("*jump1.wav"), 1, ATTN_NORM, 0);
+			gi.sound(ent, CHAN_VOICE, gi.soundindex(SG_SexedSound(ent, "jump1.wav")), 1, ATTN_NORM, 0);
 			PlayerNoise(ent, ent->s.origin, PNOISE_SELF);
 		}
 

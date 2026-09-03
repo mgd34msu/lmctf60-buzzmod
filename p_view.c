@@ -147,7 +147,7 @@ void P_DamageFeedback (edict_t *player)
 			l = 75;
 		else
 			l = 100;
-		gi.sound (player, CHAN_VOICE, gi.soundindex(va("*pain%i_%i.wav", l, r)), 1, ATTN_NORM, 0);
+		gi.sound (player, CHAN_VOICE, gi.soundindex(SG_SexedSound(player, va("pain%i_%i.wav", l, r))), 1, ATTN_NORM, 0);
 	}
 
 	// the total alpha of the blend is always proportional to count
@@ -702,9 +702,9 @@ void P_WorldEffects (void)
 				if (current_player->health <= current_player->dmg)
 					gi.sound (current_player, CHAN_VOICE, gi.soundindex("player/drown1.wav"), 1, ATTN_NORM, 0);
 				else if (rand()&1)
-					gi.sound (current_player, CHAN_VOICE, gi.soundindex("*gurp1.wav"), 1, ATTN_NORM, 0);
+					gi.sound (current_player, CHAN_VOICE, gi.soundindex(SG_SexedSound(current_player, "gurp1.wav")), 1, ATTN_NORM, 0);
 				else
-					gi.sound (current_player, CHAN_VOICE, gi.soundindex("*gurp2.wav"), 1, ATTN_NORM, 0);
+					gi.sound (current_player, CHAN_VOICE, gi.soundindex(SG_SexedSound(current_player, "gurp2.wav")), 1, ATTN_NORM, 0);
 
 				current_player->pain_debounce_time = level.time;
 
