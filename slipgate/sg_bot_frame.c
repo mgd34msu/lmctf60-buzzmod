@@ -2100,8 +2100,8 @@ static qboolean FloorAhead(const edict_t *e, const vec3_t direction, float dista
  * of the way; a body with nowhere to go dodges in place.  A launch being
  * lined up, a rope, water, and a body in the air are left alone: air
  * control is nil on this server, and a launch needs its line. */
-#define DODGE_HOLD_MIN 0.5f       /* the owner reverses after 0.6-2.0 s, median 1.1 */
-#define DODGE_HOLD_SPAN 0.9f
+#define DODGE_HOLD_MIN 0.3f       /* the players reverse inside fights after 0.3-0.9 s, median 0.5 */
+#define DODGE_HOLD_SPAN 0.6f
 #define DODGE_ROUTE_SHARE 0.55f
 #define DODGE_SIDE_SHARE 0.85f
 #define DODGE_RANGE 1200.0f

@@ -176,7 +176,7 @@ static int AimAngles(const float from[3], const float to[3], float *yaw_out,
  * height or over it, or when the bite is about to be reached. */
 #define HOOK_STAND_CLOSE 24.0f
 #define HOOK_FIRE_STILL 120.0f    /* over this speed the body's way must be the bite's way */
-#define HOOK_FIRE_ALIGNED 0.8f    /* cosine of the way to the bite */
+#define HOOK_FIRE_ALIGNED 0.5f    /* cosine of the way to the bite: the players fire 56 degrees off their heading */
 #define HOOK_RELEASE_BELOW 8.0f
 #define HOOK_RELEASE_FLAT 40.0f
 #define HOOK_RELEASE_AT_BITE 60.0f
