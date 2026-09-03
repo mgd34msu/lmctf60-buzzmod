@@ -912,11 +912,11 @@ static uint32_t StandingCellNear(const vec3_t point)
 	/* Still nothing: the nearest floor cell around the point.  An air
 	 * cell as a destination reaches nothing and parks the body. */
 	{
-		uint32_t near = SG_RuneLocateNearestFloor(&sg_rune_level.locator, point,
+		uint32_t nearby = SG_RuneLocateNearestFloor(&sg_rune_level.locator, point,
 			STAND_SEARCH_RADIUS, STAND_SEARCH_RISE);
 
-		if (near != SG_RUNE_CX_INDEX_NONE)
-			return near;
+		if (nearby != SG_RUNE_CX_INDEX_NONE)
+			return nearby;
 	}
 	return first;
 }
