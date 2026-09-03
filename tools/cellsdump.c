@@ -60,6 +60,18 @@ int main(int argc, char **argv)
 		fprintf(stderr, "usage: cellsdump MAP.bsp [OUT.rune]\n");
 		return 2;
 	}
+	{
+		/* The players' bites for this map sit beside the BSP as .bites. */
+		char bites[1024];
+		size_t n = strlen(argv[1]);
+
+		if (n > 4 && n < sizeof(bites) && !strcmp(argv[1] + n - 4, ".bsp"))
+		{
+			memcpy(bites, argv[1], n - 4);
+			strcpy(bites + n - 4, ".bites");
+			SG_RuneHookSetHumanBites(bites);
+		}
+	}
 	if (!SG_RuneBspLoadFile(argv[1], world, &bsp_fault))
 	{
 		fprintf(stderr, "bsp load failed: %s lump %d record %u\n",
@@ -185,9 +197,9 @@ int main(int argc, char **argv)
 					fprintf(stderr, "hook reach failed\n");
 					return 1;
 				}
-				printf("hook: %u bites, %u cells with rides, %u records, %u traces "
+				printf("hook: %u bites (%u from the players), %u cells with rides, %u records, %u traces "
 					"[%.2fs]; candidates %u bolt clear %u pull clear %u flights %u\n",
-					(unsigned)hooks.bites, (unsigned)hooks.cells,
+					(unsigned)hooks.bites, (unsigned)hooks.human_bites, (unsigned)hooks.cells,
 					(unsigned)hooks.records, (unsigned)hooks.traces, Now() - th,
 					(unsigned)hooks.candidates, (unsigned)hooks.bolt_clear,
 					(unsigned)hooks.pull_clear, (unsigned)hooks.flights);

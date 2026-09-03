@@ -10,6 +10,7 @@
 #include "sg_rune_law.h"
 #include "sg_rune_artifact.h"
 #include "sg_rune_generate.h"
+#include "sg_rune_hook.h"
 #include "sg_rune_level.h"
 
 static void Progress(void *context, const char *stage, uint32_t done,
@@ -58,6 +59,20 @@ int SG_RuneGameGenerate(const char *mapname)
 	{
 		gi.dprintf("rune: generation refused stage=path\n");
 		return 0;
+	}
+	{
+		/* The players' bites for this map, beside the BSP as .bites. */
+		char bites[1024];
+		size_t n = strlen(bsp_path);
+
+		if (n > 4 && n < sizeof(bites) && !strcmp(bsp_path + n - 4, ".bsp"))
+		{
+			memcpy(bites, bsp_path, n - 4);
+			strcpy(bites + n - 4, ".bites");
+			SG_RuneHookSetHumanBites(bites);
+		}
+		else
+			SG_RuneHookSetHumanBites(NULL);
 	}
 	if (!SG_RuneBspLoadFile(bsp_path, &bsp, &bsp_fault))
 	{

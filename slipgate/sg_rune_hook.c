@@ -1,6 +1,8 @@
 #include "sg_rune_hook.h"
 
 #include <math.h>
+#include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -60,12 +62,89 @@ static float FloatBits(uint32_t bits)
 
 /* ---- bites ---------------------------------------------------------------------- */
 
+static char sg_human_bites_path[1024];
+
+void SG_RuneHookSetHumanBites(const char *path)
+{
+	if (path && *path)
+	{
+		strncpy(sg_human_bites_path, path, sizeof(sg_human_bites_path) - 1U);
+		sg_human_bites_path[sizeof(sg_human_bites_path) - 1U] = 0;
+	}
+	else
+		sg_human_bites_path[0] = 0;
+}
+
+static uint32_t CountHumanBites(void)
+{
+	FILE *f;
+	uint32_t n = 0U;
+	char line[256];
+
+	if (!sg_human_bites_path[0])
+		return 0U;
+	f = fopen(sg_human_bites_path, "r");
+	if (!f)
+		return 0U;
+	while (fgets(line, sizeof(line), f))
+		n++;
+	fclose(f);
+	return n;
+}
+
+/* The players' bites: each is traced from where it was fired; the wall
+ * the bolt meets there gives the point and the normal. */
+static void AddHumanBites(hook_build_t *build)
+{
+	FILE *f;
+	char line[256];
+	uint32_t added = 0U;
+
+	if (!sg_human_bites_path[0])
+		return;
+	f = fopen(sg_human_bites_path, "r");
+	if (!f)
+		return;
+	while (fgets(line, sizeof(line), f))
+	{
+		float from[3], to[3], dx, dy, dz;
+		sg_rune_trace_t trace;
+		bite_t *bite;
+
+		if (sscanf(line, "%f %f %f %f %f %f", &from[0], &from[1], &from[2],
+			&to[0], &to[1], &to[2]) != 6)
+			continue;
+		if (!SG_RuneTraceBox(build->bsp, 0U, NULL, from, NULL, NULL, to,
+			SG_RUNE_MASK_PLAYER_SOLID, &trace) || trace.startsolid || trace.fraction >= 1.0f)
+			continue;
+		dx = trace.end[0] - to[0];
+		dy = trace.end[1] - to[1];
+		dz = trace.end[2] - to[2];
+		if (dx * dx + dy * dy + dz * dz > 48.0f * 48.0f)
+			continue;   /* the demo's bite is not where this world's wall is */
+		bite = &build->bites[build->bite_count];
+		memcpy(bite->normal, trace.normal, sizeof(bite->normal));
+		bite->point[0] = trace.end[0] + trace.normal[0] * 2.0f;
+		bite->point[1] = trace.end[1] + trace.normal[1] * 2.0f;
+		bite->point[2] = trace.end[2] + trace.normal[2] * 2.0f;
+		bite->cluster = SG_RuneVisClusterAt(build->bsp, bite->point);
+		if (bite->cluster < 0 || (uint32_t)bite->cluster >= build->cluster_count)
+			continue;
+		bite->next = build->cluster_first[bite->cluster];
+		build->cluster_first[bite->cluster] = build->bite_count;
+		build->bite_count++;
+		added++;
+	}
+	fclose(f);
+	build->report.human_bites = added;
+}
+
 static int CollectBites(hook_build_t *build)
 {
 	const sg_rune_cx_view_t *cx = &build->view;
 	uint32_t index;
 
-	build->bites = malloc((size_t)(cx->surface_count ? cx->surface_count : 1U) *
+	build->bites = malloc((size_t)(cx->surface_count + CountHumanBites() + 1U) *
 		sizeof(*build->bites));
 	build->cluster_first = malloc((size_t)(build->cluster_count ?
 		build->cluster_count : 1U) * sizeof(uint32_t));
@@ -122,6 +201,7 @@ static int CollectBites(hook_build_t *build)
 		build->cluster_first[bite->cluster] = build->bite_count;
 		build->bite_count++;
 	}
+	AddHumanBites(build);
 	build->report.bites = build->bite_count;
 	return 1;
 }

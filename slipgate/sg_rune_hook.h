@@ -30,7 +30,14 @@ typedef struct sg_rune_hook_report_s
 	uint32_t bolt_clear;      /* whose line from the eye reached them */
 	uint32_t pull_clear;      /* whose pull had room */
 	uint32_t flights;         /* releases that were traced */
+	uint32_t human_bites;     /* bites taken from the players' demos */
 } sg_rune_hook_report_t;
+
+/* A file of the players' own rope bites for the map (one line per bite:
+ * fire x y z, bite x y z, from demos), read at the next emit; NULL clears
+ * it.  Each bite is verified by a trace from the fire point and joins the
+ * bite table beside the surfaces' own centres. */
+void SG_RuneHookSetHumanBites(const char *path);
 
 int SG_RuneHookEmit(const struct sg_rune_bsp_s *bsp,
 	const struct sg_rune_cx_s *cx, const struct sg_rune_law_s *law,
