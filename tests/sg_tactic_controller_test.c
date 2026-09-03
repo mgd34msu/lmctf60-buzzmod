@@ -140,7 +140,10 @@ int main(void)
 	/* Arrived eases in; hold and unreachable hold. */
 	memset(&step, 0, sizeof(step));
 	step.kind = SG_RUNE_STEP_ARRIVED;
-	step.target[0] = 16.0f;
+	step.target[0] = 16.0f;   /* inside the stand radius: no hunting */
+	CHECK(SG_TacticControl(&step, &body, &command));
+	CHECK(command.status == SG_TACTIC_COMMAND_HOLD);
+	step.target[0] = 48.0f;   /* half the ease distance: half speed */
 	CHECK(SG_TacticControl(&step, &body, &command));
 	CHECK(command.status == SG_TACTIC_COMMAND_MOVE && Near(command.speed, 0.5f));
 	step.kind = SG_RUNE_STEP_UNREACHABLE;

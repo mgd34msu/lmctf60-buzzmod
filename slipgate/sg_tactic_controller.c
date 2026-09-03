@@ -61,7 +61,9 @@ static float FlightReach(const sg_tactic_body_t *body, float vertical_velocity)
  * along it; otherwise it goes to the run-up point first.  launch_out is
  * the launch's horizontal unit direction when there is one. */
 #define RUN_UP_EASE 64.0f
-#define ARRIVE_STAND 8.0f         /* arrived within this: stand still */
+#define ARRIVE_STAND 24.0f        /* arrived within this: stand still (a frame at full speed is 30) */
+#define ARRIVE_EASE 96.0f         /* and ease in over this */
+#define ARRIVE_EASE_FLOOR 0.25f
 #define JUMP_PRESS_SLACK 6.0f     /* jump this much before the frame reaches the portal */
 #define JUMP_PRESS_STALL_DISTANCE 40.0f /* this near the portal with no speed: a ledge holds the body */
 #define JUMP_PRESS_STALL_SPEED 60.0f
@@ -355,7 +357,8 @@ int SG_TacticControl(const sg_rune_step_t *step, const sg_tactic_body_t *body,
 		/* Within a few units the body is there: it stands, rather than
 		 * hunting the point by a unit a frame and turning with every hunt. */
 		if (have_direction && distance >= ARRIVE_STAND)
-			Toward(&command, direction, distance < 32.0f ? distance / 32.0f :
+			Toward(&command, direction, distance < ARRIVE_EASE ?
+				(distance / ARRIVE_EASE > ARRIVE_EASE_FLOOR ? distance / ARRIVE_EASE : ARRIVE_EASE_FLOOR) :
 				1.0f);
 		*command_out = command;
 		return 1;

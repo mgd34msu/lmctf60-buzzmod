@@ -2076,6 +2076,73 @@ static void Dodge(sg_bot_t *bot, edict_t *e, sg_tactic_command_t *command, qbool
 		command->up = 1.0f;
 }
 
+
+/* A body that has arrived somewhere and waits (a post, a flag stand, an
+ * escort's standoff) does not stand: it strafes around the point within a
+ * body's reach, reversing every second or so, so a hitscan shot has to
+ * be earned.  The fight's own footwork takes over when an enemy shows. */
+#define IDLE_RADIUS 72.0f
+#define IDLE_HOLD_MIN 0.6f
+#define IDLE_HOLD_SPAN 0.6f
+#define IDLE_SPEED 0.7f
+
+static void IdleFootwork(sg_bot_t *bot, edict_t *e, sg_tactic_command_t *command, qboolean *moving)
+{
+	vec3_t to, side, want;
+	float flat, look;
+
+	if (bot->step.kind != SG_RUNE_STEP_ARRIVED || *moving || !e->groundentity ||
+		e->client->hookstate != 0 || e->waterlevel >= 2 || SG_BotCombatTarget(e))
+		return;
+	VectorSubtract(bot->step.target, e->s.origin, to);
+	to[2] = 0.0f;
+	flat = VectorLength(to);
+	if (flat > IDLE_RADIUS * 2.0f)
+		return;   /* not there yet: the arrival walk handles it */
+	if (flat > 1.0f)
+		VectorScale(to, 1.0f / flat, to);
+	else
+	{
+		to[0] = 1.0f;
+		to[1] = 0.0f;
+	}
+	side[0] = -to[1];
+	side[1] = to[0];
+	side[2] = 0.0f;
+	if (bot->dodge_sign == 0)
+		bot->dodge_sign = 1;
+	if (level.time >= bot->dodge_until)
+	{
+		bot->dodge_sign = (int8_t)-bot->dodge_sign;
+		bot->dodge_until = level.time + IDLE_HOLD_MIN +
+			IDLE_HOLD_SPAN * ((float)(rand() & 1023) / 1023.0f);
+	}
+	VectorScale(side, (float)bot->dodge_sign, want);
+	/* Drifting out: the pull back toward the point grows with the drift. */
+	VectorMA(want, (flat / IDLE_RADIUS) * (flat / IDLE_RADIUS), to, want);
+	want[2] = 0.0f;
+	if (VectorNormalize(want) < 0.01f)
+		return;
+	look = IDLE_SPEED * 300.0f * (IDLE_HOLD_MIN + IDLE_HOLD_SPAN) + GIVE_WAY_LOOK;
+	if (look > DODGE_FLOOR_FAR)
+		look = DODGE_FLOOR_FAR;
+	if (!FloorAhead(e, want, GIVE_WAY_LOOK) || !FloorAhead(e, want, look))
+	{
+		bot->dodge_sign = (int8_t)-bot->dodge_sign;
+		VectorScale(side, (float)bot->dodge_sign, want);
+		VectorMA(want, (flat / IDLE_RADIUS) * (flat / IDLE_RADIUS), to, want);
+		want[2] = 0.0f;
+		if (VectorNormalize(want) < 0.01f || !FloorAhead(e, want, GIVE_WAY_LOOK) ||
+			!FloorAhead(e, want, look))
+			return;
+	}
+	VectorCopy(want, command->direction);
+	command->speed = IDLE_SPEED;
+	command->status = SG_TACTIC_COMMAND_MOVE;
+	*moving = true;
+	bot->footwork = 1U;
+}
+
 static void Emit(sg_bot_t *bot, edict_t *e)
 {
 	usercmd_t cmd;
@@ -2164,12 +2231,14 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 			}
 		}
 	}
+	bot->footwork = 0U;
 	Dodge(bot, e, &command, &moving);
+	IdleFootwork(bot, e, &command, &moving);
 	if (moving)
 		GiveWay(e, command.direction);
 	/* The view follows the way the body goes only at a real pace: a nudge
 	 * of a unit toward a point is no reason to turn. */
-	if (moving && command.speed >= VIEW_FOLLOWS_SPEED)
+	if (moving && !bot->footwork && command.speed >= VIEW_FOLLOWS_SPEED)
 	{
 		float yaw = atan2f(command.direction[1], command.direction[0]) *
 			180.0f / (float)M_PI;
@@ -2196,7 +2265,7 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	bot->engaged_last = engaged;
 	/* Nothing in sight and not going anywhere: the view stays where it is
 	 * rather than snapping to nothing. */
-	if (!engaged && !moving && !command.aim_owned)
+	if (!engaged && (!moving || bot->footwork) && !command.aim_owned)
 	{
 		cmd.angles[YAW] = (short)(ANGLE2SHORT(e->client->v_angle[YAW]) -
 			e->client->ps.pmove.delta_angles[YAW]);
@@ -2204,7 +2273,7 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 			e->client->ps.pmove.delta_angles[PITCH]);
 	}
 	/* Posted and nothing in sight: face where the approaches are. */
-	if (!engaged && !moving && bot->post_facing_valid &&
+	if (!engaged && (!moving || bot->footwork) && bot->post_facing_valid &&
 		bot->step.kind == SG_RUNE_STEP_ARRIVED)
 	{
 		float yaw = atan2f(bot->post_facing[1] - e->s.origin[1],
