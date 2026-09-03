@@ -976,6 +976,7 @@ void SpawnEntities (char *mapname, char *entities, char *spawnpoint)
 	 * the memset below retires every bot edict, and a fill stamp taken on the
 	 * old clock would hold the new level empty until that clock is reached. */
 	SG_RosterStorageReset ();
+	ctf_map_captures[0] = ctf_map_captures[1] = ctf_map_captures[2] = 0;
 
 	// BUZZKILL - the session recorder's per-level state: chat counts, the
 	// written-match latch, and the match id the rows hang off. All three are

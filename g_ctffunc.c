@@ -106,6 +106,8 @@ qboolean ctf_validateplayer(edict_t * ent, int teamnum_wanted)
 	return false;
 }
 
+int ctf_map_captures[3];   /* captures per team this map, by team number */
+
 qboolean ctf_flagatposition(vec3_t a, vec3_t b)
 {
 	vec3_t dir;
@@ -768,6 +770,10 @@ qboolean ctf_flagtouch (edict_t *ent, edict_t *other)
 				sprintf(elsemessage, "%s captured the %s flag.\n",
 					other->client->pers.netname,
 					flagcolor);
+				/* The team's tally this map, for the bots' goal: the stats
+				 * store has no record for some players. */
+				if (other->client->ctf.teamnum >= 0 && other->client->ctf.teamnum < 3)
+					ctf_map_captures[other->client->ctf.teamnum]++;
 
 				stats_set(other, STATS_IS_FC, 0);
 

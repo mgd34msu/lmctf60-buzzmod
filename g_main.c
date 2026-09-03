@@ -694,18 +694,8 @@ void CheckDMRules (void)
 
 	if (capturelimit && capturelimit->value && !Match_Mode())
 	{
-		int red = 0, blue = 0;
+		int red = ctf_map_captures[CTF_TEAM_RED], blue = ctf_map_captures[CTF_TEAM_BLUE];
 
-		for (i = 0; i < maxclients->value; i++)
-		{
-			player = g_edicts + 1 + i;
-			if (!player->inuse || !player->client)
-				continue;
-			if (player->client->ctf.teamnum == CTF_TEAM_RED)
-				red += stats_get(player, STATS_CAPTURES);
-			else if (player->client->ctf.teamnum == CTF_TEAM_BLUE)
-				blue += stats_get(player, STATS_CAPTURES);
-		}
 		if (red >= capturelimit->value || blue >= capturelimit->value)
 		{
 			ctf_BSafePrint(PRINT_HIGH, "Capturelimit hit.\n");

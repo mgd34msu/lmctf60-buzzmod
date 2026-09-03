@@ -136,16 +136,9 @@ static team_pass_t sg_team_pass;
 /* A team's captures: the sum over its players. */
 static int TeamCaptures(int team)
 {
-	int client, total = 0;
-
-	for (client = 0; client < game.maxclients; client++)
-	{
-		edict_t *entity = &g_edicts[client + 1];
-
-		if (entity->inuse && entity->client && entity->client->ctf.teamnum == team)
-			total += stats_get(entity, STATS_CAPTURES);
-	}
-	return total;
+	/* The map's own tally, counted at the capture: the stats store has no
+	 * record for every player (the owner's captures were missing). */
+	return team >= 0 && team < 3 ? ctf_map_captures[team] : 0;
 }
 
 #define TURTLE_LEAD 2             /* more captures ahead than this: turtle */
