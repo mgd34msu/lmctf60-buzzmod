@@ -479,3 +479,8 @@ releases.
   teammate in the base.
 - Dislodge: still for three seconds -> back off with a hop; five -> rope to
   a bite nearby; eight -> reroute with the crossing avoided.
+
+The players' bites are mod data, not a local file: data/bites/<map>.bites in
+the repo (47 maps, 1.6 MB), copied to the game's maps/ by tools/deploy.sh, and
+read by the in-game generator on any install.  A release ships them under
+maps/ beside the module.

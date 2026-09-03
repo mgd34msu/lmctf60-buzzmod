@@ -24,3 +24,8 @@ for data in escape-priors.json slipgate-weights.cfg; do
     fi
 done
 echo "deployed $(basename "$SRC") -> $DEST_DIR/{game,gamex86_64}.so"
+
+# The players' rope bites per map ship with the module: the in-game
+# generator reads maps/<map>.bites beside the BSP on any install.
+mkdir -p "$DEST_DIR/maps"
+cp /home/buzzkill/Projects/lmctf6-stats/data/bites/*.bites "$DEST_DIR/maps/" 2>/dev/null
