@@ -81,6 +81,7 @@ def parse_temp_entity(r, state):
     elif t == 24:
         ent = r.short(); a = r.pos(); b = r.pos(); r.pos()
         state['cables'].add(ent)
+        state.setdefault('bites', {})[ent] = (a, b)
         if ent == state['playernum'] + 1:
             state['cable'] = True; state['bite'] = b
     elif t == 31: r.short(); r.short(); r.pos(); r.pos()
@@ -140,6 +141,7 @@ def read_demo(path, collect=None):
         r = R(data[p:p + length]); p += length
         state['cable'] = False
         state['cables'] = set()
+        state['bites'] = {}
         while not r.done():
             cmd = r.byte()
             if cmd == 12:
@@ -147,6 +149,7 @@ def read_demo(path, collect=None):
             elif cmd == 13:
                 idx = r.short(); s = r.string()
                 if idx == 0: mapname = s
+                if idx == 33 and collect is not None: collect['mapfile'] = s
                 if 1312 <= idx < 1312 + 256:
                     skins[idx - 1312] = s.split('\\')[0]
                     if collect is not None: collect.setdefault('models', {})[idx - 1312] = s.split('\\')[1] if '\\' in s else ''
@@ -185,7 +188,7 @@ def read_demo(path, collect=None):
         frames.append({'origin': ps['origin'], 'velocity': ps['velocity'], 'flags': ps['pm_flags'],
                        'type': ps['pm_type'], 'angles': ps['angles'], 'cable': state['cable'], 'bite': state['bite'],
                        'players': {n + 1: tuple(ents[n + 1]) for n in skins if (n + 1) in ents},
-                       'cables': set(state['cables'])})
+                       'cables': set(state['cables']), 'bites': dict(state.get('bites', {}))})
     return mapname, frames, skins
 
 def player_summary(mapname, frames, skins, name):
