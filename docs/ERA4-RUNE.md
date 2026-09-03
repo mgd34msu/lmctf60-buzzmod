@@ -451,3 +451,31 @@ SG_CFG_WATCH_D=<distance> makes the carve print the portal pass on one
 plane; tools/dm2trace.py reads demos.  The bot log line carries the command
 (cmd=status(direction)xspeed up=), the rope log names held and taken
 releases.
+
+## 2026-09-02 evening: the players as the model
+
+- Every player in the 155 beatdown demos is measured by entity track
+  ($CLAUDE_JOB_DIR/tmp/demoplayers.py; docs/ERA4-PLAYERS-STANDARD.txt).  Zest
+  is the target (30 ropes a minute, 36 sharp turns a minute, 9 steals and 4
+  captures per ten minutes); Lequin ("leq", "lequen") second.  vereke is not
+  a model (owner).
+- The players' rope bites come out of the demos too (tools/dm2trace.py
+  keeps every cable's ends; $CLAUDE_JOB_DIR/tmp/humanbites.py writes
+  maps/<map>.bites: fire x y z, bite x y z, one line per bite, deduped on a
+  16-unit grid).  The ride builder reads the file beside the BSP
+  (SG_RuneHookSetHumanBites, set by cellsdump and the in-game generator),
+  traces each bite from its fire point, and adds the wall it meets to the
+  bite table with its own candidate pool beside the surfaces' centres.
+  smap26: 960 of 2,974 demo bites verified; rides 18k -> 28k records.
+- The driver's footwork is timed from the owner's play: strafe reversals
+  after 0.5-1.4 s (his median 1.1), a hop on the reversal; idle footwork at
+  a post or a stand; a rope that bites on the floor gets a hop so the pull
+  is not dragged against friction (the owner releases in the air 92%).
+- Team goals (sg_team_goal_t): take theirs together, bring it home,
+  recover ours (defenders hunt, no home post), hold and retake, turtle at
+  more than two captures ahead (one runner, everyone else defends).  A role
+  whose destination stays unreachable falls back on the goal's role;
+  attackers group up before the flag room; defenders support an engaged
+  teammate in the base.
+- Dislodge: still for three seconds -> back off with a hop; five -> rope to
+  a bite nearby; eight -> reroute with the crossing avoided.
