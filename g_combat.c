@@ -437,13 +437,17 @@ static void FeedbackSound(edict_t *event_ent, edict_t *actor, char *sample)
 
 	gi.sound(event_ent, CHAN_AUTO, idx, 1, ATTN_NORM, 0);
 
-	// bots have no connection to deliver the private copy to
+	// bots have no connection to deliver the private copy to.  The copy
+	// names the attacker's own entity (SND_ENT, channel auto): a sound on
+	// the listener's own entity plays at full volume, and one with no
+	// entity lands on entity 0 where the client cannot place it.
 	if (actor && actor->client && !(actor->flags & FL_BOT))
 	{
 		gi.WriteByte(svc_sound);
-		gi.WriteByte(0);
+		gi.WriteByte(8);   /* SND_ENT */
 		gi.WriteByte(idx);
-		gi.unicast(actor, false);
+		gi.WriteShort((actor->s.number << 3) | CHAN_AUTO);
+		gi.unicast(actor, true);
 	}
 }
 
