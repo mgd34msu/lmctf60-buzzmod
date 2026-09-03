@@ -91,9 +91,11 @@ Bad tokens and ambiguous fragments warn on the console by name.
 
 ## SLIPGATE bots
 
-SLIPGATE bots are part of the game module. They fill teams, take roles, use
-the grappling hook as their main means of movement, and follow a shared team
-goal.
+SLIPGATE bots are part of the game module. They fill teams, use the
+grappling hook as their main means of movement, and decide at three levels:
+a team goal that changes only when the flags change hands, a strategy per
+bot that holds until an event invalidates it, and tactics that change every
+frame.
 
 ### Behaviour
 

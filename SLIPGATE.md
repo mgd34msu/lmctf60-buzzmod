@@ -49,6 +49,37 @@ small circle. A walk aims at the nearest point of its portal. A fall into
 lava fires a rescue rope. A body still for three seconds backs off with a
 hop, then ropes to a nearby bite, then reroutes.
 
+## Goals, strategy, tactics
+
+A bot decides at three levels, each with its own lifetime.
+
+The team goal is the longest-lived. It answers what the team as a whole is
+doing: taking the enemy flag together, escorting a carrier home, hunting the
+enemy carrier, holding a carried flag while recovering its own, or turtling
+on a large lead. It changes only when the flags change hands or the score
+crosses the turtle line, never because of what one bot sees.
+
+A bot's strategy is its role and destination under that goal: attack the
+enemy stand, hold a post, carry the flag home, recover the dropped flag,
+escort the carrier, fetch a powerup. A strategy holds until an event
+invalidates it. A teammate picking up the flag the bot was going for
+invalidates the attack and the bot takes the next role the goal offers, an
+escort. A destination that stays unreachable, a powerup that is gone, a
+carrier that dies: each invalidates the strategy of the bots built on it and
+they fall back on the goal. Nothing else changes a strategy; a bot does not
+reconsider its role because the frame count ticked.
+
+Tactics are per frame and free to change: which crossing to take next, when
+to fire the rope and when to let go, where to strafe, whether to hop, which
+weapon to draw, which enemy to shoot, whether to step aside for a teammate.
+Tactics never change the strategy above them. The cost field carries the
+strategy down to a single next crossing; the tactic controller and the fight
+turn that crossing into this frame's input.
+
+The events that move each level are logged: goal changes and role
+reassignments as SGTEAM lines, and each bot's step as SGBOT lines, so a
+decision can always be traced to the event that caused it.
+
 ## The team
 
 Each team has a goal. Both flags home means take theirs together. Our
