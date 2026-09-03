@@ -6,6 +6,8 @@ from earlier bot systems.
 
 ## The map
 
+docs/RUNE.md describes the route data in depth; this section is the summary.
+
 The module carves each map into cells. It subtracts the map's brushes from
 every BSP leaf with the player's crouch hull, so a cell is a region the
 body's centre can occupy. Floors are cut last, so a floor cell sits on its
