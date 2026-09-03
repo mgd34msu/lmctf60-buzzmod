@@ -99,7 +99,7 @@ documents are current and which are development records.
 
 Frags, deaths, suicides, captures, flag pickups, returns, carrier kills, offense
 and defense kills, assists, kill streaks, killing sprees, capture streaks,
-sweeps, shots, hits, damage, and time played — kept per player across maps and
+sweeps, shots, hits, damage, and time played, kept per player across maps and
 restarts.
 
 **Sweeps** are new: you were on the winning team and the enemy never captured
@@ -122,8 +122,8 @@ Players:
 | `card [name]` | one player's career card (shared database only) |
 | `vs <name>` | you against them, only counting games you both played (shared database only) |
 
-A match summary — final score, top capper, top defender, top killer, accuracy
-leader — prints to everyone at the end of each game.
+A match summary prints to everyone at the end of each game: final score, top
+capper, top defender, top killer, accuracy leader.
 
 Admin, `sv statsdb`:
 
@@ -139,7 +139,7 @@ Admin, `sv statsdb`:
 | `prune <days> confirm` | drop players not seen in that long |
 | `reset confirm` | wipe everything |
 
-`rename` matters because players are identified by name — change your handle and
+`rename` matters because players are identified by name. Change your handle and
 you'd otherwise start from zero.
 
 Referee commands are unchanged from upstream: `refmenu`, `refcommands`, `lock`,
@@ -202,6 +202,6 @@ Win32. SQLite is vendored, nothing to install.
 
 ## Credits
 
-Loki's Minions CTF — LM_Hati, LM_Surt, LM_JORM and the LM team.
-QwazyWabbit — the modern port this builds on.
-Mark Davies — StdLog logging. SQLite is public domain.
+Loki's Minions CTF: LM_Hati, LM_Surt, LM_JORM and the LM team.
+QwazyWabbit, the modern port this builds on.
+Mark Davies, StdLog logging. SQLite is public domain.
