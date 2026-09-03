@@ -74,8 +74,8 @@ is one trace. Callouts say what the bot sees and does.
 ## How it is measured
 
 The bots' movement is measured against recorded play: speed, air time, rope
-rate and release speed, turn rate, and objective rates. tools/dm2trace.py
-reads demo files and docs/RUNE.md holds the bots' numbers after each change.
+rate and release speed, turn rate, and objective rates.
+tools/dm2trace.py reads demo files for the same measures.
 With sg_debug 1 the server log carries the same data for a live game: SGBOT
 lines for decisions, SGROPE for the rope, SGTEAM for the team, SGHUMAN for
 the human players.
@@ -87,4 +87,3 @@ carve, build the cell complex and the movement and rope records, write and
 load the artifact, locate a body and run the fields. The sg_bot_ files drive
 the bots: frame, roster, combat, items, callouts, host bridge, personas,
 cvars. sg_tactic_controller.c is the body and sg_bites.c collects hook anchors.
-docs/UNITS.md names each unit and its origin.

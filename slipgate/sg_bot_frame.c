@@ -1668,12 +1668,12 @@ grounded:
 				SG_RUNE_CX_CELL_SUPPORTED) &&
 			bot->destination_cell != SG_RUNE_CX_INDEX_NONE)
 		{
-			const sg_rune_field_t *field = SG_RuneLevelField(bot->destination_cell);
+			const sg_rune_field_t *route_field = SG_RuneLevelField(bot->destination_cell);
 			sg_rune_step_t next;
 			uint32_t avoid[SG_BOT_AVOID];
 			uint32_t avoid_count = Avoided(bot, avoid);
 
-			if (field && SG_RuneStepSelectAvoiding(&sg_rune_level.router, field,
+			if (route_field && SG_RuneStepSelectAvoiding(&sg_rune_level.router, route_field,
 				live.landing_cell, 0, destination, avoid, avoid_count, &next) &&
 				next.kind == SG_RUNE_STEP_CROSS)
 			{
@@ -2632,6 +2632,8 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 	{
 		sg_rune_flight_t live;
 		qboolean let_go = true;
+
+		memset(&live, 0, sizeof(live));
 
 		/* Let go only where the body, with the velocity it has now, lands
 		 * on a floor; otherwise ride on to the bite and hang there. */

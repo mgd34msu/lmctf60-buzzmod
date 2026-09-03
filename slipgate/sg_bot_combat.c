@@ -310,20 +310,20 @@ void SG_NoteSound(edict_t *emitter, vec3_t origin, int channel,
  * loses to a moving target by its flight time. */
 static float AimErrorDegrees(const edict_t *self)
 {
-	float skill = sg_cv.skill ? sg_cv.skill->value : 3.0f;
+	float skill_level = sg_cv.skill ? sg_cv.skill->value : 3.0f;
 	const sg_bot_persona_t *persona = SG_BotPersona(self);
 	int grade = persona ? persona->aim : 0;
 
-	if (skill < 0.0f)
-		skill = 0.0f;
-	if (skill > 4.0f)
-		skill = 4.0f;
-	skill += (float)grade * 0.5f;
-	if (skill < 0.0f)
-		skill = 0.0f;
-	if (skill > 4.0f)
-		skill = 4.0f;
-	return 4.0f - skill * 0.85f;    /* 4 degrees at skill 0, 0.6 at 4 */
+	if (skill_level < 0.0f)
+		skill_level = 0.0f;
+	if (skill_level > 4.0f)
+		skill_level = 4.0f;
+	skill_level += (float)grade * 0.5f;
+	if (skill_level < 0.0f)
+		skill_level = 0.0f;
+	if (skill_level > 4.0f)
+		skill_level = 4.0f;
+	return 4.0f - skill_level * 0.85f;    /* 4 degrees at skill_level 0, 0.6 at 4 */
 }
 
 /* The chance one trigger lands on a body at this range, under this aim
@@ -684,7 +684,7 @@ void SG_BotCombatFrame(edict_t *self, usercmd_t *cmd, qboolean *engaged_out)
 	{
 		/* Something to shoot and nothing to fight: aim at the point with
 		 * whatever is in hand and fire when the shot reaches it. */
-		vec3_t impact, delta;
+		vec3_t hit_point, hit_delta;
 		int held = SlotOfItem(self->client->pers.weapon);
 
 		Eye(self, eye);
@@ -697,10 +697,10 @@ void SG_BotCombatFrame(edict_t *self, usercmd_t *cmd, qboolean *engaged_out)
 		if (engaged_out)
 			*engaged_out = true;
 		if (held >= 0 && self->client->weaponstate == WEAPON_READY &&
-			ShotLands(self, Weapon(held), NULL, yaw, pitch, impact))
+			ShotLands(self, Weapon(held), NULL, yaw, pitch, hit_point))
 		{
-			VectorSubtract(impact, state->shoot_point, delta);
-			if (VectorLength(delta) < 48.0f)
+			VectorSubtract(hit_point, state->shoot_point, hit_delta);
+			if (VectorLength(hit_delta) < 48.0f)
 				cmd->buttons |= BUTTON_ATTACK;
 		}
 		return;

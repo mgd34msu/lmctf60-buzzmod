@@ -47,6 +47,17 @@ static void Begin(const progress_link_t *link, const char *stage,
 		link->fn(link->context, stage, 0U, 0U);
 }
 
+#ifdef _WIN32
+#include <windows.h>
+static double Now(void)
+{
+	LARGE_INTEGER frequency, count;
+
+	QueryPerformanceFrequency(&frequency);
+	QueryPerformanceCounter(&count);
+	return (double)count.QuadPart / (double)frequency.QuadPart;
+}
+#else
 static double Now(void)
 {
 	struct timespec ts;
@@ -54,6 +65,7 @@ static double Now(void)
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
+#endif
 
 static int Fail(sg_rune_generate_report_t *report, const char *error)
 {

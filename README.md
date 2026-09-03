@@ -217,8 +217,7 @@ and publishes a release for every `v*` tag.
 | `CHANGELOG.md` | Changes by version |
 | `ROADMAP.md` | Planned work |
 | `docs/RELEASE-v1.0.0.md` | Release notes |
-| `docs/RUNE.md` | The route data in detail |
-| `docs/README.md` | Which documents are current and which are development records |
+| `docs/LAYOUT.md` | The scoreboard layout format |
 
 ## Credits
 
