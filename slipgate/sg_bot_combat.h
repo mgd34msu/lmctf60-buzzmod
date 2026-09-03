@@ -20,6 +20,9 @@ void SG_BotCombatFrame(edict_t *self, usercmd_t *cmd, qboolean *engaged_out);
  * button) when no enemy has the view. */
 void SG_BotCombatShootAt(edict_t *self, const vec3_t point);
 
+/* The enemy the fight is engaged with and can see now, or NULL. */
+edict_t *SG_BotCombatTarget(edict_t *self);
+
 /* The executor's questions. */
 qboolean SG_BotLauncherReady(edict_t *self);   /* in hand, ready, loaded */
 void SG_BotRequestLauncher(edict_t *self);

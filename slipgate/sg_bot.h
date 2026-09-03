@@ -61,6 +61,9 @@ typedef struct sg_bot_s
 	uint8_t rope_state_logged;  /* the hookstate the rope log last saw */
 	uint8_t release_held_logged; /* a held release was logged for this ride */
 	float stall_logged_at;      /* the last stalled-rope line, for rate limiting */
+	float dodge_until;          /* when the strafe across the enemy's line reverses */
+	int8_t dodge_sign;          /* which way it goes now: +1 or -1 */
+	float dodge_hop_at;         /* the last hop with a reversal */
 	uint8_t logged_status;      /* the last command, for the log line */
 	float logged_direction[3];
 	float logged_speed;

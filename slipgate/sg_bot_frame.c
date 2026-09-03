@@ -19,6 +19,7 @@
 #include "sg_bot_callout.h"
 #include "sg_bot_host.h"
 #include "sg_bot_combat.h"
+#include "sg_bot_persona.h"
 #include "sg_bot_items.h"
 #include "sg_bot_cvars.h"
 #include "sg_engine_facts.h"
@@ -1970,6 +1971,101 @@ static void GiveWay(const edict_t *e, float direction[3])
 	}
 }
 
+
+/* Whether there is floor to run on this far ahead in a direction: a
+ * supported cell that is no hazard at the body's own height. */
+static qboolean FloorAhead(const edict_t *e, const vec3_t direction, float distance)
+{
+	vec3_t ahead;
+	uint32_t cell;
+
+	VectorMA(e->s.origin, distance, direction, ahead);
+	cell = SG_RuneLevelLocate(ahead, 0, NULL);
+	return cell != SG_RUNE_CX_INDEX_NONE &&
+		(sg_rune_level.artifact.complex.cells[cell].semantics &
+			(SG_RUNE_CX_CELL_SUPPORTED | SG_RUNE_CX_CELL_HAZARD)) == SG_RUNE_CX_CELL_SUPPORTED;
+}
+
+/* The fight's footwork: engaged with an enemy in sight, a body on its
+ * feet strafes across the line to the enemy and reverses every few
+ * tenths of a second, hopping on the reversal, the way the players do
+ * (the owner reverses thirty times a minute).  The route keeps a share
+ * of the way; a body with nowhere to go dodges in place.  A launch being
+ * lined up, a rope, water, and a body in the air are left alone: air
+ * control is nil on this server, and a launch needs its line. */
+#define DODGE_HOLD_MIN 0.3f
+#define DODGE_HOLD_SPAN 0.4f
+#define DODGE_ROUTE_SHARE 0.55f
+#define DODGE_SIDE_SHARE 0.85f
+#define DODGE_RANGE 1200.0f
+#define DODGE_FLOOR_LOOK 48.0f
+#define DODGE_HOP_SPEED 200.0f
+
+static void Dodge(sg_bot_t *bot, edict_t *e, sg_tactic_command_t *command, qboolean *moving)
+{
+	edict_t *enemy = SG_BotCombatTarget(e);
+	const sg_bot_persona_t *persona = SG_BotPersona(e);
+	vec3_t to, side, want;
+	float flat, speed;
+
+	if (!enemy || !e->groundentity || e->client->hookstate != 0 || e->waterlevel >= 2 ||
+		bot->step.run_up_present || bot->step.launch_present ||
+		(bot->step.kind == SG_RUNE_STEP_CROSS && bot->step.move_kind == SG_RUNE_MOVE_HOOK))
+		return;
+	VectorSubtract(enemy->s.origin, e->s.origin, to);
+	to[2] = 0.0f;
+	flat = VectorLength(to);
+	if (flat < 1.0f || flat > DODGE_RANGE)
+		return;
+	VectorScale(to, 1.0f / flat, to);
+	side[0] = -to[1];
+	side[1] = to[0];
+	side[2] = 0.0f;
+	if (bot->dodge_sign == 0)
+		bot->dodge_sign = (int8_t)((level.framenum & 1) ? 1 : -1);
+	if (level.time >= bot->dodge_until)
+	{
+		float hold = DODGE_HOLD_MIN + DODGE_HOLD_SPAN * ((float)(rand() & 1023) / 1023.0f);
+
+		if (persona)
+			hold /= persona->aggression > 0.5f ? persona->aggression : 0.5f;
+		bot->dodge_sign = (int8_t)-bot->dodge_sign;
+		bot->dodge_until = level.time + hold;
+		bot->dodge_hop_at = level.time;
+	}
+	VectorScale(side, (float)bot->dodge_sign, side);
+	/* No floor that way: go the other way now. */
+	if (!FloorAhead(e, side, DODGE_FLOOR_LOOK))
+	{
+		bot->dodge_sign = (int8_t)-bot->dodge_sign;
+		VectorInverse(side);
+		if (!FloorAhead(e, side, DODGE_FLOOR_LOOK))
+			return;
+	}
+	if (*moving && command->speed > 0.0f)
+	{
+		VectorScale(command->direction, DODGE_ROUTE_SHARE, want);
+		VectorMA(want, DODGE_SIDE_SHARE, side, want);
+		want[2] = 0.0f;
+		if (VectorNormalize(want) < 0.01f)
+			return;
+		/* The blend must still have floor. */
+		if (!FloorAhead(e, want, DODGE_FLOOR_LOOK))
+			return;
+		VectorCopy(want, command->direction);
+	}
+	else
+	{
+		VectorCopy(side, command->direction);
+		command->speed = 1.0f;
+		command->status = SG_TACTIC_COMMAND_MOVE;
+		*moving = true;
+	}
+	speed = sqrtf(e->velocity[0] * e->velocity[0] + e->velocity[1] * e->velocity[1]);
+	if (bot->dodge_hop_at == level.time && speed >= DODGE_HOP_SPEED && command->up == 0.0f)
+		command->up = 1.0f;
+}
+
 static void Emit(sg_bot_t *bot, edict_t *e)
 {
 	usercmd_t cmd;
@@ -2058,6 +2154,7 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 			}
 		}
 	}
+	Dodge(bot, e, &command, &moving);
 	if (moving)
 		GiveWay(e, command.direction);
 	/* The view follows the way the body goes only at a real pace: a nudge

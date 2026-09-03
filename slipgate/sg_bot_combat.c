@@ -786,6 +786,22 @@ void SG_BotCombatFrame(edict_t *self, usercmd_t *cmd, qboolean *engaged_out)
 	cmd->buttons |= BUTTON_ATTACK;
 }
 
+edict_t *SG_BotCombatTarget(edict_t *self)
+{
+	combat_state_t *state;
+	edict_t *other;
+
+	if (!self || !self->client)
+		return NULL;
+	state = StateOf(self);
+	if (!state || state->target <= 0 || state->target > MAX_CLIENTS)
+		return NULL;
+	if (level.time - state->seen[state->target - 1].at > 0.3f)
+		return NULL;   /* out of sight: no line to dodge across */
+	other = &g_edicts[state->target];
+	return other->inuse && other->client && other->health > 0 ? other : NULL;
+}
+
 void SG_BotCombatShootAt(edict_t *self, const vec3_t point)
 {
 	combat_state_t *state = self && self->client ? StateOf(self) : NULL;
