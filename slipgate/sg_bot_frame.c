@@ -125,9 +125,52 @@ typedef struct team_pass_s
 	/* A powerup a teammate has seen standing, and how long that is trusted. */
 	edict_t *powerup[2];
 	float powerup_known_until[2];
+	/* The goal, and since when. */
+	int goal[2];
+	float goal_since[2];
 } team_pass_t;
 
 static team_pass_t sg_team_pass;
+
+static int GoalFor(const edict_t *our_carrier, const edict_t *their_carrier)
+{
+	if (our_carrier && their_carrier)
+		return SG_GOAL_HOLD_AND_RETAKE;
+	if (our_carrier)
+		return SG_GOAL_BRING_IT_HOME;
+	if (their_carrier)
+		return SG_GOAL_RECOVER_OURS;
+	return SG_GOAL_TAKE_THEIRS;
+}
+
+int SG_TeamGoal(int team)
+{
+	return sg_team_pass.goal[SG_TeamIdx(team) ? 1 : 0];
+}
+
+const char *SG_TeamGoalName(int goal)
+{
+	switch (goal)
+	{
+	case SG_GOAL_TAKE_THEIRS: return "take their flag, together";
+	case SG_GOAL_BRING_IT_HOME: return "bring it home: escort the carrier";
+	case SG_GOAL_RECOVER_OURS: return "recover our flag: hunt the carrier";
+	case SG_GOAL_HOLD_AND_RETAKE: return "hold ours alive and get theirs back";
+	default: return "?";
+	}
+}
+
+/* The role the goal hands a bot whose own role has died under it. */
+static int GoalRole(int team)
+{
+	switch (SG_TeamGoal(team))
+	{
+	case SG_GOAL_BRING_IT_HOME: return TeamCarrier(team) ? SG_ROLE_ESCORT : SG_ROLE_ATTACK;
+	case SG_GOAL_RECOVER_OURS: return SG_ROLE_RECOVER;
+	case SG_GOAL_HOLD_AND_RETAKE: return SG_ROLE_RECOVER;
+	default: return SG_ROLE_ATTACK;
+	}
+}
 
 static unsigned TeamSituation(int team)
 {
@@ -372,6 +415,18 @@ static void TeamPass(int team)
 
 	SightPowerups(team);
 	situation = TeamSituation(team);
+	{
+		int goal = GoalFor(our_carrier, their_carrier);
+
+		if (goal != sg_team_pass.goal[side] || sg_team_pass.goal_since[side] <= 0.0f)
+		{
+			sg_team_pass.goal[side] = goal;
+			sg_team_pass.goal_since[side] = level.time;
+			if (sg_cv.debug && sg_cv.debug->value)
+				gi.dprintf("SGTEAM %s goal: %s\n", team == CTF_TEAM_RED ? "red" : "blue",
+					SG_TeamGoalName(goal));
+		}
+	}
 
 	/* No event since the last pass: the strategy stands.  A bot's role is
 	 * its own until a flag moves, a carrier changes, or the roster does;
@@ -428,6 +483,12 @@ static void TeamPass(int team)
 	{
 		int recoverers = count >= 4 ? 2 : 1;
 
+		/* Recovering is the whole goal: the defenders hunt too, since the
+		 * stand they would hold is empty.  Three or more of us: two hunt;
+		 * five or more: three. */
+		if (sg_team_pass.goal[side] == SG_GOAL_RECOVER_OURS)
+			recoverers = count >= 5 ? 3 : (count >= 3 ? 2 : 1);
+
 		while (recoverers-- > 0)
 		{
 			int slot = NearestUnassigned(team, flag_now, SG_ROLE_RECOVER);
@@ -438,8 +499,12 @@ static void TeamPass(int team)
 		}
 	}
 	/* Someone stays home when nobody was told to and there are enough of
-	 * us; with three or more, one defender; with five or more, two. */
-	if (have_home && defenders == 0 && count >= 3)
+	 * us; with three or more, one defender; with five or more, two.  Not
+	 * while our flag is out: there is nothing at home to defend, and the
+	 * defenders recover it (the owner's rule). */
+	if (have_home && defenders == 0 && count >= 3 &&
+		sg_team_pass.goal[side] != SG_GOAL_RECOVER_OURS &&
+		sg_team_pass.goal[side] != SG_GOAL_HOLD_AND_RETAKE)
 	{
 		int want = count >= 5 ? 2 : 1;
 
@@ -2590,6 +2655,140 @@ static qboolean Stuck(sg_bot_t *bot, edict_t *e)
 	return true;
 }
 
+
+/* ---- the team's goal, in each bot ----------------------------------------
+ * A role whose destination cannot be reached for a while dies: the bot
+ * takes the role the team's goal hands out instead of standing there. */
+#define UNREACHABLE_PATIENCE 1.5f
+
+static void FallBackOnGoal(sg_bot_t *bot, edict_t *e, qboolean carrying)
+{
+	int slot = (int)(bot - sg_bots);
+	int want;
+
+	if (bot->step.kind != SG_RUNE_STEP_UNREACHABLE || carrying)
+	{
+		bot->unreachable_since = 0.0f;
+		return;
+	}
+	if (bot->unreachable_since <= 0.0f)
+	{
+		bot->unreachable_since = level.time;
+		return;
+	}
+	if (level.time - bot->unreachable_since < UNREACHABLE_PATIENCE)
+		return;
+	want = GoalRole(e->client->ctf.teamnum);
+	if (slot >= 0 && slot < SG_MAXBOTS && want != bot->role)
+	{
+		sg_team_pass.assigned[slot] = want;
+		bot->destination_cell = SG_RUNE_CX_INDEX_NONE;
+		if (sg_cv.debug && sg_cv.debug->value)
+			gi.dprintf("SGBOT %s role %d unreachable: the team goal (%s) hands it role %d\n",
+				e->client->pers.netname, bot->role,
+				SG_TeamGoalName(SG_TeamGoal(e->client->ctf.teamnum)), want);
+	}
+	bot->unreachable_since = 0.0f;
+}
+
+/* Under "take their flag, together" the attackers move as a group: the
+ * one out in front, well ahead of the next and near the flag room, waits
+ * for the next to close up before the push.  It waits on its feet (the
+ * idle footwork keeps it moving) and never longer than a few seconds. */
+#define GROUP_GAP 3.0f            /* seconds ahead of the next attacker to wait */
+#define GROUP_CLOSE 1.5f          /* seconds of route the next must come within */
+#define GROUP_NEAR 1.5f           /* this close to the flag the push is on */
+#define GROUP_STAGE 10.0f         /* farther than this from the flag nobody waits */
+#define GROUP_WAIT_MAX 8.0f
+
+static void GroupUp(sg_bot_t *bot, edict_t *e, qboolean carrying)
+{
+	int team = e->client->ctf.teamnum, i;
+	float mine = bot->step.cost_to_go, next = INFINITY;
+	const char *next_name = NULL;
+
+	if (carrying || bot->role != SG_ROLE_ATTACK || SG_TeamGoal(team) != SG_GOAL_TAKE_THEIRS ||
+		bot->step.kind != SG_RUNE_STEP_CROSS || !isfinite(mine) ||
+		mine < GROUP_NEAR || mine > GROUP_STAGE || SG_BotCombatTarget(e))
+	{
+		bot->group_wait_since = 0.0f;
+		return;
+	}
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		const sg_bot_t *other = &sg_bots[i];
+
+		if (other == bot || !other->active || !other->ent || !other->ent->client ||
+			other->ent->client->ctf.teamnum != team || other->ent->deadflag ||
+			other->role != SG_ROLE_ATTACK || other->step.kind != SG_RUNE_STEP_CROSS ||
+			!isfinite(other->step.cost_to_go))
+			continue;
+		if (other->step.cost_to_go < next)
+		{
+			next = other->step.cost_to_go;
+			next_name = other->ent->client->pers.netname;
+		}
+	}
+	if (!isfinite(next) || next - mine < GROUP_GAP)
+	{
+		bot->group_wait_since = 0.0f;
+		return;
+	}
+	if (bot->group_wait_since <= 0.0f)
+		bot->group_wait_since = level.time;
+	if (level.time - bot->group_wait_since > GROUP_WAIT_MAX)
+		return;   /* waited enough: push alone */
+	if (sg_cv.debug && sg_cv.debug->value && level.time - bot->group_logged_at > 5.0f)
+	{
+		bot->group_logged_at = level.time;
+		gi.dprintf("SGBOT %s waits for %s (%.1f s behind) before the flag room\n",
+			e->client->pers.netname, next_name ? next_name : "?", next - mine);
+	}
+	bot->step.kind = SG_RUNE_STEP_ARRIVED;
+	bot->step.portal = SG_RUNE_CX_INDEX_NONE;
+	bot->step.capability = SG_RUNE_CX_INDEX_NONE;
+	bot->step.run_up_present = 0U;
+	bot->step.launch_present = 0U;
+	VectorCopy(e->s.origin, bot->step.target);
+}
+
+/* Defenders back each other: a defender not in a fight goes to a
+ * teammate defender who is, while the fight is in or near the base. */
+#define SUPPORT_CLOSE 224.0f
+#define SUPPORT_RANGE 1.5f        /* of DEFEND_PATROL_RADIUS from the flag */
+
+static void SupportTeammate(sg_bot_t *bot, edict_t *e, vec3_t destination)
+{
+	int team = e->client->ctf.teamnum, i;
+	vec3_t home;
+
+	if (bot->role != SG_ROLE_DEFEND || SG_BotCombatTarget(e) || !FlagHome(team, home))
+		return;
+	for (i = 0; i < SG_MAXBOTS; i++)
+	{
+		const sg_bot_t *other = &sg_bots[i];
+		edict_t *mate;
+
+		if (other == bot || !other->active || !other->ent)
+			continue;
+		mate = other->ent;
+		if (!mate->client || mate->client->ctf.teamnum != team || mate->deadflag ||
+			other->role != SG_ROLE_DEFEND || !SG_BotCombatTarget(mate))
+			continue;
+		if (DistanceTo(mate, home) > DEFEND_PATROL_RADIUS * SUPPORT_RANGE ||
+			DistanceTo(e, mate->s.origin) < SUPPORT_CLOSE)
+			continue;
+		VectorCopy(mate->s.origin, destination);
+		if (sg_cv.debug && sg_cv.debug->value && level.time - bot->support_logged_at > 5.0f)
+		{
+			bot->support_logged_at = level.time;
+			gi.dprintf("SGBOT %s supports %s in the base\n", e->client->pers.netname,
+				mate->client->pers.netname);
+		}
+		return;
+	}
+}
+
 void SG_BotThink(sg_bot_t *bot)
 {
 	edict_t *e = bot->ent;
@@ -2611,6 +2810,8 @@ void SG_BotThink(sg_bot_t *bot)
 	if (carrying && !bot->was_carrying)
 		bot->carry_start = level.time;
 	bot->was_carrying = carrying;
+	if (SG_RuneLevelCurrent() && DestinationFor(bot, bot->role, destination))
+		SupportTeammate(bot, e, destination);
 	if (!SG_RuneLevelCurrent() || !DestinationFor(bot, bot->role, destination))
 	{
 		if (sg_cv.debug && sg_cv.debug->value && level.framenum % 50 == 0)
@@ -2624,6 +2825,8 @@ void SG_BotThink(sg_bot_t *bot)
 		return;
 	}
 	SelectStep(bot, e, destination);
+	FallBackOnGoal(bot, e, carrying);
+	GroupUp(bot, e, carrying);
 	ApplyMechanism(bot, e);
 	if (Stuck(bot, e) && e->groundentity)
 		bot->step.move_kind = SG_RUNE_MOVE_JUMP;

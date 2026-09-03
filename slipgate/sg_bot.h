@@ -70,6 +70,10 @@ typedef struct sg_bot_s
 	uint8_t dislodge_stage;     /* 0 free, 1 backing off, 2 roped, 3 rerouted */
 	float dislodge_until;
 	vec3_t dislodge_direction;
+	float unreachable_since;    /* the role's destination has been unreachable since */
+	float group_wait_since;     /* an attacker ahead of the group waits from */
+	float group_logged_at;
+	float support_logged_at;
 	uint8_t logged_status;      /* the last command, for the log line */
 	float logged_direction[3];
 	float logged_speed;

@@ -12,6 +12,20 @@ typedef enum
 	SG_ROLES
 } sg_role_t;
 
+/* The team's goal: the long strategy every bot on the team follows and
+ * falls back on when its own role dies under it.  It changes only with
+ * the flags: whose is out, who carries. */
+typedef enum
+{
+	SG_GOAL_TAKE_THEIRS = 0,    /* both flags home: go and get theirs, together */
+	SG_GOAL_BRING_IT_HOME,      /* we carry: escort the carrier, hold the base */
+	SG_GOAL_RECOVER_OURS,       /* they carry ours: hunt the carrier down */
+	SG_GOAL_HOLD_AND_RETAKE,    /* both out: keep ours alive, get theirs back */
+	SG_GOALS
+} sg_team_goal_t;
+int SG_TeamGoal(int team);
+const char *SG_TeamGoalName(int goal);
+
 uint32_t SG_BotStandingCellNear(const vec3_t point);
 
 /* roster (sg_bot_roster.c) */
