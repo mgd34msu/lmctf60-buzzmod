@@ -601,7 +601,7 @@ endif
 
 # A Windows module (MSYS or a MinGW cross build) has no libdl.
 ifeq ($(PLATFORM),Windows)
-LDFLAGS = -lm -lpthread
+LDFLAGS = -lm -static-libgcc -Wl,-Bstatic -lpthread -Wl,-Bdynamic
 endif
 
 # Linker flags for building a shared library (*.so).
