@@ -7,8 +7,8 @@ Released 2026-09-02.
 The game module for Linux 64-bit (gamex86_64.so), Windows 64-bit
 (gamex86_64.dll) and Windows 32-bit (gamex86.dll), with the SLIPGATE bots
 and their route builder inside. lmctf6-buzzmod.pak, required for the
-scoreboard artwork and the hit sound. maps/*.bites, the players' rope bites
-for 47 maps from the tournament demos. server-sample.cfg. SHA256SUMS.
+scoreboard artwork and the hit sound. maps/*.bites, hook anchor hints for 47
+maps. server-sample.cfg. SHA256SUMS.
 
 ## First run
 
@@ -17,7 +17,7 @@ first time a map loads, the module builds its routes on a second thread.
 Players see "slipgate: building the bots' routes for <map> in the
 background; the bots wait for it" and then "the bots' routes for <map> are
 ready". Small maps take seconds; lmctf29 takes about three minutes. sv rune
-starts a build on demand. While humans play, their rope bites are added to
+starts a build on demand. While humans play, their hook anchors are added to
 maps/<map>.bites, and a map whose file has grown enough gets its routes
 rebuilt on its next load.
 
@@ -35,8 +35,7 @@ logs every frame.
 
 ## Tools
 
-tools/demobites.py adds rope bites from demo files, for every player or for
-named ones. tools/logbites.py adds them from server logs. fieldcheck,
+tools/demobites.py adds hook anchors from demo files. tools/logbites.py adds them from server logs. fieldcheck,
 bsppoint and cellsdump.gnu inspect a map's routes.
 
 ## Limits

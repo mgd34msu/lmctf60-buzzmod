@@ -1,8 +1,8 @@
 # SLIPGATE
 
 SLIPGATE is LMCTF's own bot system. It lives in the game module. It was
-written from the game's physics and from how the best players play, with
-nothing kept from earlier bot systems.
+written from the game's physics and from measured play, with nothing kept
+from earlier bot systems.
 
 ## The map
 
@@ -19,8 +19,8 @@ Walks and crouches, ramps, jumps with a run-up and a launch, drops that still
 land under small errors, swims, lifts, doors, and rope rides all get a
 record. A ride record needs a bolt that reaches the wall, a pull that clears,
 and a release point whose flight lands on a floor. Ride candidates come from
-the surfaces' centres and from the players' own bites in maps/<map>.bites,
-keeping the farthest bites in view.
+the surfaces' centres and from the anchor hints in maps/<map>.bites, keeping
+the farthest in view.
 
 A destination becomes a cost field over the crossings. A bot reads its next
 step from its own cell, with a two-step lookahead that slows it into a
@@ -28,7 +28,7 @@ launch.
 
 The module builds a missing or stale set of routes on its own thread when
 the map loads. The bots stand until it lands and the server keeps its frame
-rate. Human bites recorded during play grow the map's bites file, and enough
+rate. Hook anchors recorded during play grow the map's hint file, and enough
 growth rebuilds the routes for the next load.
 
 ## The body
@@ -40,7 +40,7 @@ A rope fires on the move up to sixty degrees off the heading, gets a hop
 when it bites with the body on the floor, and lets go once the pull carries
 the body and the live arc lands.
 
-The driver adds what the players do around the route. In a fight the body
+The driver adds the footwork around the route. In a fight the body
 strafes across the enemy's line, reverses every 0.3 to 0.9 seconds and hops
 on the reversal. Waiting at a post or a flag stand it keeps moving in a
 small circle. A walk aims at the nearest point of its portal. A fall into
@@ -73,11 +73,12 @@ is one trace. Callouts say what the bot sees and does.
 
 ## How it is measured
 
-Every player in 155 tournament demos is tracked with tools/dm2trace.py.
-docs/PLAYERS-STANDARD.txt holds their numbers and docs/RUNE.md holds the
-bots' numbers after each change. With sg_debug 1 the server log carries the
-same data for a live game: SGBOT lines for decisions, SGROPE for the rope,
-SGTEAM for the team, SGHUMAN for the human players.
+The bots' movement is measured against recorded play: speed, air time, rope
+rate and release speed, turn rate, and objective rates. tools/dm2trace.py
+reads demo files and docs/RUNE.md holds the bots' numbers after each change.
+With sg_debug 1 the server log carries the same data for a live game: SGBOT
+lines for decisions, SGROPE for the rope, SGTEAM for the team, SGHUMAN for
+the human players.
 
 ## Source layout
 
@@ -85,5 +86,5 @@ Everything is under slipgate/. The sg_rune_ files read the BSP, trace,
 carve, build the cell complex and the movement and rope records, write and
 load the artifact, locate a body and run the fields. The sg_bot_ files drive
 the bots: frame, roster, combat, items, callouts, host bridge, personas,
-cvars. sg_tactic_controller.c is the body and sg_bites.c collects bites.
+cvars. sg_tactic_controller.c is the body and sg_bites.c collects hook anchors.
 docs/UNITS.md names each unit and its origin.

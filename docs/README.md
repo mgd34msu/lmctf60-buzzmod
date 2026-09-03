@@ -6,7 +6,6 @@ Current (v1.0.0):
 - RELEASE-v1.0.0.md -- release notes: what ships, first run, console variables.
 - RUNE.md -- the RUNE in detail and the record of what the play data
   changed, section by section through 2026-09-02.
-- PLAYERS-STANDARD.txt -- the players the bots are measured against.
 - UNITS.md -- each unit under slipgate/ and its origin.
 - LAYOUT.md, layout-isa.md -- the scoreboard layout compiler and its wire
   budget.

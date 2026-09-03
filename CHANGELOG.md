@@ -23,8 +23,8 @@ whose bites file has grown gets rebuilt.
 A ride lets go once the pull carries the body and the live arc is clean, or
 at once on the floor. Candidates are the farthest bites in view outside the
 pull's slow band, 48 candidates and 16 records per cell, with a credit for
-fast forward releases. The players' bites from demos join the table in their
-own candidate pool, and bites recorded during play grow the file. A rope
+fast forward releases. Anchor hints per map (maps/<map>.bites) join the table in their own
+candidate pool, and anchors recorded during play grow the file. A rope
 fires up to sixty degrees off the heading, never within 0.8 seconds of the
 last, gets a hop when it bites on the floor, and the run under the bolt stops
 at the floor's edge. A fall into lava fires up to three rescue ropes; a hang
@@ -71,7 +71,6 @@ livestart with map rotation, limits and durable logs.
 ### Numbers
 
 Five-minute games with nine or ten bots. lmctf09: 32 ropes per bot-minute,
-release at 785, 96% in the air, no lava deaths. smap26 with the players'
-bites: 32 ropes per bot-minute, 15 steals, 3 captures. bctf01: lava deaths
-down from 87 to 4. Zest, the target, fires 30 ropes a minute, releases at
-482, and makes 9 steals and 4 captures per ten minutes.
+release at 785 units per second, 96% in the air, no lava deaths. smap26 with
+anchor hints: 32 ropes per bot-minute, 15 steals, 3 captures. bctf01: lava
+deaths down from 87 to 4.

@@ -1,168 +1,71 @@
 # LMCTF BuzzMod
 
-Quake II CTF mod. Fork of [QwazyWabbit's LMCTF](https://github.com/QwazyWabbitWOS/lmctf60)
-with persistent player stats and the native SLIPGATE bot platform.
+A Quake II Capture the Flag mod, forked from
+[QwazyWabbit's LMCTF](https://github.com/QwazyWabbitWOS/lmctf60), with two
+additions: persistent player statistics and SLIPGATE, a native bot system
+built into the game module.
 
-Tagged releases are the supported install boundary. Development branches are
-not releases. Do not deploy an arbitrary checkout or a locally generated
-server bundle.
+Tagged releases are the supported installs. Development branches are not
+releases.
 
-## Install
+## Contents
 
-Download the release package from
-[releases](https://github.com/mgd34msu/lmctf60-buzzmod/releases) and unpack it
-into the `lmctf` directory. It holds:
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Server configuration](#server-configuration)
+- [SLIPGATE bots](#slipgate-bots)
+- [Player statistics](#player-statistics)
+- [Building from source](#building-from-source)
+- [Documentation](#documentation)
+- [Credits](#credits)
 
-| File | What it is |
-|-|-|
-| `gamex86_64.so` | the Linux 64-bit game module |
-| `gamex86_64.dll` | the Windows 64-bit game module |
-| `gamex86.dll` | the Windows 32-bit game module |
-| `lmctf6-buzzmod.pak` | required. Scoreboard artwork and the hit sound |
-| `maps/*.bites` | the players' rope bites per map, read when a map's routes are built |
-| `server-sample.cfg` | a sample server config for bots, limits, sounds and loadout |
+## Requirements
 
-Then turn stats on:
+- A Quake II server or client (Yamagi Quake II is the tested engine).
+- The LMCTF map files for the maps you run.
+- Linux x86_64, Windows x64 or Windows x86.
 
-```
-set ctf_statsdb 2
-```
+## Installation
 
-The database creates itself. `1` keeps one file per player instead; `0` is off.
-Stats are viewable on the web with [q2lmstats](https://github.com/mgd34msu/q2lmstats).
+Download the release package from the
+[releases page](https://github.com/mgd34msu/lmctf60-buzzmod/releases) and
+unpack it into the `lmctf` directory of the Quake II installation.
 
-## SLIPGATE bots
+| File | Purpose |
+|------|---------|
+| `gamex86_64.so` | Game module, Linux x86_64 |
+| `gamex86_64.dll` | Game module, Windows x64 |
+| `gamex86.dll` | Game module, Windows x86 |
+| `lmctf6-buzzmod.pak` | Required. Scoreboard artwork and sounds |
+| `maps/*.bites` | Route hints per map, used when a map's bot routes are built |
+| `server-sample.cfg` | A sample server configuration |
+| `SHA256SUMS` | Checksums of the module files |
 
-SLIPGATE is the mod's own bot system, built into the game module. The bots
-play the way the best LMCTF players play. They rope on nearly every move and
-let go at speed, in the air. They strafe and reverse in fights. Each team
-follows a goal, and a bot whose own job dies falls back on it.
+Clients need `lmctf6-buzzmod.pak` in their `lmctf` directory as well.
 
-They are measured against the top players' demos. `docs/PLAYERS-STANDARD.txt`
-holds the numbers from Zest, Lequin, seed, Em and sinsemilla, and
-`docs/RUNE.md` records what the bots reach after each change. In five-minute
-games on smap26 the bots fire 32 ropes per bot-minute and release at 785
-units per second; Zest fires 30 a minute.
+## Server configuration
 
-There is nothing to run by hand. The first time a map loads, the module builds
-the map's routes (`maps/<map>.rune`) on a second thread. The server keeps
-playing, the bots stand until the routes land, and everyone sees two messages:
-"slipgate: building the bots' routes for <map> in the background; the bots
-wait for it", then "the bots' routes for <map> are ready". Small maps take
-seconds, lmctf29 takes about three minutes. While humans play, their rope
-bites go into `maps/<map>.bites`, and a map whose file has grown enough gets
-its routes rebuilt on its next load.
+`server-sample.cfg` shows a complete configuration. The variables specific to
+this mod:
 
-The routes come from the map itself. The module carves each map into cells
-with the player's own hull, so a cell is a place the body can be. It proves
-every crossing between cells with the game's movement physics: walks, jumps,
-drops, swims, rope rides, lifts, doors. A bot follows a cost field over those
-crossings toward its goal. `SLIPGATE.md` has the design.
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `ctf_statsdb` | 0 | 0 off, 1 one file per player, 2 shared database |
+| `ctf_switch_penalty` | 0 | 1 clears the score of a player who joins the larger winning team |
+| `ctf_hitsound` | 1 | Hit confirmation: 0 off, 1 flag-carrier hits only, 2 all hits |
+| `ctf_killsound` | 2 | Frag confirmation: 0 off, 1 flag-carrier frags only, 2 all frags |
+| `capturelimit` | 0 | Captures that end the map; 0 for none |
+| `timelimit` | 0 | Minutes that end the map; 0 for none |
+| `maplist_file` | `maplist.txt` | The map rotation |
+| `sv_botfill` | 0 | Fill each team to this many SLIPGATE bots |
+| `sg_debug` | 0 | 1 logs bot decisions to the server log; 2 logs every frame |
+| `spawn_loadout` | | Starting equipment, see below |
 
-### Server commands
+Hit and kill sounds play at the player the event happened to; the attacker
+also hears a private copy. Upstream variables such as `dmflags`, `ctfflags`
+and `maxclients` are unchanged.
 
-| Command | Effect |
-|-|-|
-| `sv sg add` | add a bot; the balancer picks its team |
-| `sv sg add red`, `sv sg add blue` | add a bot to that team |
-| `sv sg remove <name>` | remove one bot |
-| `sv sg remove` | remove every bot |
-| `sv sg kick worst` | remove the lowest-ranked bot |
-| `sv sg list` | print the bot roster |
-| `sv rune` | build this map's routes now, in the background |
-
-### Server variables
-
-| Variable | Effect |
-|-|-|
-| `sv_botfill N` | fill each team to N bots. The sample config sets 5 |
-| `capturelimit`, `timelimit` | end the map and move to the next in `maplist.txt`. The sample sets 10 captures and 20 minutes |
-| `ctf_hitsound`, `ctf_killsound` | 0 off, 1 flag-carrier events only, 2 every event. The sound plays where it happened and privately to the attacker. The sample sets 2 and 2 |
-| `spawn_loadout "@name"` with `loadout_name "..."` | starting equipment. The sample gives a rocket launcher and grenades |
-| `sg_debug` | 1 logs every bot decision, every rope and the human trace to the server log. 2 logs every frame |
-
-### Tools
-
-These are optional. `tools/demobites.py DEMOS... -o maps/` adds rope bites
-from demo files to the maps' bite files, and `tools/logbites.py LOGS... -o maps/`
-does the same from server logs. `fieldcheck`, `bsppoint` and `cellsdump.gnu`
-inspect a map's routes; `docs/RUNE.md` explains them.
-
-### Documents
-
-`docs/RELEASE-v1.0.0.md` is the release note. `SLIPGATE.md` is the design.
-`docs/RUNE.md` describes the routes in detail. `docs/PLAYERS-STANDARD.txt`
-lists the players the bots are measured against. `docs/README.md` says which
-documents are current and which are development records.
-
-## What's tracked
-
-Frags, deaths, suicides, captures, flag pickups, returns, carrier kills, offense
-and defense kills, assists, kill streaks, killing sprees, capture streaks,
-sweeps, shots, hits, damage, and time played, kept per player across maps and
-restarts.
-
-**Sweeps** are new: you were on the winning team and the enemy never captured
-your flag once.
-
-## Commands
-
-Players:
-
-| | |
-|-|-|
-| `stats [name]` | this level |
-| `lifetime [name]` | career totals |
-| `rank [stat] [n]` | leaderboard |
-| `statsall` | everyone, this level |
-| `season` | top 10 of the last 30 days (shared database only) |
-| `records` | all-time server records (shared database only) |
-| `activity` | busiest players of the last 7 days (shared database only) |
-| `momentum` | biggest recent movers in capture rate (shared database only) |
-| `card [name]` | one player's career card (shared database only) |
-| `vs <name>` | you against them, only counting games you both played (shared database only) |
-
-A match summary prints to everyone at the end of each game: final score, top
-capper, top defender, top killer, accuracy leader.
-
-Admin, `sv statsdb`:
-
-| | |
-|-|-|
-| `status` | backend, path, row counts |
-| `flush` | write connected players now |
-| `top <stat> [n]` | leaderboard |
-| `player <name>` | one player's record |
-| `export <file>` | tab-separated dump |
-| `backup <file>` | safe copy while players are on |
-| `rename <old> <new>` | relabel or merge a record |
-| `prune <days> confirm` | drop players not seen in that long |
-| `reset confirm` | wipe everything |
-
-`rename` matters because players are identified by name. Change your handle and
-you'd otherwise start from zero.
-
-Referee commands are unchanged from upstream: `refmenu`, `refcommands`, `lock`,
-`startmatch`, `stopmatch`, `pausematch`, `setpassword`, `changemap`,
-`togglefastswitch`.
-
-## CVARs
-
-New:
-
-| | | |
-|-|-|-|
-| `ctf_statsdb` | 0 | 0 off, 1 per-player files, 2 shared database |
-| `ctf_switch_penalty` | 0 | 1 clears your score for joining the bigger winning team |
-| `ctf_hitsound` | 1 | hit confirmation: 0 off, 1 flag-carrier hits only, 2 all hits |
-| `ctf_killsound` | 2 | frag bell: 0 off, 1 flag-carrier frags only, 2 all frags |
-
-Both sounds ring from the player the event happened to, and the attacker
-always hears a private confirmation copy no matter the distance.
-
-Upstream cvars are unchanged: `dmflags` `maxclients` `ctfflags` `refset`
-
-### spawn_loadout (BuzzMod)
+### Starting equipment
 
 Admin-defined starting equipment. One cvar, grammar `thing[:count]`,
 space or comma separated:
@@ -170,12 +73,12 @@ space or comma separated:
     set spawn_loadout "rocketlauncher:5 railgun:5 body:100 health:110"
 
 Tokens match any unambiguous fragment of a live item classname, so new
-items are addressable the day they exist -- `sv listitems` prints every
+items are addressable the day they exist. `sv listitems` prints every
 token. Counts are ADDITIVE under the game's own caps. Semantics: a
 weapon always carries its real pickup ammo bundle and `:count` adds
 extra; ammo -> amount; armor -> points (that armor's own max applies);
 power armor -> the device plus count cells; other items -> charges.
-`health` is the one reserved word -- above max rots 1/sec down to max,
+`health` is the one reserved word. above max rots 1/sec down to max,
 the megahealth mechanic. Ingame runes are excluded (own lifecycle).
 
 Named builds are plain cvars, `@`-referenced, nestable to depth 4,
@@ -185,23 +88,141 @@ composable with extra tokens; none ship by default:
     set spawn_loadout "@testing"
 
 Bad tokens and ambiguous fragments warn on the console by name.
-`logrename` `runes` `skinset` `refpassword` `motd_file` `server_file`
-`maplist_file` `skin_file` `skin_debug` `disabled_weps` `flag_init` `fastswitch`
-`mod_website` `autolock` `countdown_time`.
 
-## Build
+## SLIPGATE bots
+
+SLIPGATE bots are part of the game module. They fill teams, take roles, use
+the grappling hook as their main means of movement, and follow a shared team
+goal.
+
+### Behaviour
+
+- Movement: the bots rope on most moves and release at speed in the air,
+  bunny hop, strafe-jump, and use jumps, drops, lifts and doors. In a fight
+  they strafe across the enemy's line and reverse direction; waiting at a
+  post they keep moving.
+- Team goals: with both flags home the team attacks together; with its own
+  carrier alive it escorts; with its flag taken the defenders join the
+  recovery; with a lead of more than two captures it turtles, leaving one
+  runner. A bot whose task becomes impossible falls back on the team goal.
+- Roles: attack, defend, carry, recover, escort and powerup. Defenders hold
+  posts that cover the approaches to the flag, collect armor and ammo near
+  it, and support a teammate under attack.
+- Combat: line-of-sight perception with memory, weapon choice by range and
+  ammo, aim error scaled by skill and persona, callouts for what a bot sees.
+
+### Routes
+
+The module builds each map's bot routes itself. The first time a map loads,
+it carves the map into cells, proves every crossing between cells with the
+game's movement physics, and writes the result to `maps/<map>.rune`. This runs
+on a second thread; the server keeps playing and the bots wait until the
+routes are ready. Players see a message when the build starts and when it
+finishes. `sv rune` starts a build on demand.
+
+The routes can be improved with demos. `maps/<map>.bites` lists grappling
+hook anchor points for a map; the route builder verifies each one against
+the map and adds the rides it allows. The release ships hint files for 47
+maps. The module also records hook anchors from play on the server, and
+rebuilds a map's routes on its next load when the file has grown.
+`tools/demobites.py` adds anchors from demo files and `tools/logbites.py`
+from server logs.
+
+### Bot commands
+
+| Command | Effect |
+|---------|--------|
+| `sv sg add` | Add a bot; the team balancer picks its team |
+| `sv sg add red`, `sv sg add blue` | Add a bot to a team |
+| `sv sg remove <name>` | Remove one bot |
+| `sv sg remove` | Remove every bot |
+| `sv sg kick worst` | Remove the lowest-ranked bot |
+| `sv sg list` | Print the bot roster |
+| `sv rune` | Build the current map's routes now |
+
+`SLIPGATE.md` describes the design.
+
+## Player statistics
+
+With `ctf_statsdb` on, the mod keeps per-player records across maps and
+restarts: frags, deaths, suicides, captures, flag pickups, returns, carrier
+kills, offense and defense kills, assists, kill streaks, killing sprees,
+capture streaks, sweeps, shots, hits, damage and time played. A sweep is a
+win in which the enemy never captured your flag.
+
+The records are viewable on the web with
+[q2lmstats](https://github.com/mgd34msu/q2lmstats).
+
+### Player commands
+
+| Command | Shows |
+|---------|-------|
+| `stats [name]` | This map |
+| `lifetime [name]` | Career totals |
+| `rank [stat] [n]` | Leaderboard |
+| `statsall` | Everyone, this map |
+| `season` | Top 10 of the last 30 days (shared database) |
+| `records` | All-time server records (shared database) |
+| `activity` | Busiest players of the last 7 days (shared database) |
+| `momentum` | Biggest recent movers in capture rate (shared database) |
+| `card [name]` | One player's career card (shared database) |
+| `vs <name>` | Head-to-head, games both played (shared database) |
+
+A match summary prints at the end of each game: final score, top capper,
+top defender, top killer and accuracy leader.
+
+### Administration
+
+`sv statsdb` subcommands:
+
+| Subcommand | Effect |
+|------------|--------|
+| `status` | Backend, path and row counts |
+| `flush` | Write connected players now |
+| `top <stat> [n]` | Leaderboard |
+| `player <name>` | One player's record |
+| `export <file>` | Tab-separated dump |
+| `backup <file>` | Safe copy while players are on |
+| `rename <old> <new>` | Relabel or merge a record |
+| `prune <days> confirm` | Drop players not seen in that long |
+| `reset confirm` | Wipe everything |
+
+Players are identified by name, so `rename` carries a record across a name
+change. Referee commands are unchanged from upstream: `refmenu`,
+`refcommands`, `lock`, `startmatch`, `stopmatch`, `pausematch`,
+`setpassword`, `changemap`, `togglefastswitch`.
+
+## Building from source
+
+Linux:
 
 ```
-make -f GNUmakefile          # Linux, produces gamex86_64-lmctf-<rev>.so
+make -f GNUmakefile all      # produces gamex86_64-lmctf-<rev>.so
+make -f GNUmakefile check    # runs the unit tests
 ```
 
 Rename the output to `gamex86_64.so` to install it.
 
-Windows: open `gravity.sln` in Visual Studio 2022, build Release for x64 or
-Win32. SQLite is vendored, nothing to install.
+Windows: open `gravity.sln` in Visual Studio 2022 and build Release for x64
+or Win32. SQLite is vendored; nothing else is required.
+
+The GitHub workflow builds Linux with gcc and clang, Windows x64 and x86,
+and publishes a release for every `v*` tag.
+
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| `SLIPGATE.md` | The bot system's design |
+| `CHANGELOG.md` | Changes by version |
+| `ROADMAP.md` | Planned work |
+| `docs/RELEASE-v1.0.0.md` | Release notes |
+| `docs/RUNE.md` | The route data in detail |
+| `docs/README.md` | Which documents are current and which are development records |
 
 ## Credits
 
-Loki's Minions CTF: LM_Hati, LM_Surt, LM_JORM and the LM team.
-QwazyWabbit, the modern port this builds on.
-Mark Davies, StdLog logging. SQLite is public domain.
+- Loki's Minions CTF: LM_Hati, LM_Surt, LM_JORM and the LM team.
+- QwazyWabbit, for the modern port this builds on.
+- Mark Davies, StdLog logging.
+- SQLite, public domain.

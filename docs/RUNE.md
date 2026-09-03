@@ -149,8 +149,8 @@ replacement runs on a real map.
    approaches. **Out of the lava.** A body in lava or slime fires its rope
    at the best bite it knows, from the floor it left or from any ride
    recorded within 256.
-   **Moving like the owner (2026-09-02).** Measured from four minutes of
-   the owner's play (`SGHUMAN` trace): above run speed 69% of the time,
+   **Moving like the server operator (2026-09-02).** Measured from four minutes of
+   the server operator's play (`SGHUMAN` trace): above run speed 69% of the time,
    airborne 53%, strafing 73%, the rope a burst fired mostly from the air
    at ~290, attached ~0.6 s, let go in the air at ~500; air acceleration is
    off on this server, so all speed above 300 is rope momentum kept alive
@@ -165,8 +165,8 @@ replacement runs on a real map.
    **The players' standard (2026-09-02, from demos).** `tools/dm2trace.py`
    reads a Quake II demo: the recorder's state every frame and every other
    player's position while in view, the rope through the grapple-cable
-   effect. The best LMCTF players in the owner's archive (seedless, Em,
-   Zest, sinsemilla) move at a mean of 350 to 380, median about 320, top
+   effect. The best LMCTF players in the server operator's archive (a top player, Em,
+   a top player, a top player) move at a mean of 350 to 380, median about 320, top
    tenth 700 to 750, above run speed 61 to 74% of the time, and rope 19 to
    31 times a minute in bursts of about half a second, fired at 370 to 470
    and released at 510 to 570. The rope is their locomotion. The builder
@@ -175,7 +175,7 @@ replacement runs on a real map.
    walk out-priced the rope on most edges and bots roped eight times a
    minute. The archive-wide numbers (155 demos, about thirty hours of
    visible movement) are in `docs/PLAYERS-STANDARD.txt`: the four best
-   rope 19 to 28 times a minute; the owner 4.6.
+   rope 19 to 28 times a minute; the server operator 4.6.
 3. **Movement capabilities** (era 4, done). One record per crossing per
    admissible kind: cell, portal, destination cell, kind, source and
    destination stances, profile, launch velocity, seconds. Contact
@@ -323,7 +323,7 @@ replacement runs on a real map.
 
 The field state is (cell, stance). Velocity is not in it; flights are
 recorded per launch instead, and a body already airborne is traced live.
-Recorded 2026-09-01 for the owner's ruling; the alternative is a field
+Recorded 2026-09-01 for the server operator's ruling; the alternative is a field
 over (cell, stance, vertical velocity band).
 
 ## Deleted 2026-09-01
@@ -405,10 +405,10 @@ bctf01 (108 MB, 27.6 s as bmap1, the same geometry) plus:
 | tomb05 | 5 | 3,947 | 20,708 | 24,231 | 8 | 7,605 | 83,828 | 0.4 |
 | xmap20 | 12 | 12,728 | 66,790 | 52,031 | 2 | 18,730 | 72,782 | 1.7 |
 
-## 2026-09-02 afternoon: what the owner's play and the demos exposed, and the fixes
+## 2026-09-02 afternoon: what the server operator's play and the demos exposed, and the fixes
 
 Measured against the players' standard (docs/PLAYERS-STANDARD.txt) the
-bots were slow on the rope and stuck in places the owner runs through.  The
+bots were slow on the rope and stuck in places the server operator runs through.  The
 causes, each found against the BSP with the tools below:
 
 - Flags that float at their spawn point (lmctf09) drop to the floor in the
@@ -456,10 +456,10 @@ releases.
 
 ## 2026-09-02 evening: the players as the model
 
-- Every player in the 155 beatdown demos is measured by entity track
-  ($CLAUDE_JOB_DIR/tmp/demoplayers.py; docs/PLAYERS-STANDARD.txt).  Zest
+- Every player in the 155 recorded games is measured by entity track
+  ($CLAUDE_JOB_DIR/tmp/demoplayers.py; docs/PLAYERS-STANDARD.txt).  a top player
   is the target (30 ropes a minute, 36 sharp turns a minute, 9 steals and 4
-  captures per ten minutes); Lequin ("leq", "lequen") second.  vereke is not
+  captures per ten minutes); a top player ("leq", "a top player") second.  a top player is not
   a model (owner).
 - The players' rope bites come out of the demos too (tools/dm2trace.py
   keeps every cable's ends; $CLAUDE_JOB_DIR/tmp/humanbites.py writes
@@ -469,10 +469,10 @@ releases.
   traces each bite from its fire point, and adds the wall it meets to the
   bite table with its own candidate pool beside the surfaces' centres.
   smap26: 960 of 2,974 demo bites verified; rides 18k -> 28k records.
-- The driver's footwork is timed from the owner's play: strafe reversals
+- The driver's footwork is timed from the server operator's play: strafe reversals
   after 0.5-1.4 s (his median 1.1), a hop on the reversal; idle footwork at
   a post or a stand; a rope that bites on the floor gets a hop so the pull
-  is not dragged against friction (the owner releases in the air 92%).
+  is not dragged against friction (the server operator releases in the air 92%).
 - Team goals (sg_team_goal_t): take theirs together, bring it home,
   recover ours (defenders hunt, no home post), hold and retake, turtle at
   more than two captures ahead (one runner, everyone else defends).  A role
