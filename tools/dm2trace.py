@@ -123,7 +123,8 @@ def parse_playerstate(r, ps):
     for i in range(32):
         if stats & (1 << i): r.short()
 
-def read_demo(path):
+def read_demo(path, collect=None):
+    """collect, when a dict, receives 'models' (player number -> skin model) and 'prints' (every print line)."""
     data = open(path, 'rb').read()
     p = 0
     state = {'playernum': 0, 'cable': False, 'bite': None}
@@ -146,7 +147,9 @@ def read_demo(path):
             elif cmd == 13:
                 idx = r.short(); s = r.string()
                 if idx == 0: mapname = s
-                if 1312 <= idx < 1312 + 256: skins[idx - 1312] = s.split('\\')[0]
+                if 1312 <= idx < 1312 + 256:
+                    skins[idx - 1312] = s.split('\\')[0]
+                    if collect is not None: collect.setdefault('models', {})[idx - 1312] = s.split('\\')[1] if '\\' in s else ''
             elif cmd == 14:
                 num, bits, origin = parse_entity_delta(r)
                 if num not in ents: ents[num] = [0.0, 0.0, 0.0]
@@ -170,7 +173,9 @@ def read_demo(path):
             elif cmd == 5: r.p += 512
             elif cmd in (6, 7, 8): pass
             elif cmd == 9: parse_sound(r)
-            elif cmd == 10: r.byte(); r.string()
+            elif cmd == 10:
+                r.byte(); text = r.string()
+                if collect is not None: collect.setdefault('prints', []).append((len(frames), text))
             elif cmd in (11, 15): r.string()
             elif cmd == 16:
                 size = r.short(); r.byte()
