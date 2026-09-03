@@ -1,6 +1,7 @@
 #include "../g_local.h"
 #undef world
 #include "sg_rune_level.h"
+#include "sg_rune_game.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -123,8 +124,11 @@ int SG_RuneLevelBegin(const char *mapname)
 	if (status != SG_RUNE_ARTIFACT_OK)
 	{
 		if (status == SG_RUNE_ARTIFACT_FILE_ERROR)
-			gi.dprintf("slipgate: no rune for %s (%s): bots hold\n", mapname,
-				path);
+		{
+			if (!SG_RuneGameGenerateBusy())
+				gi.dprintf("slipgate: no rune for %s (%s): bots hold\n", mapname,
+					path);
+		}
 		else if (fault.array)
 			gi.dprintf("slipgate: rune refused map=%s: %s at %s[%u] %s\n",
 				mapname, SG_RuneArtifactStatusString(status), fault.array,
