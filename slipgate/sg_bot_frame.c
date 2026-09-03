@@ -1996,6 +1996,7 @@ static void ApplyMechanism(sg_bot_t *bot, edict_t *e)
 #define GIVE_WAY_REACH 56.0f
 
 #define GIVE_WAY_LOOK 40.0f       /* the step aside is checked this far ahead for floor */
+#define ROPE_GAP_MIN 0.8f         /* seconds between one rope and the next */
 #define HOOK_RUN_LOOK 96.0f       /* a body running under its bolt needs this much floor ahead: room to stop */
 #define VIEW_FOLLOWS_SPEED 0.3f   /* the view turns with the run only above this command speed */
 #define HOOK_BITE_SLACK 12.0f     /* the bolt may stop this short of the bite (the bite is two units off its face) */
@@ -2589,6 +2590,11 @@ static void Emit(sg_bot_t *bot, edict_t *e)
 			}
 		}
 	}
+	/* The players fire a new rope 0.8-1.2 s after the last (Zest 0.8):
+	 * a ride is not re-fired the frame it ends, unless it is a rescue. */
+	if (command.hook_fire && !bot->rescue && bot->rope_fired_at > 0.0f &&
+		level.time - bot->rope_fired_at < ROPE_GAP_MIN)
+		command.hook_fire = 0U;
 	if (command.hook_fire && SG_BotHookReady(e))
 	{
 		if (sg_cv.debug && sg_cv.debug->value)
