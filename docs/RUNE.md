@@ -7,34 +7,69 @@ it contains, how it is built, how the bots use it, and how to look at it.
 
 ## Contents
 
-- [Overview](#overview)
+- [One surface, layered fields](#one-surface-layered-fields)
+- [The layers](#the-layers)
+- [The runtime gradient](#the-runtime-gradient)
 - [Cells](#cells)
 - [Crossings](#crossings)
 - [Rope rides](#rope-rides)
+- [Fire relations](#fire-relations)
 - [Fields and steps](#fields-and-steps)
 - [Building in the game](#building-in-the-game)
 - [Hint files](#hint-files)
 - [Tools](#tools)
 - [Log lines](#log-lines)
 
-## Overview
+## One surface, layered fields
 
-The RUNE describes the map in three layers.
+A RUNE is one higher-order surface. Its domain is the configuration space of
+the player's body: the cell complex, every region of the map the body's
+centre can occupy, in both stances. Over that one domain the file carries
+layered volumetric fields, each describing a different aspect of the same
+space: what stands under each cell, how the body can leave it, where a rope
+can take it, what a weapon can reach from it, what each move costs. Every
+layer is an array laid over the same cells, so a question about a place is
+answered by reading the same index in each layer.
 
-1. Cells: the regions of the map a player's body can occupy.
-2. Crossings: proven ways from one cell to a neighbouring cell, each with
-   the kind of movement it needs and its cost in seconds.
-3. Semantics on both: which cells have floor, which are lava or slime, which
-   crossings need a crouch, a jump or a rope.
+Nothing in the file is a sampled instance of behaviour. Where behaviour
+depends on a continuous quantity, the file stores a function of that
+quantity and the runtime evaluates it: a jump's arc is a polynomial in time,
+a facet is a plane, the arc's exit through a facet is a root. The same
+evaluator serves the builder's proofs and the running game.
 
-A bot never plans on the raw map. It locates its own cell, asks a cost field
-for the next crossing toward its destination, and hands that crossing to its
-movement controller.
+The file is exact within a declared quantisation. Positions are stored in
+eighths of a unit and planes as 32-bit floats, so a cell means the same
+thing to the builder, the loader and the bot.
 
-The file is written by the module and read back by it. Its identity records
-the map file's checksum, the entity text's checksum and the movement rules it
-was built under, so a changed map or a changed server setting invalidates it
-and the module builds a new one.
+## The layers
+
+| Layer | Contents | Consumer |
+|-------|----------|----------|
+| Domain | Cells with bounds, stances and contents; facets with planes and vertices; incidences; portals with clearance and direction; vertices | Locate, every other layer |
+| Static semantics | Per cell: supported, hazard, water, sky and void boundaries, mover volumes | Route search, hazard avoidance, rescue |
+| Movement capabilities | Per portal or per landing: walk, crouch, ramp, jump, drop, swim, rocket jump, mechanism crossing; each with cost, stances, run-up and launch velocity | The cost fields, the tactic controller |
+| Rope | Per floor cell: rides to a bite point with the release distance and the landing cell; hookable surfaces | Ride selection, release, rescue anchors |
+| Mechanisms | Lifts, doors, buttons and what crossing waits on what | Crossings that wait, the executor |
+| Fire relations | Per pair of cells that see each other: which weapon families work from here on there, and the posts that cover an approach | Weapon choice, defender posts |
+| Analytic functions | Polynomials and piecewise functions over named inputs (distance, hook length, time, velocity, direction) | The builder's proofs and the runtime alike |
+| Cost | Time-weighted, directional costs on every capability | The fields; nothing is ever pruned for being costly, only priced |
+| Identity and law | Checksums of the map and its entities, the movement law the file was built under, the schema | Loading; a mismatch triggers a rebuild |
+
+## The runtime gradient
+
+At runtime a destination becomes a cost field over the complex: for every
+state, the cost to go and the departure that achieves it. The field's state
+is the pair (cell, stance). Its gradient at a cell is the departure with the
+least cost to go, and a bot follows that gradient one crossing at a time.
+The field says which crossing to take; the tactic controller decides how and
+when to press what. That split is the whole design: strategy in the field,
+tactics in the executor.
+
+Velocity is not an axis of the field. A launch is a record that carries the
+velocity it was traced with, and the runtime evaluates the live velocity
+against the same analytic profile when a body is already airborne. Fields
+are built from the destination backward over the crossings and cached per
+destination cell.
 
 ## Cells
 
@@ -117,6 +152,17 @@ under the bolt) plus the pull time plus the flight time. A ride that
 releases at 400 units per second or more of forward speed costs 30% less,
 because the body carries that speed into the next crossing. Up to 16 ride
 records are kept per cell, one per landing cell.
+
+## Fire relations
+
+For every floor cell, the builder traces from its eye to the floor cells in
+the clusters the map says it can see: a clear line to the other eye for rays
+(rail, chaingun, shotguns), a clear corridor for a projectile's body
+(blaster, rocket, hyperblaster), a rocket at the other cell's feet whose
+burst reaches them, and a grenade arc that lands within its burst where no
+line exists. The runtime reads the flags for the pair it is in: which weapon
+families can work from here on there, where a defender should stand to cover
+an approach, and which cells an attacker is exposed from.
 
 ## Fields and steps
 
