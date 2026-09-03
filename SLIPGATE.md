@@ -1,60 +1,81 @@
 # SLIPGATE
 
-SLIPGATE is LMCTF's native bot system. Navigation, combat, perception, team
-logic, client presentation, and RUNE loading are built into the game module.
-The project does not use the removed Q2/Q3 bot library.
+SLIPGATE is LMCTF's native bot system, built into the game module.  Every
+part of it is era 4: written from the game's own physics and the players'
+own play, with nothing carried over from the bot systems that came before.
 
-## Runtime model
+## The map: the RUNE
 
-- **Navigation:** Each map uses a physics-proved RUNE graph. Links cover ground
-  movement, jumps, drops, swimming, grapple rides, lifts, teleports, and
-  declared mechanisms. Live cost fields combine objectives, items, danger,
-  cover, and teammate support.
-- **Movement:** Route descent emits normal `usercmd_t` input. Collision feelers,
-  edge guards, braking, action ownership, and fallback rules keep movement
-  inside proved runtime contracts.
-- **Combat:** Bots use reaction delay, skill-scaled aim error, weapon range
-  policy, switch discipline, fire windows, and splash-safety checks. Damage and
-  kills still pass through the normal game code.
-- **Perception:** Enemy state comes from visible, audible, damage, chat, and
-  public objective events. Beliefs age. Decision code does not receive hidden
-  opponent state.
-- **Team play:** Bots take attack, defend, carry, recover, and escort roles from
-  shared public state. Defenders cover approaches, attackers pressure the enemy
-  stand, and escorts support a live carrier.
-- **Presentation:** Bots are normal visible clients with stable identities,
-  personas, chat, synthetic ping, and ordinary statistics.
+- **Cells.**  The map's brushes are subtracted from each BSP leaf with the
+  player's crouch hull, so a cell is a region of positions the body's centre
+  can occupy.  Floors are cut last so a floor cell sits exactly on its
+  floor; lava and slime become hazard cells; brush models that stand still
+  (func_wall and the like) are carved as walls.  A brush that touches none
+  of a piece leaves it uncut, and faces on one wall plane pair as portals
+  whatever hull expanded them (sg_configuration_cells.c).
+- **Crossings.**  Every way from one cell to the next is proved by the
+  engine's movement laws (sg_rune_law.h, sg_engine_facts.h): walks and
+  crouches, ramps, jumps with their run-up and launch, drops that land
+  robustly under small errors, swims, lifts, doors, and rope rides -- a
+  bolt that clears, a pull that clears, a release point whose flight lands
+  on a floor.  Rides are built from the surfaces' centres and from the
+  players' own bites (maps/<map>.bites), keeping the farthest bites in view.
+- **Fields.**  A destination becomes a cost field over the crossings (a
+  Dijkstra from the destination); a bot reads the step from its cell, with a
+  two-step lookahead that eases it into launches.
+- **Built in the game.**  A missing or stale RUNE is built on a thread of
+  its own the moment its map loads (sg_rune_game_generate.c); the bots wait
+  and the server plays on.  Human bites recorded during play (sg_bites.c)
+  grow the map's bites file, and enough growth rebuilds the RUNE for its
+  next load.
+
+## The body
+
+The tactic controller (sg_tactic_controller.c) turns a step into one frame
+of input: walks eased to a point, jumps lined up on the record's run-up and
+pressed on the frame that reaches the portal (or from a stand when a ledge
+stops the body), rope rides fired on the move up to sixty degrees off the
+heading, hopped when they bite on the floor, and let go once the pull
+carries the body and the live arc lands.  The driver (sg_bot_frame.c) adds
+what the players do around the route: strafing across an enemy's line with
+reversals every 0.3 to 0.9 s and a hop on the reversal, idle footwork around
+a post or a flag stand, a walk aimed at the nearest point of its portal, a
+rescue rope on a fall into harm, and a staged dislodge for a body still for
+three seconds (back off, rope to a bite nearby, reroute).
+
+## The team
+
+Each team holds a goal (sg_local.h): take their flag together, bring it
+home (escort the carrier), recover ours (the defenders hunt), hold ours
+alive and get theirs back, or turtle when more than two captures ahead
+(everyone defends, one runner, no escorts).  The goal hands out roles --
+attack, defend, carry, recover, escort, powerup -- at events (a flag moves,
+a carrier changes, the roster changes), and a role whose destination stays
+unreachable falls back on the goal's role.  Attackers group up before the
+flag room; defenders hold posts that cover the approaches, stock up on what
+stands near the flag, and back an engaged teammate.  Powerups seen standing
+are called out and fetched.
+
+## The fight
+
+Perception is live sight and memory of where each enemy was last seen;
+weapon choice reads range, ammo and splash safety; aim leads projectiles
+with an error scaled by skill and persona; fire is one trace.  Callouts
+name what the bot sees and does.
+
+## The measure
+
+Every player in 155 tournament demos is measured by track
+(tools/dm2trace.py, tools/demobites.py); the standard is in
+docs/ERA4-PLAYERS-STANDARD.txt and the bots' numbers per change in
+docs/ERA4-RUNE.md.  With sg_debug 1 the server log carries every bot's
+decision (SGBOT), the rope (SGROPE), the team (SGTEAM), and the human trace
+(SGHUMAN) for the same comparison on a live game.
 
 ## Source layout
 
-The controller lives under `slipgate/`:
-
-- `sg_client.c` owns fake-client lifecycle;
-- `sg_caco.c` owns perception and learned state;
-- `sg_arach.c` and `sg_strike*.c` own team and attack policy;
-- `sg_fields.c`, `sg_goal.c`, and `sg_price.c` own route costs;
-- `sg_descend.c` and `sg_move.c` own route selection and actuation;
-- `sg_combat.c` owns weapon, aim, and fire decisions;
-- `sg_net.c`, `sg_chat.c`, identity, and persona modules own presentation;
-- `sg_rune*.c` and mechanism modules own graph generation, loading, proof, and
-  runtime action contracts.
-
-Host code remains authoritative for flag touches, captures, damage, death,
-weapons, map transitions, logging, and persistent statistics. SLIPGATE chooses
-client commands and consumes named host events. It does not synthesize outcomes.
-
-## Current work
-
-The source implements the complete controller path, 175-map RUNE authority,
-ordered native map rotation, and all ten required `lmctf58` declared-door
-controllers. Open work is direct bot quality, final 175-map generation,
-persistent fleet integration, transactional bundle integration, production
-acceptance, and release publication.
-
-Bot changes must modify the production controller, receive an executable policy
-or live-path test, and survive observed play. Reports and matched evidence help
-decide whether to keep a change; they are not substitutes for implementation.
-
-[`PROJECT-COMPLETION-PLAN.md`](PROJECT-COMPLETION-PLAN.md) is the current work
-order and completion authority. [`ARCHITECTURE.md`](ARCHITECTURE.md) documents
-the runtime boundaries in more detail.
+Everything is under `slipgate/`: sg_rune_* (BSP reader, trace, entities,
+law, carve, cell complex, movement and rope builders, artifact, locate,
+field, level owner, in-game generator), sg_bot_* (frame driver, roster,
+combat, items, callout, host bridge, persona, cvars), sg_tactic_controller,
+sg_bites.  docs/ERA4-REVIEW.md names each unit and its origin.

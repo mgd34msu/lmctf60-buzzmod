@@ -10,15 +10,15 @@ server bundle.
 ## Install
 
 From [releases](https://github.com/mgd34msu/lmctf60-buzzmod/releases), download
-`lmctf6-buzzmod.pak` plus the game module for the server's platform and place
-both in the `lmctf` directory:
+the release package and unpack it into the `lmctf` directory:
 
 | | |
 |-|-|
-| `gamex86_64.so` | Linux 64-bit |
-| `gamex86_64.dll` | Windows 64-bit |
-| `gamex86.dll` | Windows 32-bit |
-| `lmctf6-buzzmod.pak` | **required** — statboard artwork and the hit sound |
+| `gamex86_64.so` | Linux 64-bit game module (the bots and the route builder are inside it) |
+| `gamex86_64.dll` | Windows 64-bit game module |
+| `maps/<map>.bites` | the players' rope bites per map, read when a map's routes are built (optional) |
+| `slipgate-server-sample.cfg` | a sample server config: bots, limits, sounds, loadout |
+| `lmctf6-buzzmod.pak` | **required** for stats and the hit sound (from an earlier release) |
 
 Then turn stats on:
 
@@ -30,56 +30,66 @@ The database creates itself. `1` gives one file per player instead; `0` is off.
 
 Stats are viewable on the web via [q2lmstats](https://github.com/mgd34msu/q2lmstats).
 
-## SLIPGATE bots
+## SLIPGATE bots (v1.0.0)
 
-SLIPGATE is the mod's from-scratch bot system. It is built into the game module;
-there is no separate bot library. The current source is still under development
-for `v1.0.0`.
+SLIPGATE is the mod's from-scratch bot system, built into the game module.
+It plays LMCTF the way the best players do: the rope on nearly every move,
+released at speed in the air; strafing and reversing in fights; a team goal
+that every bot follows and falls back on.  The bots are measured against the
+top players' demos (Zest, Lequin, seed, Em, sinsemilla): the rope rate,
+release speed, air time, turn rate and objective rates in
+`docs/ERA4-PLAYERS-STANDARD.txt` are the targets, and the numbers the bots
+reach are in `docs/ERA4-RUNE.md`.
 
-The target is recognizable, competent LMCTF play: grapple-first movement, real
-flag-carrier escape runs, escorts that screen the carrier, and defense that
-guards sightlines instead of standing on the flag.
+**Nothing to run by hand.**  The first time a map loads, its routes (the
+RUNE, `maps/<map>.rune`) are built in the background while the server plays
+on and the bots wait: "slipgate: building the bots' routes for <map> in the
+background; the bots wait for it", then "the bots' routes for <map> are
+ready".  Seconds for small maps, a few minutes for the largest.  While humans
+play, their rope bites are added to `maps/<map>.bites`, and a map whose file
+has grown enough is rebuilt on its next load.
 
-The bots navigate on a per-map graph proven by actual physics runs (runs,
-jumps, drops, swimming, grapple swings, lifts, teleports, and declared door
-traversals), price their decisions on a live
-cost surface (items, danger, duel range, cover, teammate support), and share
-one team-wide belief of where enemies and flags are.
+How it works, in short: the map is carved into a complex of cells with the
+player's hull (every place the body can be), every crossing between cells is
+proved by the game's own physics (walks, jumps, drops, swims, rope rides,
+lifts, doors), and a bot follows a cost field over those crossings toward its
+goal.  The team's goal (take their flag together, bring it home, recover
+ours, hold and retake, turtle when well ahead) hands out roles; a role whose
+destination dies falls back on the goal.  See `SLIPGATE.md`.
 
-Current source includes steal → carry → escort → capture play, physics-proved
-RUNE navigation, grapple movement, combat and perception controllers, team
-roles, chat, and persistent match instrumentation.
-
-See [`SLIPGATE.md`](SLIPGATE.md) for the design and current behavior.
-
-### Server commands
-
-SLIPGATE is administered through the game DLL's `sv` command surface:
+### Server commands and variables
 
 | Command | Effect |
 |-|-|
-| `sv rune` | offline corpus-generator module only: generate and atomically install `<gamedir>/maps/<map>.rune` for the currently loaded map |
-| `sv sg add` | add one bot and let the team balancer place it |
-| `sv sg add red` / `sv sg add blue` | add one bot to an explicit team |
-| `sv sg list` | print the active bot roster |
-| `sv sg remove <name-or-slot>` | remove one bot |
-| `sv sg remove` | remove every bot |
-| `sv sg kick worst` | remove the lowest-ranked active bot |
-| `sv sg weights` | print the active weight source and values |
-| `sv sg weights reload` | reload weights, then print them |
+| `sv sg add [red\|blue]` | add a bot (the balancer picks the team without one) |
+| `sv sg remove <name>` / `sv sg remove` | remove one bot / every bot |
+| `sv sg kick worst` | remove the lowest-ranked bot |
+| `sv sg list` | the bot roster |
+| `sv rune` | build this map's routes now, in the background |
 
-`sv rune` writes a RUNE to the active game directory when run through the
-offline corpus-generator module. Shipped Linux and Windows modules consume
-accepted RUNEs and refuse generation.
-
-### Current development status
-
-| Area | Current code state |
+| Variable | Effect |
 |-|-|
-| RUNE corpus | The final 175-map RUNE corpus is not complete. |
-| Fleet | Non-random maplists preserve file order and advance and wrap in the same `q2ded` process. The final production fleet run is pending. |
-| Bot outcomes | Final real-match validation is pending. |
-| Release | The release workflow builds Linux and Windows modules. A supported `v1.0.0` release is not ready. |
+| `sv_botfill N` | fill each team to N bots (sample config: 5) |
+| `capturelimit`, `timelimit` | end the map (sample: 10 and 20) and rotate through `maplist.txt` |
+| `ctf_hitsound`, `ctf_killsound` | 0 off, 1 flag-carrier events only, 2 every event (sample: 2, 2); the sound plays where it happened and privately to the attacker |
+| `spawn_loadout "@name"`, `loadout_name "..."` | starting equipment (sample: rocket launcher and grenades) |
+| `sg_debug` | 1 logs the bots' decisions, the rope and the human trace to the server log; 2 every frame |
+
+### Tools (optional)
+
+- `tools/demobites.py DEMOS... -o maps/` and `tools/logbites.py LOGS... -o maps/`
+  add rope bites from demos or from server logs to the maps' bite files.
+- `tools/dm2trace.py`, `fieldcheck`, `bsppoint`, `cellsdump.gnu` for looking at
+  demos and at a map's routes (`docs/ERA4-RUNE.md`).
+
+### Documents
+
+- `docs/RELEASE-ERA4.md` -- the release notes.
+- `SLIPGATE.md` -- the design.
+- `docs/ERA4-RUNE.md` -- the RUNE in detail and the day-by-day record of what
+  the play data changed.
+- `docs/ERA4-PLAYERS-STANDARD.txt` -- the players the bots are measured against.
+- `docs/README.md` -- which documents are current and which are history.
 
 ## What's tracked
 

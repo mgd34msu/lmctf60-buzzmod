@@ -1,3 +1,5 @@
+> Current as of v1.0.0 (2026-09-02).  The sections are in the order they were written; the later ones supersede the earlier where they differ (the generator now lives in the shipped module, the ride builder keeps 48 candidates and 16 records per cell and the players' bites, the carve leaves untouched pieces uncut).
+
 # Era-4 RUNE: contents and construction order
 
 Recorded 2026-09-01 after the cell builder, regions, and compact geometry
